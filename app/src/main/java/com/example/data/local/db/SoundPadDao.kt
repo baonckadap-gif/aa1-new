@@ -1,0 +1,340 @@
+package com.example.data.local.db
+
+import androidx.room.Dao
+import androidx.room.Insert
+import androidx.room.OnConflictStrategy
+import androidx.room.Query
+import androidx.room.Transaction
+import kotlinx.coroutines.flow.Flow
+
+@Dao
+interface SoundPadDao {
+  @Query("SELECT * FROM pad_profiles ORDER BY updatedAtMs DESC")
+  fun observeProfiles(): Flow<List<PadProfileEntity>>
+
+  @Query("SELECT * FROM pad_profiles ORDER BY updatedAtMs DESC")
+  suspend fun getAllProfilesOnce(): List<PadProfileEntity>
+
+  @Query("SELECT * FROM pad_profiles WHERE id = :profileId LIMIT 1")
+  suspend fun getProfileById(profileId: String): PadProfileEntity?
+
+  @Insert(onConflict = OnConflictStrategy.REPLACE)
+  suspend fun upsertProfile(profile: PadProfileEntity)
+
+  @Query("UPDATE pad_profiles SET isActive = 0")
+  suspend fun clearActiveFlags()
+
+  @Query("UPDATE pad_profiles SET isActive = 1 WHERE id = :profileId")
+  suspend fun markProfileActive(profileId: String)
+
+  @Transaction
+  suspend fun setActiveProfile(profileId: String) {
+    clearActiveFlags()
+    markProfileActive(profileId)
+  }
+
+  @Query("DELETE FROM pad_profiles WHERE id = :profileId")
+  suspend fun deleteProfileById(profileId: String)
+
+  @Query("SELECT * FROM sound_pads WHERE profileId = :profileId ORDER BY positionIndex ASC")
+  fun observePadsForProfile(profileId: String): Flow<List<SoundPadEntity>>
+
+  @Query("SELECT * FROM sound_pads WHERE profileId = :profileId ORDER BY positionIndex ASC")
+  suspend fun getPadsForProfileOnce(profileId: String): List<SoundPadEntity>
+
+  @Query("SELECT COUNT(*) FROM sound_pads WHERE profileId = :profileId")
+  suspend fun getPadCountForProfile(profileId: String): Int
+
+  @Insert(onConflict = OnConflictStrategy.REPLACE)
+  suspend fun upsertPad(pad: SoundPadEntity)
+
+  @Insert(onConflict = OnConflictStrategy.REPLACE)
+  suspend fun upsertPads(pads: List<SoundPadEntity>)
+
+  @Query("DELETE FROM sound_pads WHERE profileId = :profileId AND id NOT IN (:keepIds)")
+  suspend fun deletePadsNotIn(profileId: String, keepIds: List<String>)
+
+  @Query("DELETE FROM sound_pads WHERE profileId = :profileId")
+  suspend fun deletePadsForProfile(profileId: String)
+
+  @Query("DELETE FROM sound_pads WHERE id = :padId")
+  suspend fun deletePadById(padId: String)
+
+  @Query(
+    """
+    UPDATE sound_pads SET
+      displayName = :displayName,
+      colorArgb = :colorArgb,
+      glowColorArgb = :glowColorArgb,
+      glowIntensity = :glowIntensity,
+      shapeStyle = :shapeStyle,
+      borderColorArgb = :borderColorArgb,
+      borderWidthDp = :borderWidthDp,
+      cornerRadiusDp = :cornerRadiusDp,
+      textColorArgb = :textColorArgb,
+      surfaceFinish = :surfaceFinish,
+      badgeIcon = :badgeIcon,
+      showSlotNumber = :showSlotNumber,
+      showDurationLabel = :showDurationLabel
+    WHERE id = :padId
+    """
+  )
+  suspend fun updatePadAppearance(
+    padId: String,
+    displayName: String,
+    colorArgb: Long?,
+    glowColorArgb: Long?,
+    glowIntensity: Float,
+    shapeStyle: String?,
+    borderColorArgb: Long?,
+    borderWidthDp: Float,
+    cornerRadiusDp: Float,
+    textColorArgb: Long?,
+    surfaceFinish: String,
+    badgeIcon: String,
+    showSlotNumber: Boolean,
+    showDurationLabel: Boolean
+  )
+
+  @Query(
+    """
+    UPDATE sound_pads SET
+      colorArgb = :colorArgb,
+      glowColorArgb = :glowColorArgb,
+      glowIntensity = :glowIntensity,
+      shapeStyle = :shapeStyle,
+      borderColorArgb = :borderColorArgb,
+      borderWidthDp = :borderWidthDp,
+      cornerRadiusDp = :cornerRadiusDp,
+      textColorArgb = :textColorArgb,
+      surfaceFinish = :surfaceFinish,
+      showSlotNumber = :showSlotNumber,
+      showDurationLabel = :showDurationLabel
+    WHERE profileId = :profileId
+    """
+  )
+  suspend fun applyVisualStyleToAllInProfile(
+    profileId: String,
+    colorArgb: Long?,
+    glowColorArgb: Long?,
+    glowIntensity: Float,
+    shapeStyle: String?,
+    borderColorArgb: Long?,
+    borderWidthDp: Float,
+    cornerRadiusDp: Float,
+    textColorArgb: Long?,
+    surfaceFinish: String,
+    showSlotNumber: Boolean,
+    showDurationLabel: Boolean
+  )
+
+  @Query("UPDATE sound_pads SET positionIndex = :positionIndex WHERE id = :padId")
+  suspend fun updatePadPosition(padId: String, positionIndex: Int)
+
+  @Transaction
+  suspend fun updateAllPadPositions(updates: List<Pair<String, Int>>) {
+    for ((padId, pos) in updates) {
+      updatePadPosition(padId, pos)
+    }
+  }
+
+  @Insert(onConflict = OnConflictStrategy.REPLACE)
+  suspend fun upsertPadSetting(setting: PadSettingEntity)
+
+  @Insert(onConflict = OnConflictStrategy.REPLACE)
+  suspend fun upsertPadSettings(settings: List<PadSettingEntity>)
+
+  @Query("SELECT * FROM pad_settings WHERE padId = :padId LIMIT 1")
+  suspend fun getPadSetting(padId: String): PadSettingEntity?
+
+  @Query(
+    """
+    SELECT ps.* FROM pad_settings ps
+    INNER JOIN sound_pads sp ON ps.padId = sp.id
+    WHERE sp.profileId = :profileId
+    """
+  )
+  suspend fun getPadSettingsForProfileOnce(profileId: String): List<PadSettingEntity>
+
+  @Transaction
+  suspend fun syncProfilePadsPreservingSettings(
+    profile: PadProfileEntity,
+    pads: List<SoundPadEntity>
+  ) {
+    upsertProfile(profile)
+    if (pads.isEmpty()) {
+      deletePadsForProfile(profile.id)
+    } else {
+      upsertPads(pads)
+      deletePadsNotIn(profile.id, pads.map { it.id })
+    }
+  }
+
+  @Transaction
+  suspend fun saveCompleteProfile(
+    profile: PadProfileEntity,
+    pads: List<SoundPadEntity>,
+    settings: List<PadSettingEntity>
+  ) {
+    clearActiveFlags()
+    upsertProfile(profile.copy(isActive = true))
+    deletePadsForProfile(profile.id)
+    if (pads.isNotEmpty()) {
+      upsertPads(pads)
+    }
+    if (settings.isNotEmpty()) {
+      upsertPadSettings(settings)
+    }
+  }
+
+  @Transaction
+  suspend fun insertClonedPadAndReindex(
+    newPad: SoundPadEntity,
+    newSetting: PadSettingEntity,
+    reindexedPositions: List<Pair<String, Int>>
+  ) {
+    upsertPad(newPad)
+    upsertPadSetting(newSetting)
+    updateAllPadPositions(reindexedPositions)
+  }
+
+  @Query("UPDATE sound_pads SET midiNote = :midiNote WHERE id = :padId")
+  suspend fun updatePadMidiNote(padId: String, midiNote: Int?)
+
+  @Query("SELECT * FROM midi_cc_mappings WHERE profileId = :profileId")
+  fun observeMidiCcMappings(profileId: String): Flow<List<MidiCcMappingEntity>>
+
+  @Query("SELECT * FROM midi_cc_mappings WHERE profileId = :profileId")
+  suspend fun getMidiCcMappingsOnce(profileId: String): List<MidiCcMappingEntity>
+
+  @Insert(onConflict = OnConflictStrategy.REPLACE)
+  suspend fun upsertMidiCcMapping(mapping: MidiCcMappingEntity)
+
+  @Insert(onConflict = OnConflictStrategy.REPLACE)
+  suspend fun upsertMidiCcMappings(mappings: List<MidiCcMappingEntity>)
+
+  @Query("DELETE FROM midi_cc_mappings WHERE profileId = :profileId AND target = :target")
+  suspend fun deleteMidiCcMappingByTarget(profileId: String, target: String)
+
+  @Query("DELETE FROM midi_cc_mappings WHERE profileId = :profileId")
+  suspend fun deleteMidiCcMappingsForProfile(profileId: String)
+
+  @Query("UPDATE pad_profiles SET bankNamesJson = :bankNamesJson WHERE id = :profileId")
+  suspend fun updateProfileBankNames(profileId: String, bankNamesJson: String)
+
+  @Query("UPDATE sound_pads SET isFavorite = :isFavorite, categoryTag = :categoryTag WHERE id = :padId")
+  suspend fun updatePadFavoriteAndTag(padId: String, isFavorite: Boolean, categoryTag: String)
+
+  @Query("UPDATE pad_settings SET normalizedGain = :normalizedGain WHERE padId = :padId")
+  suspend fun updatePadNormalizedGain(padId: String, normalizedGain: Float)
+
+  @Query("UPDATE sound_pads SET miniWaveformJson = :miniWaveformJson WHERE uriString = :uriString")
+  suspend fun updatePadMiniWaveformByUri(uriString: String, miniWaveformJson: String)
+
+  @Query("UPDATE sound_pads SET errorType = :errorType, errorMessage = :errorMessage WHERE id = :padId")
+  suspend fun updatePadErrorState(padId: String, errorType: String?, errorMessage: String?)
+
+  @Query("UPDATE sound_pads SET bankIndex = :bankIndex, subfolderName = :subfolderName WHERE id = :padId")
+  suspend fun updatePadBankIndex(padId: String, bankIndex: Int, subfolderName: String)
+
+  @Query(
+    """
+    UPDATE pad_profiles SET
+      bankNamesJson = :bankNamesJson,
+      bankOrderJson = :bankOrderJson,
+      bankFolderUrisJson = :bankFolderUrisJson
+    WHERE id = :profileId
+    """
+  )
+  suspend fun updateProfileBankConfig(
+    profileId: String,
+    bankNamesJson: String,
+    bankOrderJson: String,
+    bankFolderUrisJson: String
+  )
+
+  @Query(
+    """
+    UPDATE pad_profiles SET
+      masterEqEnabled = :enabled,
+      masterEqPreset = :preset,
+      masterEqBandsJson = :bandsJson
+    WHERE id = :profileId
+    """
+  )
+  suspend fun updateProfileMasterEq(
+    profileId: String,
+    enabled: Boolean,
+    preset: String,
+    bandsJson: String
+  )
+
+  @Query("SELECT * FROM error_logs ORDER BY timestampMs DESC LIMIT 300")
+  fun observeErrorLogs(): Flow<List<ErrorLogEntity>>
+
+  @Query("SELECT * FROM error_logs ORDER BY timestampMs DESC LIMIT 300")
+  suspend fun getErrorLogsOnce(): List<ErrorLogEntity>
+
+  @Insert(onConflict = OnConflictStrategy.REPLACE)
+  suspend fun insertErrorLog(log: ErrorLogEntity)
+
+  @Insert(onConflict = OnConflictStrategy.REPLACE)
+  suspend fun insertErrorLogs(logs: List<ErrorLogEntity>)
+
+  @Query("DELETE FROM error_logs WHERE id = :id")
+  suspend fun deleteErrorLogById(id: String)
+
+  @Query("DELETE FROM error_logs")
+  suspend fun clearErrorLogs()
+
+  // ---- Scheduler Tasks ----
+  @Query("SELECT * FROM scheduled_tasks ORDER BY hour ASC, minute ASC, createdAtMs DESC")
+  fun observeScheduledTasks(): Flow<List<ScheduledTaskEntity>>
+
+  @Query("SELECT * FROM scheduled_tasks ORDER BY hour ASC, minute ASC")
+  suspend fun getAllScheduledTasksOnce(): List<ScheduledTaskEntity>
+
+  @Query("SELECT * FROM scheduled_tasks WHERE enabled = 1")
+  suspend fun getActiveScheduledTasksOnce(): List<ScheduledTaskEntity>
+
+  @Query("SELECT * FROM scheduled_tasks WHERE id = :id LIMIT 1")
+  suspend fun getScheduledTaskById(id: String): ScheduledTaskEntity?
+
+  @Insert(onConflict = OnConflictStrategy.REPLACE)
+  suspend fun upsertScheduledTask(task: ScheduledTaskEntity)
+
+  @Query("DELETE FROM scheduled_tasks WHERE id = :id")
+  suspend fun deleteScheduledTaskById(id: String)
+
+  // ---- Sequencer / Playlist Pad ----
+  @Query("SELECT * FROM sequencer_playlists ORDER BY updatedAtMs DESC")
+  fun observeSequencerPlaylists(): Flow<List<SequencerPlaylistEntity>>
+
+  @Query("SELECT * FROM sequencer_playlists ORDER BY updatedAtMs DESC")
+  suspend fun getAllSequencerPlaylistsOnce(): List<SequencerPlaylistEntity>
+
+  @Query("SELECT * FROM sequencer_playlists WHERE id = :id LIMIT 1")
+  suspend fun getSequencerPlaylistById(id: String): SequencerPlaylistEntity?
+
+  @Insert(onConflict = OnConflictStrategy.REPLACE)
+  suspend fun upsertSequencerPlaylist(playlist: SequencerPlaylistEntity)
+
+  @Query("DELETE FROM sequencer_playlists WHERE id = :id")
+  suspend fun deleteSequencerPlaylistById(id: String)
+
+  // ---- MIDI Program Change -> Bank Mappings ----
+  @Query("SELECT * FROM midi_pc_bank_mappings WHERE profileId = :profileId ORDER BY bankIndex ASC")
+  fun observeMidiPcMappings(profileId: String): Flow<List<MidiPcBankMappingEntity>>
+
+  @Query("SELECT * FROM midi_pc_bank_mappings WHERE profileId = :profileId ORDER BY bankIndex ASC")
+  suspend fun getMidiPcMappingsOnce(profileId: String): List<MidiPcBankMappingEntity>
+
+  @Insert(onConflict = OnConflictStrategy.REPLACE)
+  suspend fun upsertMidiPcMapping(mapping: MidiPcBankMappingEntity)
+
+  @Query("DELETE FROM midi_pc_bank_mappings WHERE profileId = :profileId AND bankIndex = :bankIndex")
+  suspend fun deleteMidiPcMappingByBank(profileId: String, bankIndex: Int)
+
+  @Query("DELETE FROM midi_pc_bank_mappings WHERE profileId = :profileId")
+  suspend fun deleteMidiPcMappingsForProfile(profileId: String)
+}

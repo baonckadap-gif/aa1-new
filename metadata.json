@@ -1,0 +1,6 @@
+{
+  "name": "SoundPad Pro",
+  "description": "Pro tactile audio soundboard for Android with SAF folder scanning, dynamic pad grids, multi/single/continuous playback, and low-latency Media3 audio engine.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

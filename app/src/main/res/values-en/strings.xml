@@ -1,0 +1,138 @@
+<resources>
+    <string name="app_name">SoundPad Pro</string>
+    <string name="notification_channel_playback">SoundPad Playback Engine</string>
+    <string name="notification_playback_title">SoundPad Pro Active</string>
+    <string name="notification_playback_text">Audio engine ready for low-latency playback</string>
+    <string name="notification_action_stop_all">Stop All</string>
+    <string name="cd_select_folder">Select audio folder</string>
+    <string name="cd_rescan_folder">Rescan audio folder</string>
+    <string name="cd_stop_all">Stop all playing pads</string>
+    <string name="cd_grid_settings">Grid &amp; studio settings</string>
+    <string name="cd_miui_help">HyperOS and MIUI optimization guide</string>
+    <string name="cd_previous_bank">Previous bank</string>
+    <string name="cd_next_bank">Next bank</string>
+    <string name="cd_search_pads">Search pads</string>
+    <string name="cd_toggle_edit_mode">Toggle edit mode</string>
+    <string name="cd_toggle_fullscreen">Toggle immersive fullscreen</string>
+    <string name="cd_toggle_crossfade">Toggle global crossfade</string>
+    <string name="cd_open_profiles">Open profile manager</string>
+    <string name="cd_loop_enabled">Loop enabled</string>
+    <string name="cd_voice_record">Record voice track</string>
+    <string name="cd_hide_bottom_bar">Hide bottom console bar</string>
+    <string name="cd_show_bottom_bar">Show bottom console bar</string>
+    <string name="cd_load_demo_tracks">Load sample test tracks</string>
+    <string name="cd_audio_editor">Open waveform audio editor</string>
+    <string name="cd_customize_tracks">Customize button appearance per song</string>
+    <string name="cd_midi_controller">MIDI Controller and MIDI Learn</string>
+    <string name="cd_fade_out_all">Fade out all playing pads</string>
+    <string name="cd_lock_mode">Toggle performance lock mode</string>
+    <string name="cd_hold_to_unlock">Hold 2 seconds to unlock stage mode</string>
+    <string name="cd_audio_output">Audio output routing and mixer</string>
+    <string name="cd_undo_edit">Undo edit action</string>
+    <string name="cd_redo_edit">Redo edit action</string>
+    <string name="cd_cue_preview">Cue preview to headphones</string>
+    <string name="cd_global_cue_toggle">Toggle live cue monitor mode</string>
+    <string name="cd_backup_all">Backup all profiles and settings</string>
+    <string name="cd_restore_all">Restore full backup</string>
+    <string name="cd_rename_bank">Rename current bank</string>
+    <string name="cd_favorite_pad">Toggle favorite</string>
+    <string name="cd_error_logs">Error logs and diagnostics</string>
+    <string name="cd_rescan_bank">Rescan current bank folder</string>
+    <string name="cd_reorder_banks">Reorder bank pages</string>
+    <string name="stage_lock_active_banner">STAGE LOCK ACTIVE · Hold lock button for 2s to unlock</string>
+    <string name="hold_to_unlock_hint">Hold the lock icon for 2 seconds to unlock Stage Lock</string>
+    <string name="theme_dynamic_color_title">Dynamic Color (Material You)</string>
+    <string name="theme_dynamic_color_subtitle">Adapt studio colors from system wallpaper (Android 12+)</string>
+    <string name="pad_grid_spacing_label">PAD GRID SPACING</string>
+
+    <!-- Sub-fase 9B Actions & UI -->
+    <string name="action_fix">Fix</string>
+    <string name="action_copy">Copy</string>
+    <string name="action_delete">Delete</string>
+    <string name="action_undo">Undo</string>
+    <string name="action_reset">Reset</string>
+    <string name="action_close">Close</string>
+
+    <!-- Pad Settings 4 Tabs -->
+    <string name="pad_tab_basic">Basic</string>
+    <string name="pad_tab_audio">Audio</string>
+    <string name="pad_tab_fx">Effects</string>
+    <string name="pad_tab_advanced">Advanced</string>
+
+    <!-- Grid Settings 5 Tabs -->
+    <string name="settings_sheet_title">Studio Theme, Grid &amp; Audio</string>
+    <string name="settings_tab_display">Display</string>
+    <string name="settings_tab_audio">Audio</string>
+    <string name="settings_tab_grid">Grid</string>
+    <string name="settings_tab_interaction">Interaction</string>
+    <string name="settings_tab_about">About</string>
+
+    <!-- Interaction & Language -->
+    <string name="settings_language_title">APP LANGUAGE / BAHASA</string>
+    <string name="settings_haptic_title">HAPTIC FEEDBACK INTENSITY</string>
+    <string name="settings_swipe_volume_title">Vertical Swipe for Pad Volume</string>
+    <string name="settings_swipe_volume_subtitle">Drag up or down on a pad to adjust live track gain</string>
+    <string name="settings_double_tap_stop_title">Double-Tap to Stop Pad</string>
+    <string name="settings_double_tap_stop_subtitle">Double-tap any playing pad to stop it immediately</string>
+    <string name="settings_tooltips_title">Show Live Feature Tips</string>
+    <string name="settings_tooltips_subtitle">Show concise performance shortcut banner above grid</string>
+    <string name="settings_replay_onboarding">Replay Onboarding Guide</string>
+    <string name="settings_open_miui_guide">HyperOS / MIUI Whitelist Guide</string>
+
+    <!-- Multi-Select & Edit Mode -->
+    <string name="edit_multi_select">Multi-Select</string>
+    <string name="edit_select_all">Select All</string>
+    <string name="edit_bulk_color">Color</string>
+    <string name="edit_bulk_move">Move Bank</string>
+    <string name="edit_bulk_duplicate">Duplicate</string>
+    <string name="edit_bulk_selected_count">%1$d selected</string>
+
+    <!-- Feature Tooltip Banner -->
+    <string name="tooltip_live_tip">Tip: Long-press a pad for full settings, swipe between banks, or tap Edit for multi-select.</string>
+    <string name="tooltip_dismiss">Hide Tips</string>
+
+    <!-- Onboarding -->
+    <string name="onboarding_title_step1">1. Audio Source &amp; Banks</string>
+    <string name="onboarding_desc_step1">Pick a music folder on your phone (subfolders become bank tabs), or load 6 built-in demo tracks right away.</string>
+    <string name="onboarding_pick_folder">Pick Music Folder</string>
+    <string name="onboarding_load_demo">Load 6 Demo Tracks</string>
+    <string name="onboarding_title_step2">2. Grid Density &amp; Theme</string>
+    <string name="onboarding_desc_step2">Choose your stage grid density and a high-contrast theme tailored for dark clubs or bright daylight booths.</string>
+    <string name="onboarding_title_step3">3. Permissions &amp; Reliability</string>
+    <string name="onboarding_desc_step3">Grant microphone or Bluetooth MIDI permissions and configure battery whitelist so live audio never stops.</string>
+    <string name="onboarding_grant_mic_perm">Grant Microphone</string>
+    <string name="onboarding_grant_midi_perm">Grant Bluetooth MIDI</string>
+    <string name="onboarding_step_indicator">Step %1$d of 3</string>
+    <string name="onboarding_skip">Skip</string>
+    <string name="onboarding_back">Back</string>
+    <string name="onboarding_next">Next</string>
+    <string name="onboarding_finish">Start Performing</string>
+
+    <!-- Top Bar Extra Actions -->
+    <string name="cd_sequencer">Sequencer &amp; Pad Playlists</string>
+    <string name="cd_scheduler">Scheduled Pad Playback</string>
+    <string name="cd_master_record">Record Master Output (Internal WAV)</string>
+
+    <!-- Master Output Recorder -->
+    <string name="master_rec_title">Master Output Recorder</string>
+    <string name="master_rec_subtitle">Records internal polyphonic master mix directly before output (not microphone).</string>
+    <string name="master_rec_start">Start Master Record</string>
+    <string name="master_rec_stop">Stop &amp; Save WAV</string>
+    <string name="master_rec_pick_folder">Choose Save Folder (SAF)</string>
+    <string name="master_rec_auto_add_pad">Automatically add recording as a Pad</string>
+    <string name="notification_recording_title">Recording Master Output</string>
+    <string name="notification_recording_text">Internal audio mix recording is active</string>
+    <string name="notification_action_stop_recording">Stop Record</string>
+
+    <!-- Scheduler -->
+    <string name="scheduler_title">Pad &amp; Playlist Scheduler</string>
+    <string name="scheduler_add">Add Schedule</string>
+    <string name="scheduler_empty">No playback schedules yet.</string>
+    <string name="scheduler_exact_alarm_warning">Exact Alarm permission is required for second-accurate scheduled triggers.</string>
+    <string name="scheduler_grant_exact_alarm">Allow Alarms</string>
+
+    <!-- Sequencer -->
+    <string name="sequencer_title">Sequencer &amp; Pad Playlists</string>
+    <string name="sequencer_new_playlist">New Playlist</string>
+    <string name="sequencer_empty">No playlists yet. Create one and reorder pads with drag &amp; drop.</string>
+</resources>

@@ -1,0 +1,138 @@
+<resources>
+    <string name="app_name">SoundPad Pro</string>
+    <string name="notification_channel_playback">Mesin Pemutaran SoundPad</string>
+    <string name="notification_playback_title">SoundPad Pro Aktif</string>
+    <string name="notification_playback_text">Mesin audio siap untuk pemutaran latensi rendah</string>
+    <string name="notification_action_stop_all">Stop Semua</string>
+    <string name="cd_select_folder">Pilih folder audio</string>
+    <string name="cd_rescan_folder">Pindai ulang folder audio</string>
+    <string name="cd_stop_all">Hentikan semua pad aktif</string>
+    <string name="cd_grid_settings">Pengaturan grid &amp; tampilan</string>
+    <string name="cd_miui_help">Panduan optimasi HyperOS dan MIUI</string>
+    <string name="cd_previous_bank">Bank sebelumnya</string>
+    <string name="cd_next_bank">Bank berikutnya</string>
+    <string name="cd_search_pads">Cari pad</string>
+    <string name="cd_toggle_edit_mode">Aktifkan mode edit</string>
+    <string name="cd_toggle_fullscreen">Aktifkan layar penuh</string>
+    <string name="cd_toggle_crossfade">Aktifkan crossfade global</string>
+    <string name="cd_open_profiles">Buka pengelola profil</string>
+    <string name="cd_loop_enabled">Loop aktif</string>
+    <string name="cd_voice_record">Rekam trek suara</string>
+    <string name="cd_hide_bottom_bar">Sembunyikan bilah bawah</string>
+    <string name="cd_show_bottom_bar">Tampilkan bilah bawah</string>
+    <string name="cd_load_demo_tracks">Muat trek demo contoh</string>
+    <string name="cd_audio_editor">Buka editor waveform audio</string>
+    <string name="cd_customize_tracks">Sesuaikan tampilan tombol per lagu</string>
+    <string name="cd_midi_controller">Pengontrol MIDI dan MIDI Learn</string>
+    <string name="cd_fade_out_all">Fade out semua pad aktif</string>
+    <string name="cd_lock_mode">Aktifkan mode kunci panggung</string>
+    <string name="cd_hold_to_unlock">Tahan 2 detik untuk membuka kunci panggung</string>
+    <string name="cd_audio_output">Output audio dan mixer</string>
+    <string name="cd_undo_edit">Batalkan aksi edit</string>
+    <string name="cd_redo_edit">Ulangi aksi edit</string>
+    <string name="cd_cue_preview">Preview cue ke headphone</string>
+    <string name="cd_global_cue_toggle">Aktifkan mode monitor cue langsung</string>
+    <string name="cd_backup_all">Cadangkan semua profil dan pengaturan</string>
+    <string name="cd_restore_all">Pulihkan cadangan penuh</string>
+    <string name="cd_rename_bank">Ubah nama bank saat ini</string>
+    <string name="cd_favorite_pad">Tandai favorit</string>
+    <string name="cd_error_logs">Log error dan diagnostik</string>
+    <string name="cd_rescan_bank">Pindai ulang folder bank ini</string>
+    <string name="cd_reorder_banks">Atur ulang urutan halaman bank</string>
+    <string name="stage_lock_active_banner">STAGE LOCK AKTIF · Tahan tombol kunci 2 detik untuk membuka</string>
+    <string name="hold_to_unlock_hint">Tahan tombol kunci selama 2 detik untuk membuka Stage Lock</string>
+    <string name="theme_dynamic_color_title">Dynamic Color (Material You)</string>
+    <string name="theme_dynamic_color_subtitle">Adaptasi warna dari wallpaper sistem (Android 12+)</string>
+    <string name="pad_grid_spacing_label">JARAK ANTAR PAD</string>
+
+    <!-- Sub-fase 9B Actions & UI -->
+    <string name="action_fix">Perbaiki</string>
+    <string name="action_copy">Salin</string>
+    <string name="action_delete">Hapus</string>
+    <string name="action_undo">Urungkan</string>
+    <string name="action_reset">Reset</string>
+    <string name="action_close">Tutup</string>
+
+    <!-- Pad Settings 4 Tabs -->
+    <string name="pad_tab_basic">Dasar</string>
+    <string name="pad_tab_audio">Audio</string>
+    <string name="pad_tab_fx">Efek</string>
+    <string name="pad_tab_advanced">Lanjutan</string>
+
+    <!-- Grid Settings 5 Tabs -->
+    <string name="settings_sheet_title">Pengaturan Studio &amp; Grid</string>
+    <string name="settings_tab_display">Tampilan</string>
+    <string name="settings_tab_audio">Audio</string>
+    <string name="settings_tab_grid">Grid</string>
+    <string name="settings_tab_interaction">Interaksi</string>
+    <string name="settings_tab_about">Tentang</string>
+
+    <!-- Interaction & Language -->
+    <string name="settings_language_title">BAHASA APLIKASI / LANGUAGE</string>
+    <string name="settings_haptic_title">INTENSITAS GETARAN HAPTIC</string>
+    <string name="settings_swipe_volume_title">Geser Vertikal untuk Volume Pad</string>
+    <string name="settings_swipe_volume_subtitle">Seret naik/turun pada pad saat bermain untuk ubah volume langsung</string>
+    <string name="settings_double_tap_stop_title">Ketuk Ganda untuk Stop Pad</string>
+    <string name="settings_double_tap_stop_subtitle">Double-tap pad yang sedang berputar untuk menghentikan seketika</string>
+    <string name="settings_tooltips_title">Tampilkan Tips Fitur Live</string>
+    <string name="settings_tooltips_subtitle">Tampilkan panduan singkat fitur panggung di atas grid</string>
+    <string name="settings_replay_onboarding">Buka Ulang Panduan Awal (Onboarding)</string>
+    <string name="settings_open_miui_guide">Panduan Whitelist HyperOS / MIUI</string>
+
+    <!-- Multi-Select & Edit Mode -->
+    <string name="edit_multi_select">Pilih Banyak</string>
+    <string name="edit_select_all">Pilih Semua</string>
+    <string name="edit_bulk_color">Warna</string>
+    <string name="edit_bulk_move">Pindah Bank</string>
+    <string name="edit_bulk_duplicate">Duplikat</string>
+    <string name="edit_bulk_selected_count">%1$d dipilih</string>
+
+    <!-- Feature Tooltip Banner -->
+    <string name="tooltip_live_tip">Tips: Tahan pad untuk setting lengkap, geser antar bank, atau aktifkan Edit untuk multi-pilih.</string>
+    <string name="tooltip_dismiss">Matikan Tips</string>
+
+    <!-- Onboarding -->
+    <string name="onboarding_title_step1">1. Sumber Audio &amp; Bank</string>
+    <string name="onboarding_desc_step1">Pilih folder musik di perangkat (subfolder otomatis jadi tab bank), atau muat 6 trek demo siap pakai untuk langsung mencoba.</string>
+    <string name="onboarding_pick_folder">Pilih Folder Musik</string>
+    <string name="onboarding_load_demo">Muat 6 Trek Demo</string>
+    <string name="onboarding_title_step2">2. Tata Letak Grid &amp; Tema</string>
+    <string name="onboarding_desc_step2">Tentukan kerapatan pad panggung dan tema kontras tinggi untuk tampilan optimal di ruangan gelap atau terang.</string>
+    <string name="onboarding_title_step3">3. Izin &amp; Keandalan Latar</string>
+    <string name="onboarding_desc_step3">Aktifkan izin mikrofon, Bluetooth MIDI, serta whitelist baterai HyperOS/MIUI agar audio panggung tidak terhenti mendadak.</string>
+    <string name="onboarding_grant_mic_perm">Izinkan Mikrofon</string>
+    <string name="onboarding_grant_midi_perm">Izinkan Bluetooth MIDI</string>
+    <string name="onboarding_step_indicator">Langkah %1$d dari 3</string>
+    <string name="onboarding_skip">Lewati</string>
+    <string name="onboarding_back">Kembali</string>
+    <string name="onboarding_next">Lanjut</string>
+    <string name="onboarding_finish">Mulai Pakai</string>
+
+    <!-- Top Bar Extra Actions -->
+    <string name="cd_sequencer">Sequencer &amp; Playlist Pad</string>
+    <string name="cd_scheduler">Jadwal Pemutaran Pad</string>
+    <string name="cd_master_record">Rekam Output Master (Internal WAV)</string>
+
+    <!-- Master Output Recorder -->
+    <string name="master_rec_title">Rekam Output Master</string>
+    <string name="master_rec_subtitle">Merekam campuran internal langsung sebelum ke speaker/headphone (bukan mikrofon).</string>
+    <string name="master_rec_start">Mulai Rekam Output</string>
+    <string name="master_rec_stop">Stop &amp; Simpan WAV</string>
+    <string name="master_rec_pick_folder">Pilih Folder Simpan (SAF)</string>
+    <string name="master_rec_auto_add_pad">Otomatis tambahkan hasil rekaman sebagai Pad</string>
+    <string name="notification_recording_title">Merekam Output Master</string>
+    <string name="notification_recording_text">Rekaman campuran audio internal sedang berlangsung</string>
+    <string name="notification_action_stop_recording">Stop Rekam</string>
+
+    <!-- Scheduler -->
+    <string name="scheduler_title">Scheduler Pad &amp; Playlist</string>
+    <string name="scheduler_add">Tambah Jadwal</string>
+    <string name="scheduler_empty">Belum ada jadwal pemutaran otomatis.</string>
+    <string name="scheduler_exact_alarm_warning">Izin Alarm Tepat Waktu (Exact Alarm) belum aktif agar jadwal berbunyi tepat detik.</string>
+    <string name="scheduler_grant_exact_alarm">Izinkan Alarm</string>
+
+    <!-- Sequencer -->
+    <string name="sequencer_title">Sequencer &amp; Playlist Pad</string>
+    <string name="sequencer_new_playlist">Buat Playlist</string>
+    <string name="sequencer_empty">Belum ada playlist. Buat playlist dan urutkan pad dengan drag &amp; drop.</string>
+</resources>
