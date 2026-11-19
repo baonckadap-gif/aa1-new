@@ -81,6 +81,7 @@ import com.example.data.backup.BackupSyncStatus
 import com.example.data.backup.PersistentBackupUiState
 import com.example.domain.model.AppLanguage
 import com.example.domain.model.DefaultPadColorMode
+import com.example.domain.model.DragDropConflictMode
 import com.example.domain.model.FadeCurve
 import com.example.domain.model.GlobalSettings
 import com.example.domain.model.GridConfig
@@ -123,6 +124,7 @@ fun GridSettingsSheet(
   onMasterPanChange: (Float) -> Unit = {},
   onMiniWaveformToggle: (Boolean) -> Unit = {},
   onHapticIntensityChange: (HapticIntensity) -> Unit = {},
+  onDragDropConflictModeChange: (DragDropConflictMode) -> Unit = {},
   onSwipePadVolumeToggle: (Boolean) -> Unit = {},
   onDoubleTapToStopToggle: (Boolean) -> Unit = {},
   onAppLanguageChange: (AppLanguage) -> Unit = {},
@@ -1050,6 +1052,36 @@ fun GridSettingsSheet(
                   modifier = Modifier
                     .weight(1f)
                     .testTag("settings_haptic_${level.name.lowercase()}")
+                )
+              }
+            }
+          }
+
+          HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+
+          Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text(
+              text = stringResource(R.string.settings_drag_conflict_title),
+              style = MaterialTheme.typography.labelMedium,
+              color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Text(
+              text = stringResource(R.string.settings_drag_conflict_subtitle),
+              style = MaterialTheme.typography.bodySmall,
+              color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Row(
+              modifier = Modifier.fillMaxWidth(),
+              horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+              DragDropConflictMode.entries.forEach { mode ->
+                FilterChip(
+                  selected = settings.dragDropConflictMode == mode,
+                  onClick = { onDragDropConflictModeChange(mode) },
+                  label = { Text(mode.label, style = MaterialTheme.typography.labelSmall, maxLines = 1) },
+                  modifier = Modifier
+                    .weight(1f)
+                    .testTag("settings_drag_mode_${mode.name.lowercase()}")
                 )
               }
             }

@@ -73,6 +73,11 @@ enum class DefaultPadColorMode(val label: String) {
   CUSTOM("Pilih sendiri")
 }
 
+enum class DragDropConflictMode(val label: String) {
+  SWAP("Tukar Posisi"),
+  SHIFT("Geser Slot")
+}
+
 enum class GridPreset(val rows: Int, val cols: Int, val label: String) {
   GRID_4X4(4, 4, "4×4"),
   GRID_10X10(10, 10, "10×10"),
@@ -381,7 +386,8 @@ data class GlobalSettings(
   val persistentBackupFolderName: String? = null,
   val persistentAutoSyncEnabled: Boolean = true,
   val persistentLastSyncAtMs: Long = 0L,
-  val persistentIncludeWaveforms: Boolean = false
+  val persistentIncludeWaveforms: Boolean = false,
+  val dragDropConflictMode: DragDropConflictMode = DragDropConflictMode.SWAP
 )
 
 enum class MidiCcTarget(val label: String) {

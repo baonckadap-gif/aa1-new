@@ -4,6 +4,7 @@ import com.example.data.profile.ExportedProfileBundle
 import com.example.data.profile.ProfileJsonSerializer
 import com.example.domain.model.AppLanguage
 import com.example.domain.model.DefaultPadColorMode
+import com.example.domain.model.DragDropConflictMode
 import com.example.domain.model.EqPreset
 import com.example.domain.model.FadeCurve
 import com.example.domain.model.GlobalSettings
@@ -89,6 +90,7 @@ object FullBackupSerializer {
       put("persistentAutoSyncEnabled", settings.persistentAutoSyncEnabled)
       put("persistentLastSyncAtMs", settings.persistentLastSyncAtMs)
       put("persistentIncludeWaveforms", settings.persistentIncludeWaveforms)
+      put("dragDropConflictMode", settings.dragDropConflictMode.name)
     }
 
     val profilesArr = JSONArray()
@@ -195,7 +197,10 @@ object FullBackupSerializer {
       persistentBackupFolderName = if (s.isNull("persistentBackupFolderName")) null else s.optString("persistentBackupFolderName", "").ifBlank { null },
       persistentAutoSyncEnabled = s.optBoolean("persistentAutoSyncEnabled", true),
       persistentLastSyncAtMs = s.optLong("persistentLastSyncAtMs", 0L).coerceAtLeast(0L),
-      persistentIncludeWaveforms = s.optBoolean("persistentIncludeWaveforms", false)
+      persistentIncludeWaveforms = s.optBoolean("persistentIncludeWaveforms", false),
+      dragDropConflictMode = runCatching {
+        DragDropConflictMode.valueOf(s.optString("dragDropConflictMode", DragDropConflictMode.SWAP.name))
+      }.getOrDefault(DragDropConflictMode.SWAP)
     )
 
     val profilesArr = root.optJSONArray("profiles") ?: JSONArray()

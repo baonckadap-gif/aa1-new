@@ -35,7 +35,9 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.data.backup.RestoreSelectionOptions
 import com.example.data.backup.SafPersistentConfigStorage
+import com.example.data.backup.SnapshotFileInfo
 import com.example.domain.model.AppLanguage
 import com.example.domain.model.PadErrorType
 import com.example.domain.model.SoundPad
@@ -44,6 +46,8 @@ import com.example.scheduler.PadSchedulerManager
 import com.example.ui.SoundPadScreen
 import com.example.ui.SoundPadViewModel
 import com.example.ui.theme.SoundPadProTheme
+import java.text.SimpleDateFormat
+import java.util.Date
 import java.util.Locale
 
 class MainActivity : ComponentActivity() {
@@ -97,6 +101,52 @@ class MainActivity : ComponentActivity() {
       if (uri != null) {
         SafPersistentConfigStorage.takePersistableRwPermission(this, uri)
         viewModel.onPersistentBackupFolderSelected(uri)
+      }
+    }
+
+    val restoreFolderPickerLauncher = rememberLauncherForActivityResult(
+      contract = ActivityResultContracts.OpenDocumentTree()
+    ) { uri ->
+      if (uri != null) {
+        viewModel.inspectRestoreFolderUri(uri)
+      }
+    }
+
+    val restoreRelinkMusicFolderLauncher = rememberLauncherForActivityResult(
+      contract = ActivityResultContracts.OpenDocumentTree()
+    ) { uri ->
+      if (uri != null) {
+        val rwOk = runCatching {
+          contentResolver.takePersistableUriPermission(
+            uri,
+            Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+          )
+        }.isSuccess
+        if (!rwOk) {
+          runCatching {
+            contentResolver.takePersistableUriPermission(
+              uri,
+              Intent.FLAG_GRANT_READ_URI_PERMISSION
+            )
+          }
+        }
+        viewModel.setRestoreRelinkMusicFolder(uri)
+      }
+    }
+
+    val exportConfigZipLauncher = rememberLauncherForActivityResult(
+      contract = ActivityResultContracts.CreateDocument("application/zip")
+    ) { uri ->
+      if (uri != null) {
+        viewModel.exportConfigZipToUri(uri)
+      }
+    }
+
+    val importConfigZipLauncher = rememberLauncherForActivityResult(
+      contract = ActivityResultContracts.OpenDocument()
+    ) { uri ->
+      if (uri != null) {
+        viewModel.inspectRestoreZipUri(uri)
       }
     }
 
@@ -255,7 +305,11 @@ class MainActivity : ComponentActivity() {
         recordAudioPermissionLauncher = recordAudioPermissionLauncher,
         bluetoothMidiPermissionLauncher = bluetoothMidiPermissionLauncher,
         masterRecordFolderLauncher = masterRecordFolderLauncher,
-        backupFolderPickerLauncher = backupFolderPickerLauncher
+        backupFolderPickerLauncher = backupFolderPickerLauncher,
+        restoreFolderPickerLauncher = restoreFolderPickerLauncher,
+        restoreRelinkMusicFolderLauncher = restoreRelinkMusicFolderLauncher,
+        exportConfigZipLauncher = exportConfigZipLauncher,
+        importConfigZipLauncher = importConfigZipLauncher
       )
     }
 
@@ -351,11 +405,35 @@ class MainActivity : ComponentActivity() {
     private val recordAudioPermissionLauncher: ActivityResultLauncher<String>,
     private val bluetoothMidiPermissionLauncher: ActivityResultLauncher<Array<String>>,
     private val masterRecordFolderLauncher: ActivityResultLauncher<Uri?>,
-    private val backupFolderPickerLauncher: ActivityResultLauncher<Uri?>
+    private val backupFolderPickerLauncher: ActivityResultLauncher<Uri?>,
+    private val restoreFolderPickerLauncher: ActivityResultLauncher<Uri?>,
+    private val restoreRelinkMusicFolderLauncher: ActivityResultLauncher<Uri?>,
+    private val exportConfigZipLauncher: ActivityResultLauncher<String>,
+    private val importConfigZipLauncher: ActivityResultLauncher<Array<String>>
   ) {
     val onPickFolderClick: () -> Unit = { folderPickerLauncher.launch(null) }
     val onPickBackupFolderClick: () -> Unit = {
       backupFolderPickerLauncher.launch(SafPersistentConfigStorage.buildSuggestedBackupInitialUri())
+    }
+    val onInspectRestoreFolderClick: () -> Unit = {
+      restoreFolderPickerLauncher.launch(SafPersistentConfigStorage.buildSuggestedBackupInitialUri())
+    }
+    val onPickRelinkMusicFolder: () -> Unit = {
+      restoreRelinkMusicFolderLauncher.launch(null)
+    }
+    val onExportZipClick: () -> Unit = {
+      val stamp = SimpleDateFormat("yyyyMMdd_HHmm", Locale.US).format(Date())
+      exportConfigZipLauncher.launch("SoundPadPro_Backup_$stamp.zip")
+    }
+    val onImportZipClick: () -> Unit = {
+      importConfigZipLauncher.launch(
+        arrayOf("application/zip", "application/x-zip-compressed", "application/octet-stream", "*/*")
+      )
+    }
+    val onShareZipClick: () -> Unit = {
+      viewModel.prepareAndShareConfigZip { chooserIntent ->
+        activity.startActivity(chooserIntent)
+      }
     }
     val onLoadDemoTracks: () -> Unit = { viewModel.loadDemoTracks(showBanner = true) }
     val onOpenTrackCustomizerDefault: () -> Unit = { viewModel.openTrackCustomizer() }
@@ -454,6 +532,14 @@ class MainActivity : ComponentActivity() {
     val onConsumeBankSwitchRequest = viewModel::consumeBankSwitchRequest
     val onDismissBackupPrompt = viewModel::dismissBackupFolderPrompt
     val onSyncBackupNow = viewModel::triggerManualBackupSync
+    val onSetAutoSyncEnabled = viewModel::setPersistentAutoSyncEnabled
+    val onSetIncludeWaveforms = viewModel::setPersistentIncludeWaveforms
+    val onOpenSnapshotPickerClick = viewModel::openSnapshotPicker
+    val onCloseSnapshotPicker = viewModel::closeSnapshotPicker
+    val onSelectSnapshot: (SnapshotFileInfo) -> Unit = viewModel::inspectSnapshotBackup
+    val onConfirmApplyRestore: (RestoreSelectionOptions) -> Unit = viewModel::confirmApplyRestore
+    val onDismissRestorePreview = viewModel::dismissRestorePreview
+    val onDeleteAllConfig: (Boolean) -> Unit = viewModel::deleteAllConfig
   }
 
   @Composable
@@ -497,6 +583,12 @@ class MainActivity : ComponentActivity() {
       onPadHoldStart = viewModel::onPadHoldStart,
       onPadHoldRelease = viewModel::onPadHoldRelease,
       onSwapPads = viewModel::swapPadPositions,
+      onMovePadToSlot = viewModel::movePadToSlot,
+      onBulkMoveSelectedToSlot = viewModel::bulkMoveSelectedPadsToSlot,
+      onDragDropConflictModeChanged = viewModel::setDragDropConflictMode,
+      onCompactBankSlots = viewModel::compactBankSlots,
+      onSortBankAlphabetically = viewModel::sortBankAlphabetically,
+      onRestoreInitialPositions = viewModel::restoreInitialPositions,
       onSavePadAppearance = viewModel::updatePadAppearance,
       onApplyStyleToAllPads = viewModel::applyVisualStyleToAllPads,
       onUpdatePadSettings = viewModel::updatePadSettings,
@@ -633,7 +725,20 @@ class MainActivity : ComponentActivity() {
       onConsumeBankSwitchRequest = actions.onConsumeBankSwitchRequest,
       onPickBackupFolderClick = actions.onPickBackupFolderClick,
       onDismissBackupPrompt = actions.onDismissBackupPrompt,
-      onSyncBackupNow = actions.onSyncBackupNow
+      onSyncBackupNow = actions.onSyncBackupNow,
+      onSetAutoSyncEnabled = actions.onSetAutoSyncEnabled,
+      onSetIncludeWaveforms = actions.onSetIncludeWaveforms,
+      onInspectRestoreFolderClick = actions.onInspectRestoreFolderClick,
+      onPickRelinkMusicFolder = actions.onPickRelinkMusicFolder,
+      onOpenSnapshotPickerClick = actions.onOpenSnapshotPickerClick,
+      onCloseSnapshotPicker = actions.onCloseSnapshotPicker,
+      onSelectSnapshot = actions.onSelectSnapshot,
+      onConfirmApplyRestore = actions.onConfirmApplyRestore,
+      onDismissRestorePreview = actions.onDismissRestorePreview,
+      onExportZipClick = actions.onExportZipClick,
+      onImportZipClick = actions.onImportZipClick,
+      onShareZipClick = actions.onShareZipClick,
+      onDeleteAllConfig = actions.onDeleteAllConfig
     )
   }
 }

@@ -95,14 +95,14 @@ class SafAudioScanner(private val context: Context) {
 
     val collectedErrors = mutableListOf<AppErrorLog>()
     val pads = mutableListOf<SoundPad>()
-    var globalPos = 0
 
     if (hasSubfolderBanks) {
       for ((bIdx, bName, items) in bankFiles) {
+        var bankPos = 0
         for (item in items) {
           val pad = buildValidatedSoundPad(
             item = item,
-            positionIndex = globalPos++,
+            positionIndex = bankPos++,
             bankIndex = bIdx,
             subfolderName = bName,
             errorsOut = collectedErrors
@@ -112,10 +112,11 @@ class SafAudioScanner(private val context: Context) {
       }
     } else {
       val sorted = rootFiles.sortedBy { it.fileName.lowercase() }
+      var bankPos = 0
       for (item in sorted) {
         val pad = buildValidatedSoundPad(
           item = item,
-          positionIndex = globalPos++,
+          positionIndex = bankPos++,
           bankIndex = 0,
           subfolderName = "",
           errorsOut = collectedErrors

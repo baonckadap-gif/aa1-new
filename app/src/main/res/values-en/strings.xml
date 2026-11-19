@@ -262,4 +262,20 @@
     <string name="reset_all_config_desc">All profiles, pad settings, slot positions, FX, MIDI mappings, schedules, sequencers, and preferences will be reset to defaults.</string>
     <string name="reset_all_config_clear_saf">Also delete backup files in the selected SAF folder</string>
     <string name="reset_all_config_confirm">Yes, Delete All</string>
+
+    <!-- Tahap 1: Sparse Slot Grid, Drag-Drop Conflict, & Organize Actions -->
+    <string name="edit_drag_mode_label">Drop Mode</string>
+    <string name="edit_drag_mode_swap">Drop: Swap</string>
+    <string name="edit_drag_mode_shift">Drop: Shift</string>
+    <string name="edit_compact_slots">Compact</string>
+    <string name="edit_sort_az">Sort A-Z</string>
+    <string name="edit_restore_initial">Initial Layout</string>
+    <string name="edit_bulk_move_slot">Move Slots</string>
+    <string name="action_move_to_slot">Move to Slot...</string>
+    <string name="move_slot_dialog_title">Move to Slot Position</string>
+    <string name="bulk_move_slot_dialog_title">Move %1$d Pads to Position</string>
+    <string name="move_slot_input_label">Slot Number (1–%1$d)</string>
+    <string name="move_slot_invalid_error">Enter a slot number between 1 and %1$d</string>
+    <string name="settings_drag_conflict_title">OCCUPIED SLOT DROP MODE</string>
+    <string name="settings_drag_conflict_subtitle">Behavior when dropping a pad onto an occupied slot</string>
 </resources>

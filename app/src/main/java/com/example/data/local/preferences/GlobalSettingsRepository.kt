@@ -13,6 +13,7 @@ import androidx.datastore.preferences.preferencesDataStore
 import com.example.data.profile.ProfileJsonSerializer
 import com.example.domain.model.AppLanguage
 import com.example.domain.model.DefaultPadColorMode
+import com.example.domain.model.DragDropConflictMode
 import com.example.domain.model.EqPreset
 import com.example.domain.model.FadeCurve
 import com.example.domain.model.GlobalSettings
@@ -94,6 +95,7 @@ class GlobalSettingsRepository(private val context: Context) {
     val HAS_PROMPTED_BACKUP_FOLDER = booleanPreferencesKey("has_prompted_backup_folder")
     val LAST_DAILY_SNAPSHOT_DAY = stringPreferencesKey("last_daily_snapshot_day")
     val LAST_BACKED_UP_VERSION_CODE = intPreferencesKey("last_backed_up_version_code")
+    val DRAG_DROP_CONFLICT_MODE = stringPreferencesKey("drag_drop_conflict_mode")
   }
 
   val settingsFlow: Flow<GlobalSettings> = context.soundPadDataStore.data.map { prefs ->
@@ -140,6 +142,10 @@ class GlobalSettingsRepository(private val context: Context) {
     val defaultPadColorMode = runCatching {
       prefs[Keys.DEFAULT_PAD_COLOR_MODE]?.let { DefaultPadColorMode.valueOf(it) }
     }.getOrNull() ?: DefaultPadColorMode.GRAY
+
+    val dragDropConflictMode = runCatching {
+      prefs[Keys.DRAG_DROP_CONFLICT_MODE]?.let { DragDropConflictMode.valueOf(it) }
+    }.getOrNull() ?: DragDropConflictMode.SWAP
 
     GlobalSettings(
       activeProfileId = prefs[Keys.ACTIVE_PROFILE_ID] ?: "default_profile",
@@ -198,7 +204,8 @@ class GlobalSettingsRepository(private val context: Context) {
       persistentBackupFolderName = prefs[Keys.PERSISTENT_BACKUP_FOLDER_NAME],
       persistentAutoSyncEnabled = prefs[Keys.PERSISTENT_AUTO_SYNC_ENABLED] ?: true,
       persistentLastSyncAtMs = prefs[Keys.PERSISTENT_LAST_SYNC_AT_MS] ?: 0L,
-      persistentIncludeWaveforms = prefs[Keys.PERSISTENT_INCLUDE_WAVEFORMS] ?: false
+      persistentIncludeWaveforms = prefs[Keys.PERSISTENT_INCLUDE_WAVEFORMS] ?: false,
+      dragDropConflictMode = dragDropConflictMode
     )
   }
 
@@ -478,6 +485,12 @@ class GlobalSettingsRepository(private val context: Context) {
     }
   }
 
+  suspend fun setDragDropConflictMode(mode: DragDropConflictMode) {
+    context.soundPadDataStore.edit { prefs ->
+      prefs[Keys.DRAG_DROP_CONFLICT_MODE] = mode.name
+    }
+  }
+
   suspend fun applyRestoredGlobalSettings(
     gs: GlobalSettings,
     restoreSyncFolderConfig: Boolean = false
@@ -562,6 +575,7 @@ class GlobalSettingsRepository(private val context: Context) {
       prefs[Keys.AUDIO_BUFFER_SIZE_MS] = gs.audioBufferSizeMs.coerceIn(20, 500)
       prefs[Keys.PERSISTENT_AUTO_SYNC_ENABLED] = gs.persistentAutoSyncEnabled
       prefs[Keys.PERSISTENT_INCLUDE_WAVEFORMS] = gs.persistentIncludeWaveforms
+      prefs[Keys.DRAG_DROP_CONFLICT_MODE] = gs.dragDropConflictMode.name
       if (restoreSyncFolderConfig) {
         if (!gs.persistentBackupFolderUri.isNullOrBlank()) {
           prefs[Keys.PERSISTENT_BACKUP_FOLDER_URI] = gs.persistentBackupFolderUri

@@ -44,7 +44,10 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.automirrored.filled.Redo
 import androidx.compose.material.icons.automirrored.filled.Undo
@@ -55,6 +58,7 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckBox
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.CloudOff
+import androidx.compose.material.icons.filled.Compress
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.ContentCut
 import androidx.compose.material.icons.filled.Delete
@@ -76,11 +80,14 @@ import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.Piano
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.RestartAlt
 import androidx.compose.material.icons.filled.SearchOff
 import androidx.compose.material.icons.filled.SelectAll
 import androidx.compose.material.icons.filled.SkipNext
+import androidx.compose.material.icons.filled.SortByAlpha
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material.icons.filled.SwapVert
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
@@ -119,6 +126,7 @@ import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -131,10 +139,12 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -143,9 +153,12 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.min
 import com.example.R
 import com.example.data.backup.BackupSyncStatus
+import com.example.data.backup.RestoreSelectionOptions
+import com.example.data.backup.SnapshotFileInfo
 import com.example.domain.model.AppErrorLog
 import com.example.domain.model.AppLanguage
 import com.example.domain.model.DefaultPadColorMode
+import com.example.domain.model.DragDropConflictMode
 import com.example.domain.model.EqPreset
 import com.example.domain.model.FadeCurve
 import com.example.domain.model.GridConfig
@@ -175,6 +188,7 @@ import com.example.ui.components.AdaptiveWidthClass
 import com.example.ui.components.AudioEditorSheet
 import com.example.ui.components.AudioOutputSheet
 import com.example.ui.components.BottomConsoleBar
+import com.example.ui.components.BulkMoveSlotsDialog
 import com.example.ui.components.ErrorLogSheet
 import com.example.ui.components.FocusModeOverlay
 import com.example.ui.components.GridSettingsSheet
@@ -184,20 +198,28 @@ import com.example.ui.components.LandscapeMixerSidePanel
 import com.example.ui.components.MasterRecordSheet
 import com.example.ui.components.MidiControllerSheet
 import com.example.ui.components.MiuiGuideDialog
+import com.example.ui.components.MovePadToSlotDialog
 import com.example.ui.components.OnboardingDialog
 import com.example.ui.components.PadCell
 import com.example.ui.components.PadDensity
 import com.example.ui.components.PadSettingsSheet
 import com.example.ui.components.ProfileManagerSheet
+import com.example.ui.components.ResetAllConfigDialog
+import com.example.ui.components.RestorePreviewAndSelectDialog
+import com.example.ui.components.RestoreProgressDialog
 import com.example.ui.components.SchedulerSheet
 import com.example.ui.components.SequencerSheet
+import com.example.ui.components.SnapshotPickerDialog
 import com.example.ui.components.TopControlBar
 import com.example.ui.components.VoiceRecordSheet
 import com.example.ui.components.performPadHaptic
 import com.example.ui.components.resolveAdaptiveWidthClass
 import com.example.ui.theme.SoundPadColorPalette
 import com.example.ui.theme.SoundPadTheme
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlin.math.abs
 import kotlin.math.roundToInt
 
 @Composable
@@ -236,6 +258,12 @@ fun SoundPadScreen(
   onPadHoldStart: (SoundPad) -> Unit,
   onPadHoldRelease: (SoundPad) -> Unit,
   onSwapPads: (fromPadId: String, toPadId: String) -> Unit,
+  onMovePadToSlot: (padId: String, targetBankIndex: Int, targetSlotIndex: Int) -> Unit = { _, _, _ -> },
+  onBulkMoveSelectedToSlot: (targetBankIndex: Int, baseTargetSlotIndex: Int) -> Unit = { _, _ -> },
+  onDragDropConflictModeChanged: (DragDropConflictMode) -> Unit = {},
+  onCompactBankSlots: (Int?) -> Unit = {},
+  onSortBankAlphabetically: (Int?) -> Unit = {},
+  onRestoreInitialPositions: (Int?) -> Unit = {},
   onSavePadAppearance: (padId: String, config: PadVisualConfig) -> Unit,
   onApplyStyleToAllPads: (config: PadVisualConfig) -> Unit,
   onUpdatePadSettings: (padId: String, settings: PadSettings) -> Unit,
@@ -292,7 +320,7 @@ fun SoundPadScreen(
   onAnalyzeLoudnessAll: () -> Unit = {},
   onBackupAllData: () -> Unit = {},
   onRestoreAllData: () -> Unit = {},
-  onDuplicatePadToBank: (String, Int?) -> Unit = { _, _ -> },
+  onDuplicatePadToBank: (String, Int?, Int?) -> Unit = { _, _, _ -> },
   onMoveBankOrder: (Int, Int) -> Unit = { _, _ -> },
   onRescanBank: (Int) -> Unit = {},
   onMasterPanChanged: (Float) -> Unit = {},
@@ -372,7 +400,20 @@ fun SoundPadScreen(
   onConsumeBankSwitchRequest: () -> Unit = {},
   onPickBackupFolderClick: () -> Unit = {},
   onDismissBackupPrompt: () -> Unit = {},
-  onSyncBackupNow: () -> Unit = {}
+  onSyncBackupNow: () -> Unit = {},
+  onSetAutoSyncEnabled: (Boolean) -> Unit = {},
+  onSetIncludeWaveforms: (Boolean) -> Unit = {},
+  onInspectRestoreFolderClick: () -> Unit = {},
+  onPickRelinkMusicFolder: () -> Unit = {},
+  onOpenSnapshotPickerClick: () -> Unit = {},
+  onCloseSnapshotPicker: () -> Unit = {},
+  onSelectSnapshot: (SnapshotFileInfo) -> Unit = {},
+  onConfirmApplyRestore: (RestoreSelectionOptions) -> Unit = {},
+  onDismissRestorePreview: () -> Unit = {},
+  onExportZipClick: () -> Unit = {},
+  onImportZipClick: () -> Unit = {},
+  onShareZipClick: () -> Unit = {},
+  onDeleteAllConfig: (Boolean) -> Unit = {}
 ) {
   val isFocusMode = uiState.settings.isFocusMode
   BackHandler(enabled = isFocusMode) {
@@ -403,9 +444,12 @@ fun SoundPadScreen(
   var showOnboardingManual by remember { mutableStateOf(false) }
   var showBulkColorDialog by remember { mutableStateOf(false) }
   var showBulkMoveBankDialog by remember { mutableStateOf(false) }
+  var showBulkMoveSlotDialog by remember { mutableStateOf(false) }
   var renamingBankKey by remember { mutableStateOf<Int?>(null) }
   var quickActionPad by remember { mutableStateOf<SoundPad?>(null) }
   var duplicateToBankSourcePad by remember { mutableStateOf<SoundPad?>(null) }
+  var moveToSlotTargetPad by remember { mutableStateOf<SoundPad?>(null) }
+  var showResetAllConfigDialog by remember { mutableStateOf(false) }
 
   val snackbarHostState = remember { SnackbarHostState() }
   val undoActionLabel = stringResource(R.string.action_undo)
@@ -772,6 +816,16 @@ fun SoundPadScreen(
                       FilterChip(
                         selected = false,
                         enabled = hasSelected,
+                        onClick = { showBulkMoveSlotDialog = true },
+                        leadingIcon = { Icon(Icons.Filled.SwapHoriz, contentDescription = null, modifier = Modifier.size(14.dp)) },
+                        label = { Text(stringResource(R.string.edit_bulk_move_slot), style = MaterialTheme.typography.labelSmall) },
+                        modifier = Modifier.testTag("bulk_move_slot_button")
+                      )
+                    }
+                    item {
+                      FilterChip(
+                        selected = false,
+                        enabled = hasSelected,
                         onClick = onBulkDuplicateSelected,
                         leadingIcon = { Icon(Icons.Filled.ContentCopy, contentDescription = null, modifier = Modifier.size(14.dp)) },
                         label = { Text(stringResource(R.string.edit_bulk_duplicate), style = MaterialTheme.typography.labelSmall) },
@@ -804,6 +858,66 @@ fun SoundPadScreen(
                           Icon(Icons.Filled.Close, contentDescription = stringResource(R.string.action_close), modifier = Modifier.size(16.dp))
                         }
                       }
+                    }
+                  }
+                } else {
+                  val currentBankKeyForOrg = memoizedBankPages.getOrNull(sharedPagerState.currentPage)?.targetPadBankIndex
+                  val currentConflictMode = uiState.settings.dragDropConflictMode
+                  LazyRow(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                  ) {
+                    item {
+                      FilterChip(
+                        selected = currentConflictMode == DragDropConflictMode.SHIFT,
+                        onClick = {
+                          val nextMode = if (currentConflictMode == DragDropConflictMode.SWAP) {
+                            DragDropConflictMode.SHIFT
+                          } else {
+                            DragDropConflictMode.SWAP
+                          }
+                          onDragDropConflictModeChanged(nextMode)
+                        },
+                        leadingIcon = { Icon(Icons.Filled.SwapHoriz, contentDescription = null, modifier = Modifier.size(14.dp)) },
+                        label = {
+                          Text(
+                            text = if (currentConflictMode == DragDropConflictMode.SWAP) {
+                              stringResource(R.string.edit_drag_mode_swap)
+                            } else {
+                              stringResource(R.string.edit_drag_mode_shift)
+                            },
+                            style = MaterialTheme.typography.labelSmall
+                          )
+                        },
+                        modifier = Modifier.testTag("edit_drag_mode_chip")
+                      )
+                    }
+                    item {
+                      FilterChip(
+                        selected = false,
+                        onClick = { onCompactBankSlots(currentBankKeyForOrg) },
+                        leadingIcon = { Icon(Icons.Filled.Compress, contentDescription = null, modifier = Modifier.size(14.dp)) },
+                        label = { Text(stringResource(R.string.edit_compact_slots), style = MaterialTheme.typography.labelSmall) },
+                        modifier = Modifier.testTag("edit_compact_slots_button")
+                      )
+                    }
+                    item {
+                      FilterChip(
+                        selected = false,
+                        onClick = { onSortBankAlphabetically(currentBankKeyForOrg) },
+                        leadingIcon = { Icon(Icons.Filled.SortByAlpha, contentDescription = null, modifier = Modifier.size(14.dp)) },
+                        label = { Text(stringResource(R.string.edit_sort_az), style = MaterialTheme.typography.labelSmall) },
+                        modifier = Modifier.testTag("edit_sort_az_button")
+                      )
+                    }
+                    item {
+                      FilterChip(
+                        selected = false,
+                        onClick = { onRestoreInitialPositions(currentBankKeyForOrg) },
+                        leadingIcon = { Icon(Icons.Filled.RestartAlt, contentDescription = null, modifier = Modifier.size(14.dp)) },
+                        label = { Text(stringResource(R.string.edit_restore_initial), style = MaterialTheme.typography.labelSmall) },
+                        modifier = Modifier.testTag("edit_restore_initial_button")
+                      )
                     }
                   }
                 }
@@ -1269,7 +1383,7 @@ fun SoundPadScreen(
             onDoubleTapStop = onDoubleTapStop,
             onSwipeVolumeChange = onSwipeVolumeChange,
             onTogglePadSelection = onTogglePadSelection,
-            onSwapPads = onSwapPads,
+            onMovePadToSlot = onMovePadToSlot,
             onEmptyPadClick = { if (!isFocusMode && !uiState.settings.isLocked) onPickFolderClick() },
             onExitFocusMode = { onSetFocusMode(false) },
             modifier = Modifier.weight(1f)
@@ -1362,6 +1476,7 @@ fun SoundPadScreen(
       onOpenAudioEditor = { onOpenAudioEditor(editingPad) },
       onDuplicatePad = { onDuplicatePad(editingPad.id) },
       onDuplicateToBank = { duplicateToBankSourcePad = editingPad },
+      onMoveToSlot = { moveToSlotTargetPad = editingPad },
       onDeletePad = { onDeletePad(editingPad.id) },
       onDismiss = onClosePadEditor
     )
@@ -1442,6 +1557,7 @@ fun SoundPadScreen(
       onMasterPanChange = onMasterPanChanged,
       onMiniWaveformToggle = onMiniWaveformToggle,
       onHapticIntensityChange = onHapticIntensityChanged,
+      onDragDropConflictModeChange = onDragDropConflictModeChanged,
       onSwipePadVolumeToggle = onSwipePadVolumeToggle,
       onDoubleTapToStopToggle = onDoubleTapToStopToggle,
       onAppLanguageChange = onAppLanguageChanged,
@@ -1456,7 +1572,15 @@ fun SoundPadScreen(
       onOpenMiuiGuide = { showMiuiDialog = true },
       backupState = uiState.persistentBackupState,
       onPickBackupFolderClick = onPickBackupFolderClick,
+      onSetAutoSyncEnabled = onSetAutoSyncEnabled,
+      onSetIncludeWaveforms = onSetIncludeWaveforms,
       onSyncBackupNow = onSyncBackupNow,
+      onInspectRestoreFolderClick = onInspectRestoreFolderClick,
+      onOpenSnapshotPickerClick = onOpenSnapshotPickerClick,
+      onExportZipClick = onExportZipClick,
+      onImportZipClick = onImportZipClick,
+      onShareZipClick = onShareZipClick,
+      onRequestDeleteAllConfig = { showResetAllConfigDialog = true },
       onDismiss = { showGridSheet = false }
     )
   }
@@ -1604,7 +1728,27 @@ fun SoundPadScreen(
     )
   }
 
-  if (!uiState.settings.hasCompletedOnboarding || showOnboardingManual) {
+  if (showBulkMoveSlotDialog && uiState.selectedPadIds.isNotEmpty()) {
+    val selectedList = uiState.pads.filter { it.id in uiState.selectedPadIds }
+    BulkMoveSlotsDialog(
+      selectedPads = selectedList,
+      bankPages = memoizedBankPages,
+      isBankExplicitMode = uiState.isBankExplicitMode,
+      conflictMode = uiState.settings.dragDropConflictMode,
+      onConfirmBulkMove = { targetBank, baseSlot ->
+        onBulkMoveSelectedToSlot(targetBank, baseSlot)
+        showBulkMoveSlotDialog = false
+      },
+      onDismiss = { showBulkMoveSlotDialog = false }
+    )
+  }
+
+  val restoreUi = uiState.restoreUiState
+  val isRestoreOverlayVisible = restoreUi.isInspecting ||
+    restoreUi.pendingInspection != null ||
+    restoreUi.isRestoreInProgress
+
+  if ((!uiState.settings.hasCompletedOnboarding || showOnboardingManual) && !isRestoreOverlayVisible) {
     OnboardingDialog(
       currentGridConfig = uiState.settings.gridConfig,
       currentThemeMode = uiState.settings.themeMode,
@@ -1615,6 +1759,7 @@ fun SoundPadScreen(
       onRequestMicPermission = onRequestRecordAudioPermission,
       onRequestBlePermissions = onRequestBleMidiPermissions,
       onOpenMiuiGuide = { showMiuiDialog = true },
+      onRestoreOldConfig = onInspectRestoreFolderClick,
       onFinishOnboarding = {
         showOnboardingManual = false
         onHasCompletedOnboardingToggle(true)
@@ -1624,7 +1769,7 @@ fun SoundPadScreen(
         onHasCompletedOnboardingToggle(true)
       }
     )
-  } else if (!isFocusMode && uiState.persistentBackupState.shouldShowFirstLaunchPrompt) {
+  } else if (!isFocusMode && !isRestoreOverlayVisible && uiState.persistentBackupState.shouldShowFirstLaunchPrompt) {
     AlertDialog(
       onDismissRequest = onDismissBackupPrompt,
       containerColor = MaterialTheme.colorScheme.surface,
@@ -1669,6 +1814,55 @@ fun SoundPadScreen(
     )
   }
 
+  if (restoreUi.isInspecting) {
+    RestoreProgressDialog(
+      progress = 0.25f,
+      stageText = "Memeriksa & memvalidasi file backup…"
+    )
+  }
+
+  val pendingInspection = restoreUi.pendingInspection
+  if (pendingInspection != null && !restoreUi.isRestoreInProgress) {
+    RestorePreviewAndSelectDialog(
+      inspection = pendingInspection,
+      currentMusicFolderName = restoreUi.selectedRelinkMusicName ?: uiState.settings.folderName,
+      onPickMusicFolderForRelink = onPickRelinkMusicFolder,
+      onRestoreAll = { options ->
+        showOnboardingManual = false
+        onConfirmApplyRestore(options)
+      },
+      onSkipDismiss = onDismissRestorePreview
+    )
+  }
+
+  if (restoreUi.isRestoreInProgress) {
+    RestoreProgressDialog(
+      progress = restoreUi.restoreProgress,
+      stageText = restoreUi.restoreStageText
+    )
+  }
+
+  if (restoreUi.isSnapshotPickerOpen) {
+    SnapshotPickerDialog(
+      snapshots = restoreUi.availableSnapshots,
+      hasBackupFolder = !uiState.settings.persistentBackupFolderUri.isNullOrBlank(),
+      onSelectSnapshot = onSelectSnapshot,
+      onPickFolderInstead = onInspectRestoreFolderClick,
+      onDismiss = onCloseSnapshotPicker
+    )
+  }
+
+  if (showResetAllConfigDialog) {
+    ResetAllConfigDialog(
+      hasBackupFolder = !uiState.settings.persistentBackupFolderUri.isNullOrBlank(),
+      onConfirmReset = { alsoClearSaf ->
+        showResetAllConfigDialog = false
+        onDeleteAllConfig(alsoClearSaf)
+      },
+      onDismiss = { showResetAllConfigDialog = false }
+    )
+  }
+
   val actionTargetPad = quickActionPad
   if (actionTargetPad != null) {
     PadQuickActionSheet(
@@ -1680,11 +1874,15 @@ fun SoundPadScreen(
       },
       onDuplicateHere = {
         quickActionPad = null
-        onDuplicatePadToBank(actionTargetPad.id, null)
+        onDuplicatePadToBank(actionTargetPad.id, null, null)
       },
       onDuplicateToOtherBank = {
         quickActionPad = null
         duplicateToBankSourcePad = actionTargetPad
+      },
+      onMoveToSlot = {
+        quickActionPad = null
+        moveToSlotTargetPad = actionTargetPad
       },
       onCuePreview = {
         quickActionPad = null
@@ -1707,11 +1905,28 @@ fun SoundPadScreen(
     DuplicateToBankDialog(
       sourcePad = dupSource,
       bankPages = uiState.bankPages,
-      onSelectTargetBank = { targetBankKey ->
-        onDuplicatePadToBank(dupSource.id, targetBankKey)
+      onSelectTargetBank = { targetBankKey, targetSlotZeroBased ->
+        onDuplicatePadToBank(dupSource.id, targetBankKey, targetSlotZeroBased)
         duplicateToBankSourcePad = null
       },
       onDismiss = { duplicateToBankSourcePad = null }
+    )
+  }
+
+  val slotMoveTarget = moveToSlotTargetPad
+  if (slotMoveTarget != null) {
+    MovePadToSlotDialog(
+      pad = slotMoveTarget,
+      allPads = uiState.pads,
+      bankPages = memoizedBankPages,
+      isBankExplicitMode = uiState.isBankExplicitMode,
+      padsPerBank = uiState.settings.gridConfig.padsPerBank,
+      conflictMode = uiState.settings.dragDropConflictMode,
+      onConfirmMove = { targetBankIndex, targetSlotIndex ->
+        onMovePadToSlot(slotMoveTarget.id, targetBankIndex, targetSlotIndex)
+        moveToSlotTargetPad = null
+      },
+      onDismiss = { moveToSlotTargetPad = null }
     )
   }
 
@@ -1793,6 +2008,15 @@ fun SoundPadScreen(
   }
 }
 
+private data class GridCellHitTarget(
+  val key: String,
+  val boundsInRoot: Rect,
+  val pageIdx: Int,
+  val targetPadBankIndex: Int,
+  val absoluteSlotIndex: Int,
+  val occupiedPad: SoundPad?
+)
+
 @OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
 @Composable
 private fun BankedPadMatrix(
@@ -1832,7 +2056,7 @@ private fun BankedPadMatrix(
   onDoubleTapStop: (String) -> Unit,
   onSwipeVolumeChange: (String, Float, Boolean) -> Unit,
   onTogglePadSelection: (String) -> Unit,
-  onSwapPads: (fromPadId: String, toPadId: String) -> Unit,
+  onMovePadToSlot: (padId: String, targetBankIndex: Int, targetSlotIndex: Int) -> Unit,
   onEmptyPadClick: () -> Unit,
   onExitFocusMode: () -> Unit,
   modifier: Modifier = Modifier
@@ -1844,11 +2068,58 @@ private fun BankedPadMatrix(
   val topBarTokens = SoundPadTheme.topBarTokens
   val extColors = SoundPadTheme.colors
   val spacing = SoundPadTheme.spacing
-  var isDraggingAnyPad by remember { mutableStateOf(false) }
+
+  val visibleCells = remember { mutableStateMapOf<String, GridCellHitTarget>() }
+  var pagerBoxBounds by remember { mutableStateOf(Rect.Zero) }
+  var draggingPad by remember { mutableStateOf<SoundPad?>(null) }
+  var dragRootPosition by remember { mutableStateOf(Offset.Zero) }
+  var hoveredTargetKey by remember { mutableStateOf<String?>(null) }
+
+  val isDragEnabled = isEditMode && !isMultiSelectMode && !isFocusMode && !isLocked
+  val currentPageState by rememberUpdatedState(pagerState.currentPage)
+  val latestOnMovePadToSlot by rememberUpdatedState(onMovePadToSlot)
+  val edgeThresholdPx = with(LocalDensity.current) { 44.dp.toPx() }
+
+  val edgeScrollDir = remember(draggingPad?.id, dragRootPosition, pagerBoxBounds, pagerState.currentPage, pageCount, edgeThresholdPx) {
+    if (draggingPad != null && pagerBoxBounds.width > edgeThresholdPx * 2f) {
+      when {
+        dragRootPosition.x < pagerBoxBounds.left + edgeThresholdPx && pagerState.currentPage > 0 -> -1
+        dragRootPosition.x > pagerBoxBounds.right - edgeThresholdPx && pagerState.currentPage < pageCount - 1 -> 1
+        else -> 0
+      }
+    } else {
+      0
+    }
+  }
+
+  LaunchedEffect(draggingPad?.id, edgeScrollDir, pageCount) {
+    val activeDrag = draggingPad ?: return@LaunchedEffect
+    if (edgeScrollDir == 0) return@LaunchedEffect
+    delay(450L)
+    while (isActive && draggingPad?.id == activeDrag.id) {
+      val nextPage = (pagerState.currentPage + edgeScrollDir).coerceIn(0, (pageCount - 1).coerceAtLeast(0))
+      if (nextPage != pagerState.currentPage) {
+        performPadHaptic(haptic, hapticIntensity, HapticFeedbackType.TextHandleMove)
+        pagerState.animateScrollToPage(nextPage)
+        hoveredTargetKey = null
+      }
+      delay(650L)
+    }
+  }
 
   LaunchedEffect(pagerState.currentPage, bankPages.size) {
     if (pagerState.currentPage in bankPages.indices) {
       bankListState.animateScrollToItem(pagerState.currentPage)
+    }
+    val cur = pagerState.currentPage
+    val staleKeys = visibleCells.filterValues { abs(it.pageIdx - cur) > 1 }.keys.toList()
+    staleKeys.forEach { visibleCells.remove(it) }
+  }
+
+  LaunchedEffect(isDragEnabled) {
+    if (!isDragEnabled) {
+      draggingPad = null
+      hoveredTargetKey = null
     }
   }
 
@@ -1867,7 +2138,7 @@ private fun BankedPadMatrix(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(spacing.xs)
           ) {
-            itemsIndexed(bankPages, key = { index, page -> "${page.bankKey}_$index" }) { index, page ->
+            itemsIndexed(bankPages, key = { index, page -> "${page.bankKey}_${page.subPageIndex}_$index" }) { index, page ->
               val isCurrent = pagerState.currentPage == index
               val hasActiveInBank = page.pads.any { playbackStates[it.id]?.isPlaying == true }
               Column(
@@ -1973,58 +2244,181 @@ private fun BankedPadMatrix(
       }
     }
 
-    HorizontalPager(
-      state = pagerState,
-      userScrollEnabled = !isDraggingAnyPad,
+    val dragGestureModifier = if (isDragEnabled) {
+      Modifier.pointerInput(isDragEnabled, hapticIntensity) {
+        detectDragGesturesAfterLongPress(
+          onDragStart = { localOffset ->
+            val startRoot = pagerBoxBounds.topLeft + localOffset
+            val activePage = currentPageState
+            val hit = visibleCells.values.firstOrNull { target ->
+              target.pageIdx == activePage &&
+                target.occupiedPad != null &&
+                target.boundsInRoot.contains(startRoot)
+            } ?: return@detectDragGesturesAfterLongPress
+            val sourcePad = hit.occupiedPad ?: return@detectDragGesturesAfterLongPress
+            performPadHaptic(haptic, hapticIntensity, HapticFeedbackType.LongPress)
+            draggingPad = sourcePad
+            dragRootPosition = startRoot
+            hoveredTargetKey = hit.key
+          },
+          onDrag = { change, dragAmount ->
+            if (draggingPad == null) return@detectDragGesturesAfterLongPress
+            change.consume()
+            dragRootPosition += dragAmount
+            val activePage = currentPageState
+            hoveredTargetKey = visibleCells.values.firstOrNull { target ->
+              target.pageIdx == activePage && target.boundsInRoot.contains(dragRootPosition)
+            }?.key
+          },
+          onDragEnd = {
+            val dragged = draggingPad
+            val activePage = currentPageState
+            val target = hoveredTargetKey?.let { visibleCells[it] }?.takeIf { it.pageIdx == activePage }
+              ?: visibleCells.values.firstOrNull {
+                it.pageIdx == activePage && it.boundsInRoot.contains(dragRootPosition)
+              }
+            if (dragged != null && target != null && target.occupiedPad?.id != dragged.id) {
+              latestOnMovePadToSlot(dragged.id, target.targetPadBankIndex, target.absoluteSlotIndex)
+            }
+            draggingPad = null
+            hoveredTargetKey = null
+          },
+          onDragCancel = {
+            draggingPad = null
+            hoveredTargetKey = null
+          }
+        )
+      }
+    } else {
+      Modifier
+    }
+
+    Box(
       modifier = Modifier
         .weight(1f)
         .fillMaxWidth()
-    ) { pageIndex ->
-      val bankPads = bankPages.getOrNull(pageIndex)?.pads.orEmpty()
-      PadMatrixGrid(
-        pads = bankPads,
-        bankIndex = pageIndex,
-        rows = gridConfig.rows,
-        cols = gridConfig.cols,
-        padGridSpacingDp = padGridSpacingDp,
-        isFocusMode = isFocusMode,
-        playbackStates = playbackStates,
-        isEditMode = isEditMode,
-        isMultiSelectMode = isMultiSelectMode,
-        selectedPadIds = selectedPadIds,
-        hapticIntensity = hapticIntensity,
-        swipePadVolumeEnabled = swipePadVolumeEnabled,
-        doubleTapToStopEnabled = doubleTapToStopEnabled,
-        isMidiLearnMode = isMidiLearnMode,
-        armedLearnPadId = armedLearnPadId,
-        cuePreviewPadId = cuePreviewPadId,
-        preparingReversePadId = preparingReversePadId,
-        reduceMotion = reduceMotion,
-        visualEffectsEnabled = visualEffectsEnabled,
-        globalCrossfadeEnabled = globalCrossfadeEnabled,
-        miniWaveformEnabled = miniWaveformEnabled,
-        defaultPadShape = defaultPadShape,
-        defaultCornerGlowColor = defaultCornerGlowColor,
-        defaultPadColorMode = defaultPadColorMode,
-        defaultCustomPadColorArgb = defaultCustomPadColorArgb,
-        onDragActiveChange = { isDraggingAnyPad = it },
-        onPadTapped = onPadTapped,
-        onPadCustomizeClick = onPadCustomizeClick,
-        onPadHoldStart = onPadHoldStart,
-        onPadHoldRelease = onPadHoldRelease,
-        onDoubleTapStop = onDoubleTapStop,
-        onSwipeVolumeChange = onSwipeVolumeChange,
-        onTogglePadSelection = onTogglePadSelection,
-        onSwapPads = onSwapPads,
-        onEmptyPadClick = onEmptyPadClick,
-        onExitFocusMode = onExitFocusMode,
+        .onGloballyPositioned { coords ->
+          pagerBoxBounds = coords.boundsInRoot()
+        }
+        .then(dragGestureModifier)
+    ) {
+      HorizontalPager(
+        state = pagerState,
+        userScrollEnabled = draggingPad == null,
         modifier = Modifier.fillMaxSize()
-      )
+      ) { pageIndex ->
+        val page = bankPages.getOrNull(pageIndex) ?: BankPageUi(
+          bankKey = pageIndex,
+          title = "B${pageIndex + 1}",
+          pads = emptyList(),
+          canRescanSubfolder = false
+        )
+        PadMatrixGrid(
+          page = page,
+          pageIndex = pageIndex,
+          rows = gridConfig.rows,
+          cols = gridConfig.cols,
+          padGridSpacingDp = padGridSpacingDp,
+          isFocusMode = isFocusMode,
+          playbackStates = playbackStates,
+          isEditMode = isEditMode,
+          isMultiSelectMode = isMultiSelectMode,
+          isDragEnabled = isDragEnabled,
+          selectedPadIds = selectedPadIds,
+          hapticIntensity = hapticIntensity,
+          swipePadVolumeEnabled = swipePadVolumeEnabled,
+          doubleTapToStopEnabled = doubleTapToStopEnabled,
+          isMidiLearnMode = isMidiLearnMode,
+          armedLearnPadId = armedLearnPadId,
+          cuePreviewPadId = cuePreviewPadId,
+          preparingReversePadId = preparingReversePadId,
+          draggingPadId = draggingPad?.id,
+          hoveredTargetKey = hoveredTargetKey,
+          reduceMotion = reduceMotion,
+          visualEffectsEnabled = visualEffectsEnabled,
+          globalCrossfadeEnabled = globalCrossfadeEnabled,
+          miniWaveformEnabled = miniWaveformEnabled,
+          defaultPadShape = defaultPadShape,
+          defaultCornerGlowColor = defaultCornerGlowColor,
+          defaultPadColorMode = defaultPadColorMode,
+          defaultCustomPadColorArgb = defaultCustomPadColorArgb,
+          onRegisterCellTarget = { target -> visibleCells[target.key] = target },
+          onUnregisterCellTarget = { key -> visibleCells.remove(key) },
+          onPadTapped = onPadTapped,
+          onPadCustomizeClick = onPadCustomizeClick,
+          onPadHoldStart = onPadHoldStart,
+          onPadHoldRelease = onPadHoldRelease,
+          onDoubleTapStop = onDoubleTapStop,
+          onSwipeVolumeChange = onSwipeVolumeChange,
+          onTogglePadSelection = onTogglePadSelection,
+          onEmptyPadClick = onEmptyPadClick,
+          onExitFocusMode = onExitFocusMode,
+          modifier = Modifier.fillMaxSize()
+        )
+      }
+
+      if (draggingPad != null && edgeScrollDir != 0) {
+        Surface(
+          modifier = Modifier
+            .align(if (edgeScrollDir < 0) Alignment.CenterStart else Alignment.CenterEnd)
+            .padding(horizontal = 8.dp),
+          shape = CircleShape,
+          color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.9f),
+          border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary)
+        ) {
+          Icon(
+            imageVector = if (edgeScrollDir < 0) {
+              Icons.AutoMirrored.Filled.KeyboardArrowLeft
+            } else {
+              Icons.AutoMirrored.Filled.KeyboardArrowRight
+            },
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.padding(8.dp)
+          )
+        }
+      }
+
+      val activeDrag = draggingPad
+      if (activeDrag != null) {
+        val localOffset = dragRootPosition - pagerBoxBounds.topLeft
+        val tint = activeDrag.colorArgb?.let { Color(it.toInt()) } ?: MaterialTheme.colorScheme.secondary
+        val hoveredTarget = hoveredTargetKey?.let { visibleCells[it] }
+        val targetSlotLabel = hoveredTarget?.let { " → #${it.absoluteSlotIndex + 1}" } ?: ""
+        Surface(
+          modifier = Modifier.offset {
+            IntOffset(
+              (localOffset.x - 68f).roundToInt(),
+              (localOffset.y - 42f).roundToInt()
+            )
+          },
+          shape = RoundedCornerShape(10.dp),
+          color = MaterialTheme.colorScheme.surfaceContainer,
+          border = BorderStroke(2.dp, tint),
+          shadowElevation = 10.dp
+        ) {
+          Text(
+            text = "${activeDrag.displayName}$targetSlotLabel",
+            style = MaterialTheme.typography.titleSmall,
+            color = MaterialTheme.colorScheme.onSurface,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+          )
+        }
+      }
     }
 
-    // Dot indicator below the pad grid (replaces top "1/1" pill badge)
+    // Dot indicator below the pad grid (supports sliding window for >12 subpages)
     if (showInlineBankStrip && showPagerDots) {
-      val visibleDots = minOf(pageCount, topBarTokens.maxPagerDots)
+      val maxDots = topBarTokens.maxPagerDots
+      val windowStart = when {
+        pageCount <= maxDots -> 0
+        pagerState.currentPage <= maxDots / 2 -> 0
+        pagerState.currentPage >= pageCount - (maxDots - maxDots / 2) -> pageCount - maxDots
+        else -> pagerState.currentPage - maxDots / 2
+      }
+      val windowEnd = minOf(pageCount, windowStart + maxDots)
       Row(
         modifier = Modifier
           .fillMaxWidth()
@@ -2033,7 +2427,7 @@ private fun BankedPadMatrix(
         horizontalArrangement = Arrangement.Center,
         verticalAlignment = Alignment.CenterVertically
       ) {
-        for (dotIdx in 0 until visibleDots) {
+        for (dotIdx in windowStart until windowEnd) {
           val activeDot = pagerState.currentPage == dotIdx
           val dotWidth by animateDpAsState(
             targetValue = if (activeDot) {
@@ -2062,6 +2456,15 @@ private fun BankedPadMatrix(
               }
           )
         }
+        if (pageCount > 1) {
+          Spacer(modifier = Modifier.width(8.dp))
+          Text(
+            text = "${pagerState.currentPage + 1}/$pageCount",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.testTag("bank_pager_counter")
+          )
+        }
       }
     }
   }
@@ -2069,8 +2472,8 @@ private fun BankedPadMatrix(
 
 @Composable
 private fun PadMatrixGrid(
-  pads: List<SoundPad>,
-  bankIndex: Int,
+  page: BankPageUi,
+  pageIndex: Int,
   rows: Int,
   cols: Int,
   padGridSpacingDp: Int,
@@ -2078,6 +2481,7 @@ private fun PadMatrixGrid(
   playbackStates: Map<String, PadPlaybackState>,
   isEditMode: Boolean,
   isMultiSelectMode: Boolean,
+  isDragEnabled: Boolean,
   selectedPadIds: Set<String>,
   hapticIntensity: HapticIntensity,
   swipePadVolumeEnabled: Boolean,
@@ -2086,6 +2490,8 @@ private fun PadMatrixGrid(
   armedLearnPadId: String?,
   cuePreviewPadId: String?,
   preparingReversePadId: String?,
+  draggingPadId: String?,
+  hoveredTargetKey: String?,
   reduceMotion: Boolean,
   visualEffectsEnabled: Boolean,
   globalCrossfadeEnabled: Boolean,
@@ -2094,7 +2500,8 @@ private fun PadMatrixGrid(
   defaultCornerGlowColor: Color,
   defaultPadColorMode: DefaultPadColorMode,
   defaultCustomPadColorArgb: Long,
-  onDragActiveChange: (Boolean) -> Unit,
+  onRegisterCellTarget: (GridCellHitTarget) -> Unit,
+  onUnregisterCellTarget: (String) -> Unit,
   onPadTapped: (SoundPad) -> Unit,
   onPadCustomizeClick: (SoundPad) -> Unit,
   onPadHoldStart: (SoundPad) -> Unit,
@@ -2102,7 +2509,6 @@ private fun PadMatrixGrid(
   onDoubleTapStop: (String) -> Unit,
   onSwipeVolumeChange: (String, Float, Boolean) -> Unit,
   onTogglePadSelection: (String) -> Unit,
-  onSwapPads: (fromPadId: String, toPadId: String) -> Unit,
   onEmptyPadClick: () -> Unit,
   onExitFocusMode: () -> Unit,
   modifier: Modifier = Modifier
@@ -2117,13 +2523,6 @@ private fun PadMatrixGrid(
   }
   val outerPadding: Dp = if (cols > 10 || rows > 10 || isFocusMode) SoundPadTheme.spacing.xs else SoundPadTheme.spacing.sm
 
-  val cellBounds = remember { mutableStateMapOf<String, Rect>() }
-  var gridRootOrigin by remember { mutableStateOf(Offset.Zero) }
-  var draggingPad by remember { mutableStateOf<SoundPad?>(null) }
-  var dragRootPosition by remember { mutableStateOf(Offset.Zero) }
-  var hoveredTargetPadId by remember { mutableStateOf<String?>(null) }
-  val haptic = LocalHapticFeedback.current
-
   BoxWithConstraints(
     modifier = modifier
       .padding(horizontal = outerPadding, vertical = SoundPadTheme.spacing.xs)
@@ -2136,9 +2535,6 @@ private fun PadMatrixGrid(
           Modifier
         }
       )
-      .onGloballyPositioned { coords ->
-        gridRootOrigin = coords.positionInRoot()
-      }
   ) {
     val totalHorizontalSpacing = spacing * (cols - 1)
     val cellWidth = ((maxWidth - totalHorizontalSpacing) / cols).coerceAtLeast(16.dp)
@@ -2154,7 +2550,6 @@ private fun PadMatrixGrid(
     }
 
     val totalSlots = rows * cols
-    val bankOffset = bankIndex * totalSlots
     val clickHandler: (SoundPad) -> Unit = remember(isEditMode, isMultiSelectMode, onTogglePadSelection, onPadTapped) {
       { targetPad ->
         if (isEditMode && isMultiSelectMode) {
@@ -2179,47 +2574,32 @@ private fun PadMatrixGrid(
     ) {
       items(
         count = totalSlots,
-        key = { localIndex -> pads.getOrNull(localIndex)?.id ?: "empty_${bankIndex}_$localIndex" }
+        key = { localIndex -> "slot_${page.bankKey}_${page.subPageIndex}_$localIndex" }
       ) { localIndex ->
-        val pad = pads.getOrNull(localIndex)
+        val pad = page.slotMap[localIndex]
+        val absoluteSlotIndex = page.slotOffset + localIndex
         val playbackState = pad?.let { playbackStates[it.id] }
-        val cellModifier = if (pad != null && isEditMode && !isMultiSelectMode && !isFocusMode) {
-          Modifier
-            .onGloballyPositioned { coords -> cellBounds[pad.id] = coords.boundsInRoot() }
-            .pointerInput(pad.id, isEditMode, isMultiSelectMode, hapticIntensity) {
-              detectDragGesturesAfterLongPress(
-                onDragStart = { localOffset ->
-                  val box = cellBounds[pad.id] ?: return@detectDragGesturesAfterLongPress
-                  performPadHaptic(haptic, hapticIntensity, HapticFeedbackType.LongPress)
-                  draggingPad = pad
-                  dragRootPosition = box.topLeft + localOffset
-                  hoveredTargetPadId = pad.id
-                  onDragActiveChange(true)
-                },
-                onDrag = { change, dragAmount ->
-                  change.consume()
-                  dragRootPosition += dragAmount
-                  hoveredTargetPadId = cellBounds.entries
-                    .firstOrNull { it.value.contains(dragRootPosition) }
-                    ?.key
-                },
-                onDragEnd = {
-                  val fromId = draggingPad?.id
-                  val toId = hoveredTargetPadId
-                  if (fromId != null && toId != null && fromId != toId) {
-                    onSwapPads(fromId, toId)
-                  }
-                  draggingPad = null
-                  hoveredTargetPadId = null
-                  onDragActiveChange(false)
-                },
-                onDragCancel = {
-                  draggingPad = null
-                  hoveredTargetPadId = null
-                  onDragActiveChange(false)
-                }
+        val targetKey = "${pageIndex}_$localIndex"
+
+        if (isDragEnabled) {
+          DisposableEffect(targetKey) {
+            onDispose { onUnregisterCellTarget(targetKey) }
+          }
+        }
+
+        val cellBoundsModifier = if (isDragEnabled) {
+          Modifier.onGloballyPositioned { coords ->
+            onRegisterCellTarget(
+              GridCellHitTarget(
+                key = targetKey,
+                boundsInRoot = coords.boundsInRoot(),
+                pageIdx = pageIndex,
+                targetPadBankIndex = page.targetPadBankIndex,
+                absoluteSlotIndex = absoluteSlotIndex,
+                occupiedPad = pad
               )
-            }
+            )
+          }
         } else {
           Modifier
         }
@@ -2234,9 +2614,13 @@ private fun PadMatrixGrid(
             .aspectRatio(1f)
         }
 
+        val isHoveredTarget = hoveredTargetKey == targetKey &&
+          draggingPadId != null &&
+          pad?.id != draggingPadId
+
         PadCell(
           pad = pad,
-          slotNumber = bankOffset + localIndex + 1,
+          slotNumber = absoluteSlotIndex + 1,
           playbackState = playbackState,
           density = density,
           isEditMode = isEditMode,
@@ -2245,8 +2629,8 @@ private fun PadMatrixGrid(
           isMidiLearnMode = isMidiLearnMode,
           isMidiLearnArmed = pad != null && armedLearnPadId == pad.id,
           isCuePlaying = pad != null && cuePreviewPadId == pad.id,
-          isDragging = pad != null && draggingPad?.id == pad.id,
-          isDropTarget = pad != null && hoveredTargetPadId == pad.id && draggingPad?.id != pad.id,
+          isDragging = pad != null && draggingPadId == pad.id,
+          isDropTarget = isHoveredTarget,
           globalCrossfadeEnabled = globalCrossfadeEnabled,
           defaultPadShape = defaultPadShape,
           defaultCornerGlowColor = defaultCornerGlowColor,
@@ -2269,34 +2653,7 @@ private fun PadMatrixGrid(
           onHoldRelease = onPadHoldRelease,
           onDoubleTapStop = doubleTapStopHandler,
           onSwipeVolumeChange = swipeVolumeHandler,
-          modifier = sizeModifier.then(cellModifier)
-        )
-      }
-    }
-
-    val activeDrag = draggingPad
-    if (activeDrag != null) {
-      val localOffset = dragRootPosition - gridRootOrigin
-      val tint = activeDrag.colorArgb?.let { Color(it.toInt()) } ?: MaterialTheme.colorScheme.secondary
-      Surface(
-        modifier = Modifier.offset {
-          IntOffset(
-            (localOffset.x - 60f).roundToInt(),
-            (localOffset.y - 36f).roundToInt()
-          )
-        },
-        shape = RoundedCornerShape(10.dp),
-        color = MaterialTheme.colorScheme.surfaceContainer,
-        border = BorderStroke(2.dp, tint),
-        shadowElevation = 10.dp
-      ) {
-        Text(
-          text = activeDrag.displayName,
-          style = MaterialTheme.typography.titleSmall,
-          color = MaterialTheme.colorScheme.onSurface,
-          maxLines = 1,
-          overflow = TextOverflow.Ellipsis,
-          modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+          modifier = sizeModifier.then(cellBoundsModifier)
         )
       }
     }
@@ -2537,6 +2894,7 @@ private fun PadQuickActionSheet(
   onCustomize: () -> Unit,
   onDuplicateHere: () -> Unit,
   onDuplicateToOtherBank: () -> Unit,
+  onMoveToSlot: () -> Unit = {},
   onCuePreview: () -> Unit,
   onEditAudio: () -> Unit,
   onDeletePad: () -> Unit,
@@ -2583,7 +2941,7 @@ private fun PadQuickActionSheet(
 
       HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
 
-      QuickActionRow(
+  QuickActionRow(
         icon = Icons.Filled.Palette,
         title = "Customize Tampilan, Pan & Audio",
         subtitle = "Ubah warna, bentuk, pan Kiri/Kanan, speed, fade & choke",
@@ -2592,9 +2950,17 @@ private fun PadQuickActionSheet(
         onClick = onCustomize
       )
       QuickActionRow(
+        icon = Icons.Filled.SwapHoriz,
+        title = stringResource(R.string.action_move_to_slot),
+        subtitle = "Saat ini Slot #${pad.positionIndex + 1} · Pindah ke nomor slot atau bank tertentu",
+        tint = MaterialTheme.colorScheme.secondary,
+        testTag = "quick_action_move_slot",
+        onClick = onMoveToSlot
+      )
+      QuickActionRow(
         icon = Icons.Filled.ContentCopy,
         title = "Duplikat Pad (Setting Independen)",
-        subtitle = "Buat pad kloning di bank ini tanpa menggandakan file audio",
+        subtitle = "Buat pad kloning di slot kosong terdekat tanpa menggandakan file audio",
         tint = MaterialTheme.colorScheme.secondary,
         testTag = "quick_action_duplicate_here",
         onClick = onDuplicateHere
@@ -2602,7 +2968,7 @@ private fun PadQuickActionSheet(
       QuickActionRow(
         icon = Icons.Filled.DriveFileMove,
         title = "Duplikat ke Bank Lain",
-        subtitle = "Salin pad dengan setting independen ke bank tujuan atau bank baru",
+        subtitle = "Salin pad dengan setting independen ke bank tujuan atau slot tertentu",
         tint = MaterialTheme.colorScheme.tertiary,
         testTag = "quick_action_duplicate_to_bank",
         onClick = onDuplicateToOtherBank
@@ -2689,12 +3055,20 @@ private fun QuickActionRow(
 private fun DuplicateToBankDialog(
   sourcePad: SoundPad,
   bankPages: List<BankPageUi>,
-  onSelectTargetBank: (Int?) -> Unit,
+  onSelectTargetBank: (Int?, Int?) -> Unit,
   onDismiss: () -> Unit
 ) {
   val distinctBanks = remember(bankPages) {
-    bankPages.distinctBy { it.bankKey }.map { it.bankKey to it.title }
+    bankPages.distinctBy { it.targetPadBankIndex }.map { page ->
+      val cleanTitle = page.title.replace(Regex(" \\(\\d+\\)$"), "")
+      page.targetPadBankIndex to cleanTitle
+    }
   }
+  var optionalSlotText by remember { mutableStateOf("") }
+  val parsedSlot = optionalSlotText.trim().toIntOrNull()
+  val isSlotValid = optionalSlotText.isBlank() || (parsedSlot != null && parsedSlot in 1..999)
+  val targetSlotZeroBased = parsedSlot?.minus(1)
+
   AlertDialog(
     onDismissRequest = onDismiss,
     title = { Text("Duplikat ke Bank Lain") },
@@ -2705,8 +3079,24 @@ private fun DuplicateToBankDialog(
           style = MaterialTheme.typography.bodySmall,
           color = MaterialTheme.colorScheme.onSurfaceVariant
         )
+        OutlinedTextField(
+          value = optionalSlotText,
+          onValueChange = { input ->
+            if (input.length <= 4 && input.all { it.isDigit() }) {
+              optionalSlotText = input
+            }
+          },
+          label = { Text("Nomor Slot Tujuan (Opsional, 1–999)") },
+          placeholder = { Text("Kosongkan = slot kosong pertama") },
+          isError = !isSlotValid,
+          singleLine = true,
+          keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+          modifier = Modifier
+            .fillMaxWidth()
+            .testTag("duplicate_target_slot_input")
+        )
         LazyColumn(
-          modifier = Modifier.height(220.dp),
+          modifier = Modifier.height(200.dp),
           verticalArrangement = Arrangement.spacedBy(6.dp)
         ) {
           items(distinctBanks, key = { it.first }) { (bankKey, title) ->
@@ -2715,7 +3105,7 @@ private fun DuplicateToBankDialog(
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(10.dp))
                 .testTag("duplicate_target_bank_$bankKey")
-                .clickable { onSelectTargetBank(bankKey) },
+                .clickable(enabled = isSlotValid) { onSelectTargetBank(bankKey, targetSlotZeroBased) },
               shape = RoundedCornerShape(10.dp),
               color = MaterialTheme.colorScheme.surfaceContainer,
               border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
@@ -2744,7 +3134,7 @@ private fun DuplicateToBankDialog(
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(10.dp))
                 .testTag("duplicate_target_new_bank")
-                .clickable { onSelectTargetBank(-1) },
+                .clickable(enabled = isSlotValid) { onSelectTargetBank(-1, targetSlotZeroBased) },
               shape = RoundedCornerShape(10.dp),
               color = MaterialTheme.colorScheme.primaryContainer,
               border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary)
@@ -2782,7 +3172,9 @@ private fun ReorderBanksDialog(
   onDismiss: () -> Unit
 ) {
   val distinctBanks = remember(bankPages) {
-    bankPages.distinctBy { it.bankKey }.map { it.bankKey to it.title }
+    bankPages.distinctBy { it.bankKey }.map { page ->
+      page.bankKey to page.title.replace(Regex(" \\(\\d+\\)$"), "")
+    }
   }
   AlertDialog(
     onDismissRequest = onDismiss,
@@ -3020,7 +3412,9 @@ private fun BulkMoveToBankDialog(
   onDismiss: () -> Unit
 ) {
   val distinctBanks = remember(bankPages) {
-    bankPages.distinctBy { it.bankKey }.map { it.bankKey to it.title }
+    bankPages.distinctBy { it.targetPadBankIndex }.map { page ->
+      page.targetPadBankIndex to page.title.replace(Regex(" \\(\\d+\\)$"), "")
+    }
   }
   AlertDialog(
     onDismissRequest = onDismiss,

@@ -264,4 +264,20 @@
     <string name="reset_all_config_desc">Semua profil, pengaturan pad, posisi slot, efek, MIDI mapping, jadwal, sequencer, dan preferensi akan dikembalikan ke awal.</string>
     <string name="reset_all_config_clear_saf">Sekaligus hapus file backup di folder SAF terpilih</string>
     <string name="reset_all_config_confirm">Ya, Hapus Semua</string>
+
+    <!-- Tahap 1: Sparse Slot Grid, Drag-Drop Conflict, & Organize Actions -->
+    <string name="edit_drag_mode_label">Mode Drop</string>
+    <string name="edit_drag_mode_swap">Drop: Tukar</string>
+    <string name="edit_drag_mode_shift">Drop: Geser</string>
+    <string name="edit_compact_slots">Rapikan</string>
+    <string name="edit_sort_az">Urutkan A-Z</string>
+    <string name="edit_restore_initial">Posisi Awal</string>
+    <string name="edit_bulk_move_slot">Pindah Posisi</string>
+    <string name="action_move_to_slot">Pindah ke Posisi...</string>
+    <string name="move_slot_dialog_title">Pindah ke Posisi Slot</string>
+    <string name="bulk_move_slot_dialog_title">Pindah %1$d Pad ke Posisi</string>
+    <string name="move_slot_input_label">Nomor Slot (1–%1$d)</string>
+    <string name="move_slot_invalid_error">Masukkan nomor slot antara 1 sampai %1$d</string>
+    <string name="settings_drag_conflict_title">MODE DROP KE SLOT TERISI</string>
+    <string name="settings_drag_conflict_subtitle">Pilih perilaku saat menjatuhkan pad ke slot yang sudah terisi</string>
 </resources>

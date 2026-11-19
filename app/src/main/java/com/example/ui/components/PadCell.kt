@@ -219,6 +219,7 @@ fun PadCell(
       slotNumber = slotNumber,
       density = density,
       style = defaultPadShape,
+      isDropTarget = isDropTarget,
       hapticIntensity = hapticIntensity,
       onClick = onEmptyClick,
       onDoubleClick = onEmptyDoubleClick,
@@ -1365,6 +1366,7 @@ private fun EmptyPadWell(
   slotNumber: Int,
   density: PadDensity,
   style: PadShapeStyle,
+  isDropTarget: Boolean = false,
   hapticIntensity: HapticIntensity,
   onClick: () -> Unit,
   onDoubleClick: (() -> Unit)? = null,
@@ -1382,8 +1384,21 @@ private fun EmptyPadWell(
     PadDensity.MICRO -> padTokens.microCornerDp
   }
   val shape = remember(style, cornerRadius) { padComposeShape(style, cornerRadius) }
-  val outlineColor = extColors.padEmptyWellBorder.copy(alpha = padTokens.metaMinAlpha)
-  val outlineStrokeWidth = if (density == PadDensity.STANDARD) padTokens.emptyWellBorderDp else padTokens.emptyWellBorderCompactDp
+  val outlineColor = if (isDropTarget) {
+    MaterialTheme.colorScheme.secondary
+  } else {
+    extColors.padEmptyWellBorder.copy(alpha = padTokens.metaMinAlpha)
+  }
+  val containerColor = if (isDropTarget) {
+    MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.55f)
+  } else {
+    extColors.padEmptyWellContainer
+  }
+  val outlineStrokeWidth = when {
+    isDropTarget -> 2.5.dp
+    density == PadDensity.STANDARD -> padTokens.emptyWellBorderDp
+    else -> padTokens.emptyWellBorderCompactDp
+  }
   val plusIconSize = when (density) {
     PadDensity.STANDARD -> padTokens.emptyIconStandardDp
     PadDensity.COMPACT -> padTokens.emptyIconCompactDp
@@ -1415,7 +1430,7 @@ private fun EmptyPadWell(
     modifier = modifier
       .defaultMinSize(minWidth = spacing.minTouchTarget, minHeight = spacing.minTouchTarget)
       .clip(shape)
-      .background(extColors.padEmptyWellContainer)
+      .background(containerColor)
       .testTag("empty_pad_well_$slotNumber")
       .semantics { contentDescription = "$addDescription ($slotNumber)" }
       .then(clickMod),
@@ -1432,7 +1447,7 @@ private fun EmptyPadWell(
           width = outlineStrokeWidth.toPx(),
           cap = StrokeCap.Round,
           join = StrokeJoin.Round,
-          pathEffect = PathEffect.dashPathEffect(floatArrayOf(dashLenPx, dashGapPx), 0f)
+          pathEffect = if (isDropTarget) null else PathEffect.dashPathEffect(floatArrayOf(dashLenPx, dashGapPx), 0f)
         )
       )
     }
@@ -1440,7 +1455,11 @@ private fun EmptyPadWell(
     Icon(
       imageVector = Icons.Filled.Add,
       contentDescription = addDescription,
-      tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = padTokens.metaMinAlpha),
+      tint = if (isDropTarget) {
+        MaterialTheme.colorScheme.secondary
+      } else {
+        MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = padTokens.metaMinAlpha)
+      },
       modifier = Modifier.size(plusIconSize)
     )
   }

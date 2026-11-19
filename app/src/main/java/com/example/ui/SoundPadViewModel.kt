@@ -45,6 +45,7 @@ import com.example.domain.model.AppErrorLog
 import com.example.domain.model.AppLanguage
 import com.example.domain.model.AudioOutputDeviceUi
 import com.example.domain.model.DefaultPadColorMode
+import com.example.domain.model.DragDropConflictMode
 import com.example.domain.model.EqPreset
 import com.example.domain.model.FadeCurve
 import com.example.domain.model.FxPreset
@@ -102,7 +103,12 @@ data class BankPageUi(
   val bankKey: Int,
   val title: String,
   val pads: List<SoundPad>,
-  val canRescanSubfolder: Boolean
+  val canRescanSubfolder: Boolean,
+  val slotMap: Map<Int, SoundPad> = emptyMap(),
+  val subPageIndex: Int = 0,
+  val totalSubPages: Int = 1,
+  val slotOffset: Int = 0,
+  val targetPadBankIndex: Int = bankKey
 )
 
 @Immutable
@@ -211,54 +217,16 @@ data class SoundPadUiState(
   val bankPages: List<BankPageUi>
     get() {
       val perBank = settings.gridConfig.padsPerBank.coerceAtLeast(1)
-      val source = filteredPads
       val isFiltered = searchQuery.isNotBlank() || showFavoritesOnly || !selectedCategoryTag.isNullOrBlank()
-      if (!isBankExplicitMode) {
-        if (source.isEmpty()) return emptyList()
-        val chunks = source.chunked(perBank)
-        return chunks.mapIndexed { idx, list ->
-          val title = activeBankNames[idx]?.takeIf { it.isNotBlank() } ?: "B${idx + 1}"
-          BankPageUi(
-            bankKey = idx,
-            title = title,
-            pads = list,
-            canRescanSubfolder = false
-          )
-        }
-      }
-
-      val grouped = source.groupBy { it.bankIndex }
-      val allKeys = buildList {
-        activeBankOrder.forEach { if (it !in this) add(it) }
-        (grouped.keys + activeBankFolderUris.keys + activeBankNames.keys).sorted().forEach {
-          if (it !in this) add(it)
-        }
-      }.filter { key ->
-        if (isFiltered) {
-          grouped[key]?.isNotEmpty() == true
-        } else {
-          grouped[key]?.isNotEmpty() == true || activeBankFolderUris.containsKey(key) || key in activeBankOrder
-        }
-      }
-
-      val pages = mutableListOf<BankPageUi>()
-      allKeys.forEach { key ->
-        val padsInBank = grouped[key].orEmpty()
-        val baseTitle = activeBankNames[key]?.takeIf { it.isNotBlank() }
-          ?: padsInBank.firstOrNull { it.subfolderName.isNotBlank() }?.subfolderName
-          ?: "B${key + 1}"
-        val canRescan = activeBankFolderUris.containsKey(key)
-        if (padsInBank.isEmpty()) {
-          pages.add(BankPageUi(bankKey = key, title = baseTitle, pads = emptyList(), canRescanSubfolder = canRescan))
-        } else {
-          val subChunks = padsInBank.chunked(perBank)
-          subChunks.forEachIndexed { subIdx, subPads ->
-            val pageTitle = if (subChunks.size > 1) "$baseTitle (${subIdx + 1})" else baseTitle
-            pages.add(BankPageUi(bankKey = key, title = pageTitle, pads = subPads, canRescanSubfolder = canRescan))
-          }
-        }
-      }
-      return pages
+      return PadGridSlotManager.buildBankPages(
+        pads = filteredPads,
+        perBank = perBank,
+        activeBankNames = activeBankNames,
+        activeBankOrder = activeBankOrder,
+        activeBankFolderUris = activeBankFolderUris,
+        isBankExplicitMode = isBankExplicitMode,
+        isFiltered = isFiltered
+      )
     }
 
   val banks: List<List<SoundPad>>
@@ -313,6 +281,13 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
   private var didApplyStartupFocus = false
   private val undoStack = ArrayDeque<List<SoundPad>>()
   private val redoStack = ArrayDeque<List<SoundPad>>()
+  private val initialPadSlotsByProfile = mutableMapOf<String, Map<String, Pair<Int, Int>>>()
+
+  private fun ensureInitialSlotsCaptured(profileId: String, pads: List<SoundPad>) {
+    if (pads.isNotEmpty() && !initialPadSlotsByProfile.containsKey(profileId)) {
+      initialPadSlotsByProfile[profileId] = pads.associate { it.id to (it.bankIndex to it.positionIndex) }
+    }
+  }
 
   init {
     AppHolder.application = application
@@ -607,8 +582,12 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
       val existingByUri = existingEntities.groupBy { it.uriString }
       val existingSettings = dao.getPadSettingsForProfileOnce(profileId).associateBy { it.padId }
 
+      val occupiedByBank = existingEntities
+        .groupBy { it.bankIndex }
+        .mapValuesTo(mutableMapOf()) { (_, list) ->
+          list.mapTo(mutableSetOf()) { it.positionIndex.coerceAtLeast(0) }
+        }
       val merged = mutableListOf<SoundPad>()
-      var nextPos = (existingEntities.maxOfOrNull { it.positionIndex } ?: -1) + 1
       for (demo in demoPads) {
         val matches = existingByUri[demo.uriString]
         if (!matches.isNullOrEmpty()) {
@@ -618,6 +597,8 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
                 id = entity.id,
                 displayName = entity.displayName,
                 positionIndex = entity.positionIndex,
+                bankIndex = entity.bankIndex,
+                subfolderName = entity.subfolderName,
                 colorArgb = entity.colorArgb,
                 glowColorArgb = entity.glowColorArgb,
                 glowIntensity = entity.glowIntensity,
@@ -639,9 +620,13 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
             )
           }
         } else {
+          val occupied = occupiedByBank.getOrPut(0) { mutableSetOf() }
+          val freeSlot = PadGridSlotManager.findFirstEmptySlot(occupied, startFrom = 0)
+          occupied.add(freeSlot)
           merged.add(
             demo.copy(
-              positionIndex = nextPos++,
+              positionIndex = freeSlot,
+              bankIndex = 0,
               colorArgb = null,
               glowColorArgb = null,
               glowIntensity = 0f
@@ -655,13 +640,14 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
         merged.add(entityToDomain(entity, existingSettings[entity.id].toDomain()))
       }
 
-      val normalized = merged.sortedBy { it.positionIndex }.mapIndexed { idx, p -> p.copy(positionIndex = idx) }
+      val normalized = PadGridSlotManager.resolveBankSlotCollisions(merged)
       val preloadedIds = if (_uiState.value.settings.preloadShortAudio) {
         ramCache.preloadShortSamples(normalized)
       } else {
         emptySet()
       }
       val ready = normalized.map { it.copy(isPreloadedInRam = it.id in preloadedIds) }
+      ensureInitialSlotsCaptured(profileId, ready)
 
       val now = System.currentTimeMillis()
       val existingProfile = dao.getProfileById(profileId)
@@ -901,18 +887,20 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
   }
 
   fun duplicatePadForDifferentSettings(sourcePadId: String) {
-    duplicatePadToBank(sourcePadId, targetBankIndex = null)
+    duplicatePadToBank(sourcePadId, targetBankIndex = null, targetSlotIndex = null)
   }
 
-  fun duplicatePadToBank(sourcePadId: String, targetBankIndex: Int?) {
+  fun duplicatePadToBank(
+    sourcePadId: String,
+    targetBankIndex: Int?,
+    targetSlotIndex: Int? = null
+  ) {
     if (_uiState.value.settings.isLocked) return
     val state = _uiState.value
     val currentPads = state.pads
-    val sourceIdx = currentPads.indexOfFirst { it.id == sourcePadId }
-    if (sourceIdx < 0) return
+    val sourcePad = currentPads.firstOrNull { it.id == sourcePadId } ?: return
     recordEditSnapshot(currentPads, "Duplikat pad dibuat")
 
-    val sourcePad = currentPads[sourceIdx]
     val profileId = state.settings.activeProfileId
     val perBank = state.settings.gridConfig.padsPerBank.coerceAtLeast(1)
 
@@ -926,37 +914,57 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
     }
 
     val newPadId = "pad_clone_${UUID.randomUUID()}"
-
-    // If duplicating into a specific bank (or new bank sentinel = -1), ensure explicit bank assignment cleanly
     val createNewBank = targetBankIndex == -1
     if (targetBankIndex == null) {
-      // Duplicate right next to source in the same bank
-      val clonedPad = sourcePad.copy(
+      // Same-bank duplication: place in nearest empty slot or user-selected slot
+      val srcBank = sourcePad.bankIndex
+      val sameBankPads = currentPads.filter { it.bankIndex == srcBank }
+      val initialFreeSlot = PadGridSlotManager.findNearestEmptySlot(sameBankPads, sourcePad.positionIndex)
+      val baseClone = sourcePad.copy(
         id = newPadId,
         displayName = cloneLabel,
+        bankIndex = srcBank,
+        positionIndex = initialFreeSlot,
         isClone = true,
         midiNote = null
       )
-      val mutableList = currentPads.toMutableList()
-      mutableList.add(sourceIdx + 1, clonedPad)
-      val reindexed = mutableList.mapIndexed { idx, pad -> pad.copy(positionIndex = idx) }
-      val savedClone = reindexed[sourceIdx + 1]
+      val updatedList = if (targetSlotIndex != null && targetSlotIndex >= 0 && targetSlotIndex != initialFreeSlot) {
+        val occupant = sameBankPads.firstOrNull { it.positionIndex == targetSlotIndex }
+        if (occupant == null) {
+          currentPads + baseClone.copy(positionIndex = targetSlotIndex)
+        } else {
+          PadGridSlotManager.movePadToSlot(
+            pads = currentPads + baseClone,
+            padId = newPadId,
+            targetBankIndex = srcBank,
+            targetSlotIndex = targetSlotIndex,
+            targetSubfolderName = sourcePad.subfolderName,
+            conflictMode = DragDropConflictMode.SHIFT
+          )
+        }
+      } else {
+        currentPads + baseClone
+      }
 
-      audioEngine.updatePlaylist(reindexed)
+      val savedClone = updatedList.first { it.id == newPadId }
+      val changedPads = updatedList.filter { updated ->
+        updated.id == newPadId || currentPads.firstOrNull { it.id == updated.id }?.let {
+          it.positionIndex != updated.positionIndex || it.bankIndex != updated.bankIndex
+        } == true
+      }
+
+      audioEngine.updatePlaylist(updatedList)
       _uiState.update {
         it.copy(
-          pads = reindexed,
+          pads = updatedList,
           editingPadId = if (it.editingPadId != null) savedClone.id else null,
-          statusMessage = "Duplikat \"${sourcePad.displayName}\" → \"$cloneLabel\""
+          statusMessage = "Duplikat \"${sourcePad.displayName}\" → \"$cloneLabel\" (Slot ${savedClone.positionIndex + 1})"
         )
       }
 
       viewModelScope.launch {
-        dao.insertClonedPadAndReindex(
-          newPad = savedClone.toPadEntity(profileId),
-          newSetting = savedClone.settings.toEntity(savedClone.id),
-          reindexedPositions = reindexed.map { it.id to it.positionIndex }
-        )
+        dao.upsertPads(changedPads.map { it.toPadEntity(profileId) })
+        dao.upsertPadSetting(savedClone.settings.toEntity(savedClone.id))
         persistentConfigManager.notifyConfigDirty("duplicate_pad")
       }
       return
@@ -965,7 +973,7 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
     // Cross-bank duplication
     val wasExplicit = state.isBankExplicitMode
     val promotedPads = if (!wasExplicit) {
-      currentPads.mapIndexed { idx, p -> p.copy(bankIndex = idx / perBank) }
+      PadGridSlotManager.promoteImplicitBanks(currentPads, perBank)
     } else {
       currentPads
     }
@@ -979,36 +987,66 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
       ?: promotedPads.firstOrNull { it.bankIndex == resolvedTargetBank }?.subfolderName
       ?: "Bank ${resolvedTargetBank + 1}"
 
-    val clonedPad = sourcePad.copy(
+    val targetBankPads = promotedPads.filter { it.bankIndex == resolvedTargetBank }
+    val initialFreeSlot = PadGridSlotManager.findFirstEmptySlot(targetBankPads, startFrom = 0)
+    val baseClone = sourcePad.copy(
       id = newPadId,
       displayName = cloneLabel,
       bankIndex = resolvedTargetBank,
+      positionIndex = initialFreeSlot,
       subfolderName = targetSubName,
       isClone = true,
       midiNote = null
     )
-    val reindexed = (promotedPads + clonedPad).mapIndexed { idx, p -> p.copy(positionIndex = idx) }
-    val savedClone = reindexed.last()
+    val updatedList = if (targetSlotIndex != null && targetSlotIndex >= 0 && targetSlotIndex != initialFreeSlot) {
+      val occupant = targetBankPads.firstOrNull { it.positionIndex == targetSlotIndex }
+      if (occupant == null) {
+        promotedPads + baseClone.copy(positionIndex = targetSlotIndex)
+      } else {
+        PadGridSlotManager.movePadToSlot(
+          pads = promotedPads + baseClone,
+          padId = newPadId,
+          targetBankIndex = resolvedTargetBank,
+          targetSlotIndex = targetSlotIndex,
+          targetSubfolderName = targetSubName,
+          conflictMode = DragDropConflictMode.SHIFT
+        )
+      }
+    } else {
+      promotedPads + baseClone
+    }
 
-    audioEngine.updatePlaylist(reindexed)
+    val savedClone = updatedList.first { it.id == newPadId }
+    val padsToPersist = if (!wasExplicit) {
+      updatedList
+    } else {
+      updatedList.filter { updated ->
+        updated.id == newPadId || promotedPads.firstOrNull { it.id == updated.id }?.let {
+          it.positionIndex != updated.positionIndex || it.bankIndex != updated.bankIndex
+        } == true
+      }
+    }
+
+    audioEngine.updatePlaylist(updatedList)
     _uiState.update {
       it.copy(
-        pads = reindexed,
+        pads = updatedList,
         editingPadId = if (it.editingPadId != null) savedClone.id else null,
-        statusMessage = "Duplikat \"${sourcePad.displayName}\" → \"$targetSubName\""
+        statusMessage = "Duplikat \"${sourcePad.displayName}\" → \"$targetSubName\" (Slot ${savedClone.positionIndex + 1})"
       )
     }
 
     viewModelScope.launch {
-      if (!wasExplicit) {
-        promotedPads.forEach { p ->
-          dao.updatePadBankIndex(p.id, p.bankIndex, p.subfolderName)
-        }
+      if (!wasExplicit || createNewBank) {
         val existingProfile = dao.getProfileById(profileId)
         val existingOrder = ProfileJsonSerializer.decodeBankOrderString(existingProfile?.bankOrderJson)
-        val newOrder = (existingOrder + (0..resolvedTargetBank)).distinct()
+        val newOrder = if (!wasExplicit) {
+          (existingOrder + (0..resolvedTargetBank)).distinct()
+        } else {
+          (existingOrder + resolvedTargetBank).distinct()
+        }
         val namesMap = ProfileJsonSerializer.decodeBankNamesString(existingProfile?.bankNamesJson).toMutableMap()
-        if (!namesMap.containsKey(resolvedTargetBank)) {
+        if (!namesMap.containsKey(resolvedTargetBank) || createNewBank) {
           namesMap[resolvedTargetBank] = targetSubName
         }
         dao.updateProfileBankConfig(
@@ -1017,24 +1055,9 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
           bankOrderJson = ProfileJsonSerializer.encodeBankOrderString(newOrder),
           bankFolderUrisJson = existingProfile?.bankFolderUrisJson ?: "{}"
         )
-      } else if (createNewBank) {
-        val existingProfile = dao.getProfileById(profileId)
-        val existingOrder = ProfileJsonSerializer.decodeBankOrderString(existingProfile?.bankOrderJson)
-        val newOrder = (existingOrder + resolvedTargetBank).distinct()
-        val namesMap = ProfileJsonSerializer.decodeBankNamesString(existingProfile?.bankNamesJson).toMutableMap()
-        namesMap[resolvedTargetBank] = targetSubName
-        dao.updateProfileBankConfig(
-          profileId = profileId,
-          bankNamesJson = ProfileJsonSerializer.encodeBankNamesString(namesMap),
-          bankOrderJson = ProfileJsonSerializer.encodeBankOrderString(newOrder),
-          bankFolderUrisJson = existingProfile?.bankFolderUrisJson ?: "{}"
-        )
       }
-      dao.insertClonedPadAndReindex(
-        newPad = savedClone.toPadEntity(profileId),
-        newSetting = savedClone.settings.toEntity(savedClone.id),
-        reindexedPositions = reindexed.map { it.id to it.positionIndex }
-      )
+      dao.upsertPads(padsToPersist.map { it.toPadEntity(profileId) })
+      dao.upsertPadSetting(savedClone.settings.toEntity(savedClone.id))
       persistentConfigManager.notifyConfigDirty("duplicate_pad_bank")
     }
   }
@@ -1046,9 +1069,7 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
     if (before.none { it.id == padId }) return
     recordEditSnapshot(before, "Pad \"$deletedName\" dihapus")
     audioEngine.stopPad(padId)
-    val remaining = before
-      .filterNot { it.id == padId }
-      .mapIndexed { idx, pad -> pad.copy(positionIndex = idx) }
+    val remaining = before.filterNot { it.id == padId }
     audioEngine.updatePlaylist(remaining)
     _uiState.update {
       it.copy(
@@ -1059,7 +1080,6 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
     }
     viewModelScope.launch {
       dao.deletePadById(padId)
-      dao.updateAllPadPositions(remaining.map { it.id to it.positionIndex })
       persistentConfigManager.notifyConfigDirty("delete_pad")
     }
   }
@@ -1364,7 +1384,11 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
           extension = "WAV",
           durationMs = durationMs.coerceAtLeast(endMs - startMs),
           sizeBytes = outFile.length(),
-          positionIndex = _uiState.value.pads.size,
+          positionIndex = PadGridSlotManager.findFirstEmptySlot(
+            _uiState.value.pads.filter { it.bankIndex == sourcePad.bankIndex }
+          ),
+          bankIndex = sourcePad.bankIndex,
+          subfolderName = sourcePad.subfolderName,
           colorArgb = sourcePad.colorArgb,
           glowColorArgb = sourcePad.glowColorArgb,
           glowIntensity = sourcePad.glowIntensity,
@@ -1439,6 +1463,7 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
         return@launch
       }
 
+      val activeBankIdx = _uiState.value.bankPages.firstOrNull()?.targetPadBankIndex ?: 0
       val voiceNum = _uiState.value.pads.count { it.displayName.startsWith("Voice ") } + 1
       val newPad = SoundPad(
         id = "pad_voice_${UUID.randomUUID()}",
@@ -1448,7 +1473,10 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
         extension = "WAV",
         durationMs = recorded.durationMs,
         sizeBytes = recorded.file.length(),
-        positionIndex = _uiState.value.pads.size,
+        positionIndex = PadGridSlotManager.findFirstEmptySlot(
+          _uiState.value.pads.filter { it.bankIndex == activeBankIdx }
+        ),
+        bankIndex = activeBankIdx,
         colorArgb = null,
         glowColorArgb = null,
         glowIntensity = 0f,
@@ -1468,7 +1496,9 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
   private suspend fun addCreatedPadToBoard(pad: SoundPad, successNotice: String) {
     val profileId = _uiState.value.settings.activeProfileId
     val existing = _uiState.value.pads
-    val inserted = pad.copy(positionIndex = existing.size)
+    val bankPads = existing.filter { it.bankIndex == pad.bankIndex }
+    val firstFreeSlot = PadGridSlotManager.findFirstEmptySlot(bankPads, startFrom = 0)
+    val inserted = pad.copy(positionIndex = firstFreeSlot)
     val preloaded = if (_uiState.value.settings.preloadShortAudio) {
       ramCache.preloadShortSamples(listOf(inserted))
     } else {
@@ -1514,26 +1544,295 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
   }
 
   fun swapPadPositions(fromPadId: String, toPadId: String) {
-    if (_uiState.value.settings.isLocked || fromPadId == toPadId) return
-    val currentPads = _uiState.value.pads.toMutableList()
-    val fromIdx = currentPads.indexOfFirst { it.id == fromPadId }
-    val toIdx = currentPads.indexOfFirst { it.id == toPadId }
-    if (fromIdx < 0 || toIdx < 0) return
+    val state = _uiState.value
+    if (state.settings.isLocked || fromPadId == toPadId) return
+    val fromPad = state.pads.firstOrNull { it.id == fromPadId } ?: return
+    val toPad = state.pads.firstOrNull { it.id == toPadId } ?: return
 
-    recordEditSnapshot(_uiState.value.pads, "Posisi pad dipindahkan")
-
-    val fromPad = currentPads[fromIdx]
-    val toPad = currentPads[toIdx]
-    currentPads[fromIdx] = toPad.copy(positionIndex = fromIdx)
-    currentPads[toIdx] = fromPad.copy(positionIndex = toIdx)
-
-    val reindexed = currentPads.mapIndexed { idx, pad -> pad.copy(positionIndex = idx) }
-    audioEngine.updatePlaylist(reindexed)
-    _uiState.update { it.copy(pads = reindexed) }
+    recordEditSnapshot(state.pads, "Posisi pad ditukar")
+    val updated = state.pads.map { pad ->
+      when (pad.id) {
+        fromPadId -> pad.copy(
+          bankIndex = toPad.bankIndex,
+          positionIndex = toPad.positionIndex,
+          subfolderName = toPad.subfolderName
+        )
+        toPadId -> pad.copy(
+          bankIndex = fromPad.bankIndex,
+          positionIndex = fromPad.positionIndex,
+          subfolderName = fromPad.subfolderName
+        )
+        else -> pad
+      }
+    }
+    val profileId = state.settings.activeProfileId
+    val changed = updated.filter { it.id == fromPadId || it.id == toPadId }
+    audioEngine.updatePlaylist(updated)
+    _uiState.update { it.copy(pads = updated) }
 
     viewModelScope.launch {
-      dao.updateAllPadPositions(reindexed.map { it.id to it.positionIndex })
+      dao.upsertPads(changed.map { it.toPadEntity(profileId) })
       persistentConfigManager.notifyConfigDirty("swap_pad_positions")
+    }
+  }
+
+  fun setDragDropConflictMode(mode: DragDropConflictMode) {
+    viewModelScope.launch {
+      settingsRepo.setDragDropConflictMode(mode)
+    }
+  }
+
+  fun movePadToSlot(
+    padId: String,
+    targetBankIndex: Int,
+    targetSlotIndex: Int,
+    conflictMode: DragDropConflictMode = _uiState.value.settings.dragDropConflictMode
+  ) {
+    val state = _uiState.value
+    if (state.settings.isLocked) return
+    val before = state.pads
+    val movingPad = before.firstOrNull { it.id == padId } ?: return
+    val perBank = state.settings.gridConfig.padsPerBank.coerceAtLeast(1)
+    val createNewBank = targetBankIndex == -1
+    val wasExplicit = state.isBankExplicitMode
+    val needsPromote = !wasExplicit && (createNewBank || targetBankIndex > 0)
+    val workingPads = if (needsPromote) {
+      PadGridSlotManager.promoteImplicitBanks(before, perBank)
+    } else {
+      before
+    }
+
+    val resolvedTargetBank = if (createNewBank) {
+      ((workingPads.maxOfOrNull { it.bankIndex } ?: 0) + 1)
+    } else {
+      targetBankIndex.coerceAtLeast(0)
+    }
+    val safeTargetSlot = targetSlotIndex.coerceAtLeast(0)
+    val currentMoving = workingPads.firstOrNull { it.id == padId } ?: movingPad
+    if (currentMoving.bankIndex == resolvedTargetBank && currentMoving.positionIndex == safeTargetSlot) {
+      return
+    }
+
+    val targetSubName = state.activeBankNames[resolvedTargetBank]
+      ?: workingPads.firstOrNull { it.bankIndex == resolvedTargetBank }?.subfolderName
+      ?: if (wasExplicit || needsPromote) "Bank ${resolvedTargetBank + 1}" else movingPad.subfolderName
+
+    recordEditSnapshot(before, "Posisi \"${movingPad.displayName}\" → Slot ${safeTargetSlot + 1}")
+    val updatedPads = PadGridSlotManager.movePadToSlot(
+      pads = workingPads,
+      padId = padId,
+      targetBankIndex = resolvedTargetBank,
+      targetSlotIndex = safeTargetSlot,
+      targetSubfolderName = targetSubName,
+      conflictMode = conflictMode
+    )
+
+    val beforeById = before.associateBy { it.id }
+    val changed = updatedPads.filter { pad ->
+      val prev = beforeById[pad.id]
+      prev == null ||
+        prev.positionIndex != pad.positionIndex ||
+        prev.bankIndex != pad.bankIndex ||
+        prev.subfolderName != pad.subfolderName
+    }
+    if (changed.isEmpty()) return
+
+    val profileId = state.settings.activeProfileId
+    audioEngine.updatePlaylist(updatedPads)
+    _uiState.update {
+      it.copy(
+        pads = updatedPads,
+        statusMessage = "\"${movingPad.displayName}\" → Slot ${safeTargetSlot + 1}"
+      )
+    }
+    viewModelScope.launch {
+      if (needsPromote || createNewBank) {
+        val existingProfile = dao.getProfileById(profileId)
+        val existingOrder = ProfileJsonSerializer.decodeBankOrderString(existingProfile?.bankOrderJson)
+        val newOrder = if (needsPromote) {
+          (existingOrder + (0..resolvedTargetBank)).distinct()
+        } else {
+          (existingOrder + resolvedTargetBank).distinct()
+        }
+        val namesMap = ProfileJsonSerializer.decodeBankNamesString(existingProfile?.bankNamesJson).toMutableMap()
+        if (!namesMap.containsKey(resolvedTargetBank) || createNewBank) {
+          namesMap[resolvedTargetBank] = targetSubName
+        }
+        dao.updateProfileBankConfig(
+          profileId = profileId,
+          bankNamesJson = ProfileJsonSerializer.encodeBankNamesString(namesMap),
+          bankOrderJson = ProfileJsonSerializer.encodeBankOrderString(newOrder),
+          bankFolderUrisJson = existingProfile?.bankFolderUrisJson ?: "{}"
+        )
+      }
+      dao.upsertPads(changed.map { it.toPadEntity(profileId) })
+      persistentConfigManager.notifyConfigDirty("move_pad_slot")
+    }
+  }
+
+  fun bulkMoveSelectedPadsToSlot(targetBankIndex: Int, baseTargetSlotIndex: Int) {
+    val state = _uiState.value
+    if (state.settings.isLocked || state.selectedPadIds.isEmpty()) return
+    val selectedIds = state.selectedPadIds
+    val before = state.pads
+    val selectedCount = before.count { it.id in selectedIds }
+    if (selectedCount == 0) return
+
+    val perBank = state.settings.gridConfig.padsPerBank.coerceAtLeast(1)
+    val createNewBank = targetBankIndex == -1
+    val wasExplicit = state.isBankExplicitMode
+    val needsPromote = !wasExplicit && (createNewBank || targetBankIndex > 0)
+    val workingPads = if (needsPromote) {
+      PadGridSlotManager.promoteImplicitBanks(before, perBank)
+    } else {
+      before
+    }
+
+    val resolvedTargetBank = if (createNewBank) {
+      ((workingPads.maxOfOrNull { it.bankIndex } ?: 0) + 1)
+    } else {
+      targetBankIndex.coerceAtLeast(0)
+    }
+    val targetSubName = state.activeBankNames[resolvedTargetBank]
+      ?: workingPads.firstOrNull { it.bankIndex == resolvedTargetBank }?.subfolderName
+      ?: if (wasExplicit || needsPromote) "Bank ${resolvedTargetBank + 1}" else null
+
+    val safeBaseSlot = baseTargetSlotIndex.coerceAtLeast(0)
+    recordEditSnapshot(before, "$selectedCount pad dipindah mulai Slot ${safeBaseSlot + 1}")
+    val updatedPads = PadGridSlotManager.bulkMovePadsToSlot(
+      pads = workingPads,
+      selectedIds = selectedIds,
+      targetBankIndex = resolvedTargetBank,
+      baseTargetSlotIndex = safeBaseSlot,
+      targetSubfolderName = targetSubName,
+      conflictMode = state.settings.dragDropConflictMode
+    )
+
+    val beforeById = before.associateBy { it.id }
+    val changed = updatedPads.filter { pad ->
+      val prev = beforeById[pad.id]
+      prev == null ||
+        prev.positionIndex != pad.positionIndex ||
+        prev.bankIndex != pad.bankIndex ||
+        prev.subfolderName != pad.subfolderName
+    }
+
+    val profileId = state.settings.activeProfileId
+    audioEngine.updatePlaylist(updatedPads)
+    _uiState.update {
+      it.copy(
+        pads = updatedPads,
+        selectedPadIds = emptySet(),
+        isMultiSelectMode = false,
+        statusMessage = "$selectedCount pad dipindah mulai Slot ${safeBaseSlot + 1}"
+      )
+    }
+    viewModelScope.launch {
+      if (needsPromote || createNewBank) {
+        val existingProfile = dao.getProfileById(profileId)
+        val existingOrder = ProfileJsonSerializer.decodeBankOrderString(existingProfile?.bankOrderJson)
+        val newOrder = if (needsPromote) {
+          (existingOrder + (0..resolvedTargetBank)).distinct()
+        } else {
+          (existingOrder + resolvedTargetBank).distinct()
+        }
+        val namesMap = ProfileJsonSerializer.decodeBankNamesString(existingProfile?.bankNamesJson).toMutableMap()
+        if (targetSubName != null && (!namesMap.containsKey(resolvedTargetBank) || createNewBank)) {
+          namesMap[resolvedTargetBank] = targetSubName
+        }
+        dao.updateProfileBankConfig(
+          profileId = profileId,
+          bankNamesJson = ProfileJsonSerializer.encodeBankNamesString(namesMap),
+          bankOrderJson = ProfileJsonSerializer.encodeBankOrderString(newOrder),
+          bankFolderUrisJson = existingProfile?.bankFolderUrisJson ?: "{}"
+        )
+      }
+      if (changed.isNotEmpty()) {
+        dao.upsertPads(changed.map { it.toPadEntity(profileId) })
+      }
+      persistentConfigManager.notifyConfigDirty("bulk_move_slots")
+    }
+  }
+
+  fun compactBankSlots(pageBankKey: Int?) {
+    val state = _uiState.value
+    if (state.settings.isLocked || state.pads.isEmpty()) return
+    val scopeBank = if (state.isBankExplicitMode) pageBankKey else null
+    val before = state.pads
+    val updated = PadGridSlotManager.compactBankSlots(before, scopeBank)
+    val beforeById = before.associateBy { it.id }
+    val changed = updated.filter { beforeById[it.id]?.positionIndex != it.positionIndex }
+    if (changed.isEmpty()) {
+      _uiState.update { it.copy(statusMessage = "Tidak ada slot kosong di antara pad") }
+      return
+    }
+    recordEditSnapshot(before, "Slot pad dirapikan")
+    val profileId = state.settings.activeProfileId
+    audioEngine.updatePlaylist(updated)
+    _uiState.update { it.copy(pads = updated, statusMessage = "Slot pad dirapikan (${changed.size} dipindah)") }
+    viewModelScope.launch {
+      dao.upsertPads(changed.map { it.toPadEntity(profileId) })
+      persistentConfigManager.notifyConfigDirty("compact_bank_slots")
+    }
+  }
+
+  fun sortBankAlphabetically(pageBankKey: Int?) {
+    val state = _uiState.value
+    if (state.settings.isLocked || state.pads.isEmpty()) return
+    val scopeBank = if (state.isBankExplicitMode) pageBankKey else null
+    val before = state.pads
+    val updated = PadGridSlotManager.sortBankAlphabetically(before, scopeBank)
+    val beforeById = before.associateBy { it.id }
+    val changed = updated.filter { beforeById[it.id]?.positionIndex != it.positionIndex }
+    if (changed.isEmpty()) {
+      _uiState.update { it.copy(statusMessage = "Urutan pad sudah A–Z") }
+      return
+    }
+    recordEditSnapshot(before, "Pad diurutkan A–Z")
+    val profileId = state.settings.activeProfileId
+    audioEngine.updatePlaylist(updated)
+    _uiState.update { it.copy(pads = updated, statusMessage = "Pad diurutkan A–Z") }
+    viewModelScope.launch {
+      dao.upsertPads(changed.map { it.toPadEntity(profileId) })
+      persistentConfigManager.notifyConfigDirty("sort_bank_az")
+    }
+  }
+
+  fun restoreInitialPositions(pageBankKey: Int?) {
+    val state = _uiState.value
+    if (state.settings.isLocked || state.pads.isEmpty()) return
+    val profileId = state.settings.activeProfileId
+    val initialMap = initialPadSlotsByProfile[profileId]
+    if (initialMap.isNullOrEmpty()) {
+      _uiState.update { it.copy(statusMessage = "Posisi awal belum tersedia untuk sesi ini") }
+      return
+    }
+    val scopeBank = if (state.isBankExplicitMode) pageBankKey else null
+    val before = state.pads
+    val updated = PadGridSlotManager.restoreInitialBankPositions(
+      pads = before,
+      initialSlotsByPadId = initialMap,
+      targetBankIndex = scopeBank,
+      bankNames = state.activeBankNames
+    )
+    val beforeById = before.associateBy { it.id }
+    val changed = updated.filter { pad ->
+      val prev = beforeById[pad.id]
+      prev == null ||
+        prev.positionIndex != pad.positionIndex ||
+        prev.bankIndex != pad.bankIndex ||
+        prev.subfolderName != pad.subfolderName
+    }
+    if (changed.isEmpty()) {
+      _uiState.update { it.copy(statusMessage = "Semua pad sudah di posisi awal") }
+      return
+    }
+    recordEditSnapshot(before, "Posisi awal dikembalikan")
+    audioEngine.updatePlaylist(updated)
+    _uiState.update { it.copy(pads = updated, statusMessage = "Posisi awal dikembalikan") }
+    viewModelScope.launch {
+      dao.upsertPads(changed.map { it.toPadEntity(profileId) })
+      persistentConfigManager.notifyConfigDirty("restore_initial_slots")
     }
   }
 
@@ -1620,6 +1919,7 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
       }
 
       lastLoadedProfileId = profileId
+      initialPadSlotsByProfile.remove(profileId)
       settingsRepo.setActiveProfileId(profileId)
       loadProfilePads(profileId, _uiState.value.settings.preloadShortAudio)
       _uiState.update { it.copy(statusMessage = "Loaded profile \"${profile.name}\"") }
@@ -2365,7 +2665,7 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
       }
       if (recState.autoAddAsPad) {
         val currentPads = _uiState.value.pads
-        val activeBankKey = _uiState.value.bankPages.firstOrNull()?.bankKey ?: 0
+        val activeBankKey = _uiState.value.bankPages.firstOrNull()?.targetPadBankIndex ?: 0
         val newPad = SoundPad(
           id = "masterrec_${UUID.randomUUID()}",
           uriString = saved.uriString,
@@ -2374,7 +2674,9 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
           extension = "wav",
           durationMs = saved.durationMs,
           sizeBytes = saved.sizeBytes,
-          positionIndex = currentPads.size,
+          positionIndex = PadGridSlotManager.findFirstEmptySlot(
+            currentPads.filter { it.bankIndex == activeBankKey }
+          ),
           bankIndex = activeBankKey
         )
         addCreatedPadToBoard(newPad, "Rekaman Master \"${saved.displayName}\" tersimpan & ditambahkan sebagai Pad")
@@ -2584,9 +2886,7 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
 
     recordEditSnapshot(state.pads, "$count pad dihapus")
     selectedIds.forEach { audioEngine.stopPad(it) }
-    val remaining = state.pads
-      .filterNot { it.id in selectedIds }
-      .mapIndexed { idx, p -> p.copy(positionIndex = idx) }
+    val remaining = state.pads.filterNot { it.id in selectedIds }
     audioEngine.updatePlaylist(remaining)
     _uiState.update {
       it.copy(
@@ -2598,7 +2898,6 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
     }
     viewModelScope.launch {
       selectedIds.forEach { dao.deletePadById(it) }
-      dao.updateAllPadPositions(remaining.map { it.id to it.positionIndex })
       persistentConfigManager.notifyConfigDirty("bulk_delete_pads")
     }
   }
@@ -2640,7 +2939,7 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
     val before = state.pads
     val perBank = state.settings.gridConfig.padsPerBank.coerceAtLeast(1)
     val promoted = if (!state.isBankExplicitMode) {
-      before.mapIndexed { idx, p -> p.copy(bankIndex = idx / perBank) }
+      PadGridSlotManager.promoteImplicitBanks(before, perBank)
     } else {
       before
     }
@@ -2658,12 +2957,25 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
     if (count == 0) return
     recordEditSnapshot(before, "$count pad dipindah ke $targetSubName")
 
+    val occupiedTarget = promoted
+      .filter { it.id !in selectedIds && it.bankIndex == resolvedTargetBank }
+      .mapTo(mutableSetOf()) { it.positionIndex.coerceAtLeast(0) }
     val updatedPads = promoted.map { p ->
       if (p.id in selectedIds) {
-        p.copy(bankIndex = resolvedTargetBank, subfolderName = targetSubName)
+        val nextSlot = PadGridSlotManager.findFirstEmptySlot(occupiedTarget, startFrom = 0)
+        occupiedTarget.add(nextSlot)
+        p.copy(bankIndex = resolvedTargetBank, positionIndex = nextSlot, subfolderName = targetSubName)
       } else {
         p
       }
+    }
+    val beforeById = before.associateBy { it.id }
+    val changedPads = updatedPads.filter { p ->
+      val prev = beforeById[p.id]
+      prev == null ||
+        prev.bankIndex != p.bankIndex ||
+        prev.positionIndex != p.positionIndex ||
+        prev.subfolderName != p.subfolderName
     }
     audioEngine.updatePlaylist(updatedPads)
     _uiState.update {
@@ -2690,7 +3002,9 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
           bankFolderUrisJson = existingProfile.bankFolderUrisJson
         )
       }
-      dao.upsertPads(updatedPads.map { it.toPadEntity(profileId) })
+      if (changedPads.isNotEmpty()) {
+        dao.upsertPads(changedPads.map { it.toPadEntity(profileId) })
+      }
       persistentConfigManager.notifyConfigDirty("bulk_move_pads")
     }
   }
@@ -2704,6 +3018,11 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
 
     recordEditSnapshot(state.pads, "${selectedPads.size} pad diduplikat")
     val existingNames = state.pads.map { it.displayName }.toMutableSet()
+    val occupiedByBank = state.pads
+      .groupBy { it.bankIndex }
+      .mapValuesTo(mutableMapOf()) { (_, list) ->
+        list.mapTo(mutableSetOf()) { it.positionIndex.coerceAtLeast(0) }
+      }
     val clonedPairs = selectedPads.map { src ->
       val base = src.displayName.removeSuffix(" (Clone)").trim().ifEmpty { src.displayName }
       var candidate = "$base (Clone)"
@@ -2713,14 +3032,18 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
         counter++
       }
       existingNames.add(candidate)
+      val occupiedInBank = occupiedByBank.getOrPut(src.bankIndex) { mutableSetOf() }
+      val freeSlot = PadGridSlotManager.findNearestEmptySlot(occupiedInBank, src.positionIndex)
+      occupiedInBank.add(freeSlot)
       src.copy(
         id = "pad_clone_${UUID.randomUUID()}",
         displayName = candidate,
+        positionIndex = freeSlot,
         isClone = true,
         midiNote = null
       )
     }
-    val combined = (state.pads + clonedPairs).mapIndexed { idx, p -> p.copy(positionIndex = idx) }
+    val combined = state.pads + clonedPairs
     audioEngine.updatePlaylist(combined)
     _uiState.update {
       it.copy(
@@ -2730,10 +3053,9 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
       )
     }
     val profileId = state.settings.activeProfileId
-    val insertedClones = combined.takeLast(clonedPairs.size)
     viewModelScope.launch {
-      dao.upsertPads(combined.map { it.toPadEntity(profileId) })
-      dao.upsertPadSettings(insertedClones.map { it.settings.toEntity(it.id) })
+      dao.upsertPads(clonedPairs.map { it.toPadEntity(profileId) })
+      dao.upsertPadSettings(clonedPairs.map { it.settings.toEntity(it.id) })
       persistentConfigManager.notifyConfigDirty("bulk_duplicate_pads")
     }
   }
@@ -2789,7 +3111,7 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
   }
 
   private fun applyPadSnapshot(snapshotPads: List<SoundPad>, notice: String) {
-    val normalized = snapshotPads.sortedBy { it.positionIndex }.mapIndexed { idx, p -> p.copy(positionIndex = idx) }
+    val normalized = PadGridSlotManager.resolveBankSlotCollisions(snapshotPads)
     val profileId = _uiState.value.settings.activeProfileId
     audioEngine.updatePlaylist(normalized)
     _uiState.update { state ->
@@ -2879,8 +3201,8 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
 
       if (!state.isBankExplicitMode && state.pads.isNotEmpty()) {
         val perBank = state.settings.gridConfig.padsPerBank.coerceAtLeast(1)
-        val promoted = state.pads.mapIndexed { idx, p -> p.copy(bankIndex = idx / perBank) }
-        promoted.forEach { dao.updatePadBankIndex(it.id, it.bankIndex, it.subfolderName) }
+        val promoted = PadGridSlotManager.promoteImplicitBanks(state.pads, perBank)
+        dao.upsertPads(promoted.map { it.toPadEntity(profileId) })
         val promotedKeys = promoted.map { it.bankIndex }.distinct().sorted().ifEmpty { listOf(0) }
         val updatedOrder = (promotedKeys + newBankKey).distinct()
         dao.updateProfileBankConfig(
@@ -2941,7 +3263,7 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
       if (!state.isBankExplicitMode) {
         // Materialize chunked banks into explicit bankIndices before reordering
         val perBank = state.settings.gridConfig.padsPerBank.coerceAtLeast(1)
-        val promoted = state.pads.mapIndexed { idx, p -> p.copy(bankIndex = idx / perBank) }
+        val promoted = PadGridSlotManager.promoteImplicitBanks(state.pads, perBank)
         val idx = currentKeys.indexOf(bankKey)
         val targetIdx = (idx + delta).coerceIn(0, currentKeys.lastIndex)
         if (idx < 0 || idx == targetIdx) return@launch
@@ -2949,7 +3271,7 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
           val removed = removeAt(idx)
           add(targetIdx, removed)
         }
-        promoted.forEach { dao.updatePadBankIndex(it.id, it.bankIndex, it.subfolderName) }
+        dao.upsertPads(promoted.map { it.toPadEntity(profileId) })
         dao.updateProfileBankConfig(
           profileId = profileId,
           bankNamesJson = existing.bankNamesJson,
@@ -3027,7 +3349,9 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
         entityToDomain(entity, existingSettings[entity.id].toDomain())
       }
 
-      var nextPos = (existingEntities.maxOfOrNull { it.positionIndex } ?: -1) + 1
+      val occupiedInBank = existingEntities
+        .filter { it.bankIndex == bankKey }
+        .mapTo(mutableSetOf()) { it.positionIndex.coerceAtLeast(0) }
       val mergedBankPads = mutableListOf<SoundPad>()
       for (scanned in scannedPads) {
         val matches = existingBankByUri[scanned.uriString]
@@ -3038,13 +3362,13 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
             )
           }
         } else {
-          mergedBankPads.add(scanned.copy(positionIndex = nextPos++))
+          val freeSlot = PadGridSlotManager.findFirstEmptySlot(occupiedInBank, startFrom = 0)
+          occupiedInBank.add(freeSlot)
+          mergedBankPads.add(scanned.copy(positionIndex = freeSlot))
         }
       }
 
-      val combined = (otherBankPads + mergedBankPads)
-        .sortedBy { it.positionIndex }
-        .mapIndexed { idx, pad -> pad.copy(positionIndex = idx) }
+      val combined = PadGridSlotManager.resolveBankSlotCollisions(otherBankPads + mergedBankPads)
       val preloadedIds = if (state.settings.preloadShortAudio) {
         ramCache.preloadShortSamples(combined)
       } else {
@@ -3997,6 +4321,7 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
       runCatching { PadSchedulerManager.rescheduleAllActive(app) }
       undoStack.clear()
       redoStack.clear()
+      initialPadSlotsByProfile.clear()
       lastObservedFolderUri = null
       lastLoadedProfileId = DEFAULT_PROFILE_ID
       audioEngine.updatePlaylist(emptyList())
@@ -4021,10 +4346,18 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
     val cachedEntities = dao.getPadsForProfileOnce(profileId)
     val cachedSettings = dao.getPadSettingsForProfileOnce(profileId).associateBy { it.padId }
 
-    val domainPads = cachedEntities.map { entity ->
+    val rawDomainPads = cachedEntities.map { entity ->
       entityToDomain(entity, cachedSettings[entity.id].toDomain()).copy(
         isPreloadedInRam = ramCache.isCached(entity.uriString)
       )
+    }
+    val domainPads = PadGridSlotManager.migrateLegacyGlobalPositionsIfNeeded(rawDomainPads)
+    val migratedEntities = domainPads.filterIndexed { idx, pad ->
+      val prev = rawDomainPads[idx]
+      prev.positionIndex != pad.positionIndex || prev.bankIndex != pad.bankIndex
+    }
+    if (migratedEntities.isNotEmpty()) {
+      dao.upsertPads(migratedEntities.map { it.toPadEntity(profileId) })
     }
 
     val preloadedIds = if (preloadRam && domainPads.isNotEmpty()) {
@@ -4033,6 +4366,7 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
       emptySet()
     }
     val readyPads = domainPads.map { it.copy(isPreloadedInRam = it.id in preloadedIds) }
+    ensureInitialSlotsCaptured(profileId, readyPads)
     val ccMappings = dao.getMidiCcMappingsOnce(profileId).toDomainMappings()
     val pcMappings = dao.getMidiPcMappingsOnce(profileId).map { entity ->
       MidiProgramBankMapping(
@@ -4162,7 +4496,11 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
       emptySet()
     }
 
-    var nextPos = (existingEntities.maxOfOrNull { it.positionIndex } ?: -1) + 1
+    val occupiedByBank = existingEntities
+      .groupBy { it.bankIndex }
+      .mapValuesTo(mutableMapOf()) { (_, list) ->
+        list.mapTo(mutableSetOf()) { it.positionIndex.coerceAtLeast(0) }
+      }
     var newFilesCount = 0
     val mergedPads = mutableListOf<SoundPad>()
     val relinkedScannedUris = mutableSetOf<String>()
@@ -4214,9 +4552,12 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
         }
       } else if (scanned.uriString !in relinkedScannedUris) {
         newFilesCount++
+        val occupied = occupiedByBank.getOrPut(scanned.bankIndex) { mutableSetOf() }
+        val freeSlot = PadGridSlotManager.findFirstEmptySlot(occupied, startFrom = 0)
+        occupied.add(freeSlot)
         mergedPads.add(
           scanned.copy(
-            positionIndex = nextPos++,
+            positionIndex = freeSlot,
             isPreloadedInRam = scanned.id in preloadedIds
           )
         )
@@ -4235,9 +4576,8 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
       )
     }
 
-    val normalized = mergedPads.sortedBy { it.positionIndex }.mapIndexed { idx, pad ->
-      pad.copy(positionIndex = idx)
-    }
+    val normalized = PadGridSlotManager.migrateLegacyGlobalPositionsIfNeeded(mergedPads)
+    ensureInitialSlotsCaptured(profileId, normalized)
 
     val now = System.currentTimeMillis()
     val existingProfile = dao.getProfileById(profileId)

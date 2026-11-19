@@ -127,6 +127,7 @@ fun PadSettingsSheet(
   onOpenAudioEditor: () -> Unit,
   onDuplicatePad: () -> Unit,
   onDuplicateToBank: () -> Unit = {},
+  onMoveToSlot: () -> Unit = {},
   onDeletePad: () -> Unit,
   onDismiss: () -> Unit
 ) {
@@ -1980,6 +1981,36 @@ fun PadSettingsSheet(
               ) {
                 Icon(Icons.Filled.DriveFileMove, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
                 Text("Ke Bank Lain", style = MaterialTheme.typography.labelLarge, maxLines = 1)
+              }
+            }
+          }
+
+          Surface(
+            modifier = Modifier
+              .fillMaxWidth()
+              .clip(RoundedCornerShape(12.dp))
+              .testTag("adv_action_move_slot")
+              .clickable {
+                onSaveAppearance(visualConfig)
+                onMoveToSlot()
+              },
+            shape = RoundedCornerShape(12.dp),
+            color = MaterialTheme.colorScheme.surfaceContainer,
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+          ) {
+            Row(
+              modifier = Modifier.padding(horizontal = 12.dp, vertical = 12.dp),
+              verticalAlignment = Alignment.CenterVertically,
+              horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+              Icon(Icons.Filled.DriveFileMove, contentDescription = null, tint = MaterialTheme.colorScheme.secondary)
+              Column(modifier = Modifier.weight(1f)) {
+                Text(stringResource(R.string.action_move_to_slot), style = MaterialTheme.typography.titleSmall)
+                Text(
+                  text = "Saat ini Slot #${pad.positionIndex + 1} · Pindah ke nomor slot atau bank tertentu",
+                  style = MaterialTheme.typography.bodySmall,
+                  color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
               }
             }
           }

@@ -16,6 +16,7 @@ import com.example.domain.model.PadSurfaceFinish
 import com.example.domain.model.PadTriggerMode
 import com.example.domain.model.SoundPad
 import com.example.domain.model.ThemeMode
+import com.example.ui.PadGridSlotManager
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.UUID
@@ -83,7 +84,7 @@ object ProfileJsonSerializer {
       put("exportedAtMs", System.currentTimeMillis())
 
       val padsArray = JSONArray()
-      pads.sortedBy { it.positionIndex }.forEach { pad ->
+      pads.sortedWith(compareBy<SoundPad> { it.bankIndex }.thenBy { it.positionIndex }).forEach { pad ->
         val settingsObj = JSONObject().apply {
           put("volume", pad.settings.volume.toDouble())
           put("speed", pad.settings.speed.toDouble())
@@ -300,9 +301,7 @@ object ProfileJsonSerializer {
       )
     }
 
-    val sortedPads = pads.sortedBy { it.positionIndex }.mapIndexed { idx, pad ->
-      pad.copy(positionIndex = idx)
-    }
+    val resolvedPads = PadGridSlotManager.resolveBankSlotCollisions(pads)
 
     val ccArray = root.optJSONArray("midiCcMappings") ?: JSONArray()
     val ccMappings = mutableListOf<MidiCcMapping>()
@@ -360,7 +359,7 @@ object ProfileJsonSerializer {
       name = name,
       folderUri = folderUri,
       gridConfig = gridConfig,
-      padCount = sortedPads.size,
+      padCount = resolvedPads.size,
       bankNames = bankNames,
       bankOrder = bankOrder,
       bankFolderUris = bankFolderUris,
@@ -380,7 +379,7 @@ object ProfileJsonSerializer {
       isActive = true
     )
 
-    return ExportedProfileBundle(profile = profile, pads = sortedPads, ccMappings = ccMappings)
+    return ExportedProfileBundle(profile = profile, pads = resolvedPads, ccMappings = ccMappings)
   }
 
   fun encodeBankNamesString(bankNames: Map<Int, String>): String {

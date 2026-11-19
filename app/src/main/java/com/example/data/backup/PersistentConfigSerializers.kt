@@ -6,6 +6,7 @@ import android.provider.DocumentsContract
 import com.example.data.profile.ProfileJsonSerializer
 import com.example.domain.model.AppLanguage
 import com.example.domain.model.DefaultPadColorMode
+import com.example.domain.model.DragDropConflictMode
 import com.example.domain.model.EqPreset
 import com.example.domain.model.FadeCurve
 import com.example.domain.model.FxPreset
@@ -532,6 +533,7 @@ object SettingsBackupSerializer : Backupable<SettingsBackupBundle> {
       put("startInFocusMode", s.startInFocusMode)
       put("focusCornerPanicEnabled", s.focusCornerPanicEnabled)
       put("focusModeMidiNote", s.focusModeMidiNote ?: JSONObject.NULL)
+      put("dragDropConflictMode", s.dragDropConflictMode.name)
     }
 
     val outputObj = JSONObject().apply {
@@ -669,7 +671,10 @@ object SettingsBackupSerializer : Backupable<SettingsBackupBundle> {
       persistentBackupFolderName = backupFolderName,
       persistentAutoSyncEnabled = autoSync,
       persistentLastSyncAtMs = lastSyncAtMs,
-      persistentIncludeWaveforms = includeWaveforms
+      persistentIncludeWaveforms = includeWaveforms,
+      dragDropConflictMode = runCatching {
+        DragDropConflictMode.valueOf(s.optString("dragDropConflictMode", DragDropConflictMode.SWAP.name))
+      }.getOrDefault(DragDropConflictMode.SWAP)
     )
 
     return SettingsBackupBundle(
@@ -1842,8 +1847,8 @@ object PersistentConfigBundleSerializer {
       val legacy = FullBackupSerializer.importBackupJson(jsonString)
       val settingsBundle = SettingsBackupBundle(settings = legacy.globalSettings)
       val profileBundles = legacy.profiles.map { exported ->
-        val entries = exported.pads.mapIndexed { idx, p ->
-          PadBackupEntry(pad = p, slotIndex = p.positionIndex.coerceAtLeast(idx))
+        val entries = exported.pads.map { p ->
+          PadBackupEntry(pad = p, slotIndex = p.positionIndex.coerceAtLeast(0))
         }
         val banks = (exported.profile.bankOrder + exported.profile.bankNames.keys + exported.profile.bankFolderUris.keys)
           .distinct()
