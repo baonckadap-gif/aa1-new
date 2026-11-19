@@ -168,6 +168,8 @@ data class SoundPadExtendedColors(
   val onPlayModeActiveGreen: Color,
   val playheadWhite: Color,
   val padIdleWell: Color,
+  val padDefaultGray: Color,
+  val padDefaultGrayBorder: Color,
   val padEmptyWellContainer: Color,
   val padEmptyWellBorder: Color,
   val padDisabledContainer: Color,
@@ -176,6 +178,8 @@ data class SoundPadExtendedColors(
   val padSheenHighlight: Color,
   val padSheenShadow: Color,
   val padStatusChipBg: Color,
+  val focusOverlayBg: Color,
+  val focusEdgeHintBg: Color,
   val isAmoled: Boolean,
   val isDark: Boolean
 )
@@ -191,6 +195,8 @@ private val DefaultDarkExtendedColors = SoundPadExtendedColors(
   onPlayModeActiveGreen = OnPlayModeActiveGreenDark,
   playheadWhite = PadPlayheadDark,
   padIdleWell = PadWell,
+  padDefaultGray = PadDefaultGrayDark,
+  padDefaultGrayBorder = PadDefaultGrayBorderDark,
   padEmptyWellContainer = PadEmptyWellDark,
   padEmptyWellBorder = HairlineBorder,
   padDisabledContainer = PadDisabledContainerDark,
@@ -199,6 +205,8 @@ private val DefaultDarkExtendedColors = SoundPadExtendedColors(
   padSheenHighlight = PadSheenWhite,
   padSheenShadow = PadSheenBlack,
   padStatusChipBg = PadStatusChipDark,
+  focusOverlayBg = FocusOverlayBgDark,
+  focusEdgeHintBg = FocusEdgeHintBgDark,
   isAmoled = false,
   isDark = true
 )
@@ -222,6 +230,8 @@ private val DefaultLightExtendedColors = SoundPadExtendedColors(
   onPlayModeActiveGreen = OnPlayModeActiveGreenLight,
   playheadWhite = PadPlayheadLight,
   padIdleWell = LightPadWell,
+  padDefaultGray = PadDefaultGrayLight,
+  padDefaultGrayBorder = PadDefaultGrayBorderLight,
   padEmptyWellContainer = PadEmptyWellLight,
   padEmptyWellBorder = LightBorder,
   padDisabledContainer = PadDisabledContainerLight,
@@ -230,6 +240,8 @@ private val DefaultLightExtendedColors = SoundPadExtendedColors(
   padSheenHighlight = PadSheenWhite,
   padSheenShadow = PadSheenBlack,
   padStatusChipBg = PadStatusChipLight,
+  focusOverlayBg = FocusOverlayBgLight,
+  focusEdgeHintBg = FocusEdgeHintBgLight,
   isAmoled = false,
   isDark = false
 )

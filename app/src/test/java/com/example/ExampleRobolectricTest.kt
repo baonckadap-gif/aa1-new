@@ -21,6 +21,7 @@ import com.example.data.local.db.SoundPadEntity
 import com.example.data.profile.ExportedProfileBundle
 import com.example.data.profile.ProfileJsonSerializer
 import com.example.domain.model.AppErrorLog
+import com.example.domain.model.DefaultPadColorMode
 import com.example.domain.model.EqPreset
 import com.example.domain.model.FadeCurve
 import com.example.domain.model.FxPreset
@@ -1195,5 +1196,107 @@ class ExampleRobolectricTest {
     } finally {
       db.close()
     }
+  }
+
+  @Test
+  fun `profile json round trip preserves default pad color settings and defaults missing glowIntensity to zero`() {
+    val profile = PadProfile(
+      id = "p_stage_a",
+      name = "Stage A Profile",
+      folderUri = null,
+      gridConfig = GridConfig(GridPreset.GRID_4X4, 4, 4),
+      padCount = 1,
+      createdAtMs = 1L,
+      updatedAtMs = 1L,
+      isActive = true,
+      defaultPadColorMode = DefaultPadColorMode.CUSTOM,
+      defaultPadColorArgb = 0xFF1E88E5L
+    )
+    val pad = SoundPad(
+      id = "p1",
+      uriString = "content://test/kick.wav",
+      fileName = "kick.wav",
+      displayName = "Kick",
+      extension = "WAV",
+      durationMs = 900L,
+      sizeBytes = 2048L,
+      positionIndex = 0
+    )
+
+    val exportedJson = ProfileJsonSerializer.exportToJson(
+      profile = profile,
+      pads = listOf(pad)
+    )
+    val imported = ProfileJsonSerializer.importFromJson(exportedJson)
+    assertEquals(DefaultPadColorMode.CUSTOM, imported.profile.defaultPadColorMode)
+    assertEquals(0xFF1E88E5L, imported.profile.defaultPadColorArgb)
+    assertEquals(0f, imported.pads.first().glowIntensity, 0.0001f)
+
+    val autoProfile = profile.copy(defaultPadColorMode = DefaultPadColorMode.AUTO)
+    val autoJson = ProfileJsonSerializer.exportToJson(
+      profile = autoProfile,
+      pads = listOf(pad)
+    )
+    val autoImported = ProfileJsonSerializer.importFromJson(autoJson)
+    assertEquals(DefaultPadColorMode.AUTO, autoImported.profile.defaultPadColorMode)
+
+    // Legacy JSON without glowIntensity must default to 0.0f
+    val legacyJson = """
+      {
+        "id": "legacy",
+        "name": "Legacy",
+        "pads": [
+          {
+            "uriString": "content://legacy/snare.wav",
+            "fileName": "snare.wav",
+            "displayName": "Snare",
+            "extension": "WAV"
+          }
+        ]
+      }
+    """.trimIndent()
+    val legacyImported = ProfileJsonSerializer.importFromJson(legacyJson)
+    assertEquals(0f, legacyImported.pads.first().glowIntensity, 0.0001f)
+  }
+
+  @Test
+  fun `full backup json round trip preserves all Stage A focus and default color settings`() {
+    val settings = GlobalSettings(
+      activeProfileId = "p_backup",
+      defaultPadColorMode = DefaultPadColorMode.CUSTOM,
+      defaultPadColorArgb = 0xFF7B1FA2L,
+      isFocusMode = true,
+      startInFocusMode = true,
+      focusCornerPanicEnabled = false,
+      focusModeMidiNote = 64
+    )
+    val profile = PadProfile(
+      id = "p_backup",
+      name = "Backup Profile",
+      folderUri = null,
+      gridConfig = GridConfig(GridPreset.GRID_4X4, 4, 4),
+      padCount = 0,
+      createdAtMs = 10L,
+      updatedAtMs = 10L,
+      isActive = true
+    )
+    val bundle = ExportedProfileBundle(
+      profile = profile,
+      pads = emptyList()
+    )
+
+    val json = FullBackupSerializer.exportBackupJson(
+      settings = settings,
+      profiles = listOf(bundle)
+    )
+    val payload = FullBackupSerializer.importBackupJson(json)
+    val restored = payload.globalSettings
+
+    assertEquals(DefaultPadColorMode.CUSTOM, restored.defaultPadColorMode)
+    assertEquals(0xFF7B1FA2L, restored.defaultPadColorArgb)
+    assertEquals(true, restored.isFocusMode)
+    assertEquals(true, restored.startInFocusMode)
+    assertEquals(false, restored.focusCornerPanicEnabled)
+    assertEquals(64, restored.focusModeMidiNote)
   }
 }

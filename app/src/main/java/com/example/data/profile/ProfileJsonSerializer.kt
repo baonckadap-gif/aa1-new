@@ -1,5 +1,6 @@
 package com.example.data.profile
 
+import com.example.domain.model.DefaultPadColorMode
 import com.example.domain.model.EqPreset
 import com.example.domain.model.FadeCurve
 import com.example.domain.model.FxPreset
@@ -61,7 +62,9 @@ object ProfileJsonSerializer {
         profile.appAccentColorArgb != null ||
         profile.padGridSpacingDp != null ||
         profile.defaultPadShape != null ||
-        profile.defaultCornerGlowArgb != null
+        profile.defaultCornerGlowArgb != null ||
+        profile.defaultPadColorMode != null ||
+        profile.defaultPadColorArgb != null
       ) {
         put(
           "uiAppearance",
@@ -72,6 +75,8 @@ object ProfileJsonSerializer {
             profile.padGridSpacingDp?.let { put("padGridSpacingDp", it) }
             profile.defaultPadShape?.let { put("defaultPadShape", it.name) }
             profile.defaultCornerGlowArgb?.let { put("defaultCornerGlowArgb", it) }
+            profile.defaultPadColorMode?.let { put("defaultPadColorMode", it.name) }
+            profile.defaultPadColorArgb?.let { put("defaultPadColorArgb", it) }
           }
         )
       }
@@ -239,7 +244,7 @@ object ProfileJsonSerializer {
 
       val colorArgb = if (obj.isNull("colorArgb")) null else obj.optLong("colorArgb")
       val glowColorArgb = if (obj.isNull("glowColorArgb")) null else obj.optLong("glowColorArgb")
-      val glowIntensity = obj.optDouble("glowIntensity", 1.0).toFloat().coerceIn(0f, 1.8f)
+      val glowIntensity = obj.optDouble("glowIntensity", 0.0).toFloat().coerceIn(0f, 1.8f)
       val shapeStyle = if (obj.isNull("shapeStyle")) {
         null
       } else {
@@ -343,6 +348,12 @@ object ProfileJsonSerializer {
     val importedGlow = if (uiAppearanceObj != null && uiAppearanceObj.has("defaultCornerGlowArgb")) {
       uiAppearanceObj.optLong("defaultCornerGlowArgb")
     } else null
+    val importedDefaultPadColorMode = uiAppearanceObj?.optString("defaultPadColorMode", "")?.takeIf { it.isNotBlank() }?.let { raw ->
+      runCatching { DefaultPadColorMode.valueOf(raw) }.getOrNull()
+    }
+    val importedDefaultPadColorArgb = if (uiAppearanceObj != null && uiAppearanceObj.has("defaultPadColorArgb")) {
+      uiAppearanceObj.optLong("defaultPadColorArgb")
+    } else null
 
     val profile = PadProfile(
       id = profileId,
@@ -362,6 +373,8 @@ object ProfileJsonSerializer {
       padGridSpacingDp = importedSpacing,
       defaultPadShape = importedShape,
       defaultCornerGlowArgb = importedGlow,
+      defaultPadColorMode = importedDefaultPadColorMode,
+      defaultPadColorArgb = importedDefaultPadColorArgb,
       createdAtMs = now,
       updatedAtMs = now,
       isActive = true

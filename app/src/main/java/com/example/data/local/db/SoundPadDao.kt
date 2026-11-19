@@ -337,4 +337,29 @@ interface SoundPadDao {
 
   @Query("DELETE FROM midi_pc_bank_mappings WHERE profileId = :profileId")
   suspend fun deleteMidiPcMappingsForProfile(profileId: String)
+
+  @Query("DELETE FROM pad_profiles")
+  suspend fun deleteAllProfiles()
+
+  @Query("DELETE FROM scheduled_tasks")
+  suspend fun deleteAllScheduledTasks()
+
+  @Query("DELETE FROM sequencer_playlists")
+  suspend fun deleteAllSequencerPlaylists()
+
+  @Query("DELETE FROM midi_cc_mappings")
+  suspend fun deleteAllMidiCcMappings()
+
+  @Query("DELETE FROM midi_pc_bank_mappings")
+  suspend fun deleteAllMidiPcMappings()
+
+  @Transaction
+  suspend fun clearAllConfigTables() {
+    deleteAllScheduledTasks()
+    deleteAllSequencerPlaylists()
+    deleteAllMidiCcMappings()
+    deleteAllMidiPcMappings()
+    deleteAllProfiles()
+    clearErrorLogs()
+  }
 }

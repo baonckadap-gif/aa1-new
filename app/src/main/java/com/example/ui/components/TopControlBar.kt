@@ -29,6 +29,7 @@ import androidx.compose.material.icons.filled.Alarm
 import androidx.compose.material.icons.filled.BatteryChargingFull
 import androidx.compose.material.icons.filled.Bookmarks
 import androidx.compose.material.icons.filled.BugReport
+import androidx.compose.material.icons.filled.CenterFocusStrong
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DriveFileRenameOutline
 import androidx.compose.material.icons.filled.FolderOpen
@@ -120,6 +121,7 @@ fun TopControlBar(
   activeSchedulesCount: Int = 0,
   canRescanCurrentBank: Boolean = false,
   canReorderBanks: Boolean = false,
+  isFocusMode: Boolean = false,
   onPickFolderClick: () -> Unit,
   onRescanClick: () -> Unit,
   onRescanCurrentBank: () -> Unit = onRescanClick,
@@ -138,6 +140,7 @@ fun TopControlBar(
   onOpenGridSettings: () -> Unit,
   onToggleCrossfade: () -> Unit,
   onToggleFullscreen: () -> Unit,
+  onToggleFocusMode: () -> Unit = {},
   onOpenErrorLogs: () -> Unit = {},
   onOpenMiuiGuide: () -> Unit,
   modifier: Modifier = Modifier
@@ -351,6 +354,19 @@ fun TopControlBar(
                 modifier = Modifier.size(topBarTokens.iconSizeDp)
               )
             }
+          }
+
+          TopBarTooltipIconButton(
+            tooltipText = stringResource(R.string.focus_mode_label),
+            onClick = onToggleFocusMode,
+            modifier = Modifier.testTag("focus_mode_toggle_button")
+          ) {
+            Icon(
+              imageVector = Icons.Filled.CenterFocusStrong,
+              contentDescription = stringResource(R.string.cd_focus_mode_toggle),
+              tint = if (isFocusMode) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+              modifier = Modifier.size(topBarTokens.iconSizeDp)
+            )
           }
 
           Box {
@@ -610,6 +626,22 @@ fun TopControlBar(
                   onToggleFullscreen()
                 },
                 modifier = Modifier.testTag("fullscreen_toggle_button")
+              )
+
+              DropdownMenuItem(
+                text = { Text(stringResource(R.string.menu_focus_mode)) },
+                leadingIcon = {
+                  Icon(
+                    imageVector = Icons.Filled.CenterFocusStrong,
+                    contentDescription = null,
+                    tint = if (isFocusMode) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                  )
+                },
+                onClick = {
+                  isOverflowExpanded = false
+                  onToggleFocusMode()
+                },
+                modifier = Modifier.testTag("menu_focus_mode_item")
               )
 
               DropdownMenuItem(

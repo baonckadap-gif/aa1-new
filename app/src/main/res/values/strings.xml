@@ -197,4 +197,70 @@
     <string name="tooltip_show_play_mode">Tampilkan Mode Play</string>
     <string name="menu_hide_play_mode">Sembunyikan Mode Play</string>
     <string name="menu_show_play_mode">Tampilkan Mode Play</string>
+
+    <!-- Fokus Mode & Warna Default Pad -->
+    <string name="cd_focus_mode_toggle">Masuk Mode Fokus (Pads Only)</string>
+    <string name="cd_focus_mode_exit">Keluar dari Mode Fokus</string>
+    <string name="focus_mode_label">Fokus</string>
+    <string name="focus_mode_exit_label">Keluar Fokus</string>
+    <string name="menu_focus_mode">Mode Fokus (Pads Only)</string>
+    <string name="focus_mode_entry_hint">Mode Fokus aktif · Geser turun dari atas atau tap 2× area kosong untuk keluar · Sentuh tepi bawah untuk kontrol</string>
+    <string name="focus_corner_panic_hint">STOP</string>
+    <string name="settings_default_pad_color_title">WARNA DEFAULT PAD BARU</string>
+    <string name="settings_default_pad_color_reset_all">Reset Semua Pad ke Abu-abu</string>
+    <string name="settings_focus_section_title">MODE FOKUS (PADS ONLY)</string>
+    <string name="settings_focus_enter_now">Masuk Mode Fokus Sekarang</string>
+    <string name="settings_focus_start_title">Mulai app dalam mode Fokus</string>
+    <string name="settings_focus_start_subtitle">Langsung tampilkan grid pad fullscreen saat aplikasi dibuka</string>
+    <string name="settings_focus_panic_title">STOP/PANIC Pojok (Tahan 2 Detik)</string>
+    <string name="settings_focus_panic_subtitle">Tahan pojok kanan bawah selama 2 detik untuk hentikan semua suara</string>
+
+    <!-- Persistent Config Backup (Stage b) -->
+    <string name="notification_channel_backup">Notifikasi Backup Config</string>
+    <string name="backup_prompt_title">Pilih Folder Backup Config</string>
+    <string name="backup_prompt_desc">Simpan otomatis seluruh profil, posisi pad, efek, MIDI, dan pengaturan ke folder publik (disarankan: Documents/SoundPadPro) agar tetap aman walau aplikasi di-uninstall.</string>
+    <string name="backup_prompt_pick_folder">Pilih Folder Backup</string>
+    <string name="backup_prompt_later">Nanti</string>
+    <string name="backup_error_inaccessible_title">Folder backup tidak dapat diakses</string>
+    <string name="backup_error_inaccessible_notif_body">Izin folder hilang atau folder telah dihapus. Ketuk untuk memilih ulang folder backup config.</string>
+    <string name="backup_action_repick">Pilih Ulang</string>
+    <string name="backup_status_saved">Tersimpan</string>
+    <string name="backup_status_saving">Menyimpan…</string>
+    <string name="backup_status_pending">Menunggu sinkron…</string>
+    <string name="backup_status_unconfigured">Folder backup belum dipilih</string>
+    <string name="backup_status_inaccessible">Folder backup tidak dapat diakses</string>
+    <string name="backup_pick_folder_short">Pilih Folder</string>
+    <string name="backup_sync_now_short">Simpan</string>
+
+    <!-- Persistent Config Backup & Restore (Stage c & d) -->
+    <string name="onboarding_restore_old_config">Pulihkan config lama?</string>
+    <string name="onboarding_restore_old_config_desc">Pilih folder backup (Documents/SoundPadPro) atau folder musik berisi .soundpadpro</string>
+    <string name="settings_tab_backup">Backup</string>
+    <string name="backup_tab_section_title">PENYIMPANAN &amp; SINKRONISASI SAF</string>
+    <string name="backup_tab_auto_sync_title">Sinkron otomatis</string>
+    <string name="backup_tab_auto_sync_subtitle">Simpan otomatis perubahan ke file JSON dalam 2 detik &amp; sinkron ke .soundpadpro/</string>
+    <string name="backup_tab_include_waveform_title">Sertakan cache waveform</string>
+    <string name="backup_tab_include_waveform_subtitle">Simpan grafik gelombang mini ke backup (file JSON lebih besar)</string>
+    <string name="backup_tab_folder_change">Ubah Folder Backup</string>
+    <string name="backup_tab_folder_pick">Pilih Folder Backup</string>
+    <string name="backup_tab_save_now">Simpan sekarang</string>
+    <string name="backup_tab_restore_from_folder">Pulihkan dari folder / .soundpadpro</string>
+    <string name="backup_tab_restore_snapshot">Pulihkan dari snapshot</string>
+    <string name="backup_tab_zip_section_title">ARSIP .ZIP &amp; BERBAGI</string>
+    <string name="backup_tab_export_zip">Export .zip</string>
+    <string name="backup_tab_import_zip">Import .zip</string>
+    <string name="backup_tab_share_zip">Bagikan Backup</string>
+    <string name="backup_tab_danger_zone">ZONA RESET</string>
+    <string name="backup_tab_delete_all">Hapus semua config</string>
+    <string name="restore_preview_title">Ringkasan Config Terdeteksi</string>
+    <string name="restore_action_all">Pulihkan semua</string>
+    <string name="restore_action_partial">Pilih sebagian</string>
+    <string name="restore_action_skip">Lewati</string>
+    <string name="restore_progress_title">Memulihkan Konfigurasi…</string>
+    <string name="snapshot_picker_title">Pilih Snapshot Backup</string>
+    <string name="snapshot_picker_empty">Belum ada snapshot tersimpan. Ketuk &quot;Simpan sekarang&quot; untuk membuat snapshot pertama.</string>
+    <string name="reset_all_config_title">Hapus Semua Config?</string>
+    <string name="reset_all_config_desc">Semua profil, pengaturan pad, posisi slot, efek, MIDI mapping, jadwal, sequencer, dan preferensi akan dikembalikan ke awal.</string>
+    <string name="reset_all_config_clear_saf">Sekaligus hapus file backup di folder SAF terpilih</string>
+    <string name="reset_all_config_confirm">Ya, Hapus Semua</string>
 </resources>

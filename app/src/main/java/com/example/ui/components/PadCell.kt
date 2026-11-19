@@ -104,6 +104,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.R
 import com.example.audio.StereoPanMath
+import com.example.domain.model.DefaultPadColorMode
 import com.example.domain.model.HapticIntensity
 import com.example.domain.model.PadBadgeIcon
 import com.example.domain.model.PadErrorType
@@ -191,6 +192,8 @@ fun PadCell(
   globalCrossfadeEnabled: Boolean,
   defaultPadShape: PadShapeStyle,
   defaultCornerGlowColor: Color,
+  defaultPadColorMode: DefaultPadColorMode = DefaultPadColorMode.GRAY,
+  defaultCustomPadColorArgb: Long = SoundPadColorPalette.DEFAULT_CUSTOM_PAD_COLOR_ARGB,
   miniWaveformEnabled: Boolean = true,
   isLoading: Boolean = false,
   isEnabled: Boolean = true,
@@ -203,6 +206,7 @@ fun PadCell(
   doubleTapToStopEnabled: Boolean = true,
   onClick: (SoundPad) -> Unit,
   onEmptyClick: () -> Unit = {},
+  onEmptyDoubleClick: (() -> Unit)? = null,
   onDoubleTapStop: (SoundPad) -> Unit = {},
   onSwipeVolumeChange: (SoundPad, Float, Boolean) -> Unit = { _, _, _ -> },
   onCustomizeClick: (SoundPad) -> Unit = {},
@@ -217,6 +221,7 @@ fun PadCell(
       style = defaultPadShape,
       hapticIntensity = hapticIntensity,
       onClick = onEmptyClick,
+      onDoubleClick = onEmptyDoubleClick,
       modifier = modifier
     )
     return
@@ -240,13 +245,27 @@ fun PadCell(
   var lastTapElapsedMs by remember(pad.id) { mutableLongStateOf(0L) }
   var wasPlayingAtLastTap by remember(pad.id) { mutableStateOf(false) }
 
-  val customTint = pad.colorArgb?.let { Color(it.toInt()) }
-  val accentColor = customTint ?: MaterialTheme.colorScheme.primary
-  val cornerGlowColor = pad.glowColorArgb?.let { Color(it.toInt()) } ?: defaultCornerGlowColor
-  val glowFactor = if (isEnabled && effectsActive) pad.glowIntensity.coerceIn(0f, 1.8f) else 0f
+  val manualTint = pad.colorArgb?.let { Color(it.toInt()) }
+  val effectiveTint: Color? = when {
+    manualTint != null -> manualTint
+    defaultPadColorMode == DefaultPadColorMode.AUTO -> {
+      val presets = SoundPadColorPalette.PAD_PRESETS_12
+      val idx = ((slotNumber - 1).coerceAtLeast(0)) % presets.size
+      Color(presets[idx].argb.toInt())
+    }
+    defaultPadColorMode == DefaultPadColorMode.CUSTOM -> Color(defaultCustomPadColorArgb.toInt())
+    else -> null
+  }
+  val isNeutralGrayDefault = manualTint == null && defaultPadColorMode == DefaultPadColorMode.GRAY
+  val accentColor = effectiveTint ?: MaterialTheme.colorScheme.primary
+  val cornerGlowColor = pad.glowColorArgb?.let { Color(it.toInt()) }
+    ?: if (isNeutralGrayDefault) MaterialTheme.colorScheme.primary else defaultCornerGlowColor
+  val allowCornerGlow = !isNeutralGrayDefault || pad.glowColorArgb != null
+  val glowFactor = if (isEnabled && effectsActive && allowCornerGlow) pad.glowIntensity.coerceIn(0f, 1.8f) else 0f
   val activeShapeStyle = pad.shapeStyle ?: defaultPadShape
   val customBorderTint = pad.borderColorArgb?.let { Color(it.toInt()) }
   val customTextColor = pad.textColorArgb?.let { Color(it.toInt()) }
+  val contentAccent = if (isNeutralGrayDefault && !isPlaying) extColors.padDefaultGrayBorder else cornerGlowColor
 
   val targetScale = when {
     !isEnabled || !effectsActive -> 1f
@@ -311,7 +330,8 @@ fun PadCell(
     isPlaying -> cornerGlowColor
     isEditMode || isMidiLearnMode -> MaterialTheme.colorScheme.secondary.copy(alpha = 0.85f)
     customBorderTint != null -> customBorderTint
-    customTint != null -> customTint.copy(alpha = 0.84f)
+    effectiveTint != null -> effectiveTint.copy(alpha = 0.84f)
+    isNeutralGrayDefault -> extColors.padDefaultGrayBorder
     else -> cornerGlowColor.copy(alpha = 0.60f)
   }
   val borderColor = if (effectsActive) {
@@ -324,14 +344,16 @@ fun PadCell(
   val idleContainer = when {
     !isEnabled -> extColors.padDisabledContainer
     hasError -> MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.42f)
-    isMultiSelectMode && isSelected -> lerp(MaterialTheme.colorScheme.primaryContainer, customTint ?: MaterialTheme.colorScheme.primary, 0.32f)
-    customTint != null -> lerp(MaterialTheme.colorScheme.surfaceVariant, customTint, 0.36f)
+    isMultiSelectMode && isSelected -> lerp(MaterialTheme.colorScheme.primaryContainer, effectiveTint ?: MaterialTheme.colorScheme.primary, 0.32f)
+    effectiveTint != null -> lerp(MaterialTheme.colorScheme.surfaceVariant, effectiveTint, 0.36f)
+    isNeutralGrayDefault -> extColors.padDefaultGray
     else -> MaterialTheme.colorScheme.surfaceVariant
   }
 
   val activeContainer = when {
     !isEnabled -> extColors.padDisabledContainer
-    customTint != null -> lerp(MaterialTheme.colorScheme.primaryContainer, customTint, 0.58f)
+    effectiveTint != null -> lerp(MaterialTheme.colorScheme.primaryContainer, effectiveTint, 0.58f)
+    isNeutralGrayDefault -> lerp(extColors.padDefaultGray, MaterialTheme.colorScheme.primaryContainer, 0.55f)
     else -> MaterialTheme.colorScheme.primaryContainer
   }
 
@@ -640,7 +662,7 @@ fun PadCell(
               miniWaveformEnabled = miniWaveformEnabled,
               gridRows = gridRows,
               gridCols = gridCols,
-              accentColor = cornerGlowColor,
+              accentColor = contentAccent,
               customTextColor = customTextColor,
               playbackState = playbackState
             )
@@ -651,7 +673,7 @@ fun PadCell(
               isLoading = isLoading,
               gridRows = gridRows,
               gridCols = gridCols,
-              accentColor = cornerGlowColor,
+              accentColor = contentAccent,
               customTextColor = customTextColor
             )
             PadDensity.MICRO -> MicroPadContent(
@@ -661,7 +683,7 @@ fun PadCell(
               hasError = hasError,
               gridRows = gridRows,
               gridCols = gridCols,
-              accentColor = cornerGlowColor
+              accentColor = contentAccent
             )
           }
         }
@@ -1337,6 +1359,7 @@ private fun MicroPadContent(
   }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun EmptyPadWell(
   slotNumber: Int,
@@ -1344,6 +1367,7 @@ private fun EmptyPadWell(
   style: PadShapeStyle,
   hapticIntensity: HapticIntensity,
   onClick: () -> Unit,
+  onDoubleClick: (() -> Unit)? = null,
   modifier: Modifier = Modifier
 ) {
   val padTokens = SoundPadTheme.padTokens
@@ -1367,6 +1391,26 @@ private fun EmptyPadWell(
   }
   val addDescription = stringResource(R.string.cd_empty_pad_add)
 
+  val clickMod = if (onDoubleClick != null) {
+    Modifier.combinedClickable(
+      interactionSource = interactionSource,
+      indication = ripple(color = MaterialTheme.colorScheme.primary),
+      onClick = { onClick() },
+      onDoubleClick = {
+        performPadHaptic(haptic, hapticIntensity)
+        onDoubleClick()
+      }
+    )
+  } else {
+    Modifier.clickable(
+      interactionSource = interactionSource,
+      indication = ripple(color = MaterialTheme.colorScheme.primary)
+    ) {
+      performPadHaptic(haptic, hapticIntensity)
+      onClick()
+    }
+  }
+
   Box(
     modifier = modifier
       .defaultMinSize(minWidth = spacing.minTouchTarget, minHeight = spacing.minTouchTarget)
@@ -1374,13 +1418,7 @@ private fun EmptyPadWell(
       .background(extColors.padEmptyWellContainer)
       .testTag("empty_pad_well_$slotNumber")
       .semantics { contentDescription = "$addDescription ($slotNumber)" }
-      .clickable(
-        interactionSource = interactionSource,
-        indication = ripple(color = MaterialTheme.colorScheme.primary)
-      ) {
-        performPadHaptic(haptic, hapticIntensity)
-        onClick()
-      },
+      .then(clickMod),
     contentAlignment = Alignment.Center
   ) {
     Canvas(modifier = Modifier.fillMaxSize()) {

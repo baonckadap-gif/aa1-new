@@ -27,6 +27,7 @@ import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.LibraryMusic
 import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.Restore
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -65,6 +66,7 @@ fun OnboardingDialog(
   onRequestMicPermission: () -> Unit,
   onRequestBlePermissions: () -> Unit,
   onOpenMiuiGuide: () -> Unit,
+  onRestoreOldConfig: () -> Unit = {},
   onFinishOnboarding: () -> Unit,
   onDismissSkip: () -> Unit
 ) {
@@ -178,6 +180,23 @@ fun OnboardingDialog(
               Spacer(modifier = Modifier.width(8.dp))
               Text(stringResource(R.string.onboarding_load_demo))
             }
+
+            OutlinedButton(
+              onClick = onRestoreOldConfig,
+              modifier = Modifier
+                .fillMaxWidth()
+                .height(48.dp)
+                .testTag("onboarding_wizard_restore_config")
+            ) {
+              Icon(Icons.Filled.Restore, contentDescription = null, modifier = Modifier.size(18.dp))
+              Spacer(modifier = Modifier.width(8.dp))
+              Text(stringResource(R.string.onboarding_restore_old_config))
+            }
+            Text(
+              text = stringResource(R.string.onboarding_restore_old_config_desc),
+              style = MaterialTheme.typography.labelSmall,
+              color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
           }
 
           1 -> {

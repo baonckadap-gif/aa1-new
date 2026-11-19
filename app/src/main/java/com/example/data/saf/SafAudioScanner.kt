@@ -28,9 +28,17 @@ class SafAudioScanner(private val context: Context) {
   }
 
   fun takePersistablePermission(treeUri: Uri) {
-    val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION
-    runCatching {
-      context.contentResolver.takePersistableUriPermission(treeUri, flags)
+    val rwFlags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+    val grantedRw = runCatching {
+      context.contentResolver.takePersistableUriPermission(treeUri, rwFlags)
+    }.isSuccess
+    if (!grantedRw) {
+      runCatching {
+        context.contentResolver.takePersistableUriPermission(
+          treeUri,
+          Intent.FLAG_GRANT_READ_URI_PERMISSION
+        )
+      }
     }
   }
 
@@ -198,6 +206,9 @@ class SafAudioScanner(private val context: Context) {
       positionIndex = positionIndex,
       bankIndex = bankIndex,
       subfolderName = subfolderName,
+      colorArgb = null,
+      glowColorArgb = null,
+      glowIntensity = 0f,
       isPreloadedInRam = false,
       errorType = validation.errorType,
       errorMessage = validation.message
@@ -264,7 +275,9 @@ class SafAudioScanner(private val context: Context) {
           val size = if (sizeCol >= 0 && !cursor.isNull(sizeCol)) cursor.getLong(sizeCol) else 0L
 
           if (mime == DocumentsContract.Document.MIME_TYPE_DIR) {
-            outDirs.add(docId to name.ifBlank { "Bank" })
+            if (!name.startsWith(".")) {
+              outDirs.add(docId to name.ifBlank { "Bank" })
+            }
           } else {
             val ext = name.substringAfterLast('.', "").lowercase()
             if (ext in SUPPORTED_EXTENSIONS) {

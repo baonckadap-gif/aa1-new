@@ -1,11 +1,14 @@
 package com.example.ui
 
 import android.app.Application
+import android.content.Intent
 import android.net.Uri
 import androidx.compose.runtime.Immutable
+import androidx.documentfile.provider.DocumentFile
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import com.example.BuildConfig
 import com.example.SoundPadApplication
 import com.example.audio.AudioOutputRouter
 import com.example.audio.AudioWaveformAndCutEngine
@@ -13,7 +16,19 @@ import com.example.audio.ReverseAudioCacheManager
 import com.example.audio.SoundPadPlaybackService
 import com.example.audio.toDomain
 import com.example.audio.toEntity
+import com.example.data.backup.AudioFileRelinker
+import com.example.data.backup.BackupInspectionSummary
+import com.example.data.backup.BackupSyncStatus
 import com.example.data.backup.FullBackupSerializer
+import com.example.data.backup.PersistentBackupUiState
+import com.example.data.backup.PersistentConfigRestoreEngine
+import com.example.data.backup.PersistentConfigSnapshotAssembler
+import com.example.data.backup.RestoreSelectionOptions
+import com.example.data.backup.RestoreUiState
+import com.example.data.backup.SafPersistentConfigStorage
+import com.example.data.backup.SnapshotFileInfo
+import com.example.data.backup.SnapshotTrigger
+import com.example.data.backup.ZipBackupArchiver
 import com.example.data.demo.DemoTrackManager
 import com.example.data.local.db.ErrorLogEntity
 import com.example.data.local.db.MidiCcMappingEntity
@@ -29,6 +44,7 @@ import com.example.scheduler.toEntity
 import com.example.domain.model.AppErrorLog
 import com.example.domain.model.AppLanguage
 import com.example.domain.model.AudioOutputDeviceUi
+import com.example.domain.model.DefaultPadColorMode
 import com.example.domain.model.EqPreset
 import com.example.domain.model.FadeCurve
 import com.example.domain.model.FxPreset
@@ -72,6 +88,9 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -144,7 +163,9 @@ data class SoundPadUiState(
   val sequencerPlaylists: List<SequencerPlaylist> = emptyList(),
   val sequencerPlayback: SequencerPlaybackState = SequencerPlaybackState(),
   val midiPcMappings: List<MidiProgramBankMapping> = emptyList(),
-  val requestedBankPageIndex: Int? = null
+  val requestedBankPageIndex: Int? = null,
+  val persistentBackupState: PersistentBackupUiState = PersistentBackupUiState(),
+  val restoreUiState: RestoreUiState = RestoreUiState()
 ) {
   val activeCount: Int
     get() = playbackStates.count { it.value.isPlaying }
@@ -279,6 +300,7 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
   private val sequencerEngine = app.sequencerEngine
   private val voiceRecorder = app.voiceRecorder
   private val midiController = app.midiController
+  private val persistentConfigManager = app.persistentConfigManager
 
   private val _uiState = MutableStateFlow(SoundPadUiState())
   val uiState: StateFlow<SoundPadUiState> = _uiState.asStateFlow()
@@ -288,6 +310,7 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
   private var lastObservedFolderUri: String? = null
   private var lastLoadedProfileId: String? = null
   private var didAttemptInitialDemoSeed = false
+  private var didApplyStartupFocus = false
   private val undoStack = ArrayDeque<List<SoundPad>>()
   private val redoStack = ArrayDeque<List<SoundPad>>()
 
@@ -301,6 +324,54 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
 
     SoundPadPlaybackService.onStopMasterRecordingRequested = {
       stopAndSaveMasterRecording()
+    }
+
+    persistentConfigManager.onAccessLostCallback = { uriStr, reason ->
+      viewModelScope.launch {
+        logErrorInternal(
+          fileName = "Folder Backup Config",
+          uriString = uriStr,
+          type = PadErrorType.MISSING_PERMISSION,
+          message = "Folder backup tidak dapat diakses: $reason",
+          suggestion = "Pilih ulang folder backup config di Pengaturan atau banner peringatan."
+        )
+      }
+    }
+    persistentConfigManager.start()
+
+    viewModelScope.launch {
+      persistentConfigManager.backupState.collectLatest { bState ->
+        _uiState.update { it.copy(persistentBackupState = bState) }
+      }
+    }
+
+    // Observe DataStore changes (ignoring lastSyncAtMs updates so sync timestamp never triggers re-save loop)
+    viewModelScope.launch {
+      settingsRepo.settingsFlow
+        .map { it.copy(persistentLastSyncAtMs = 0L) }
+        .distinctUntilChanged()
+        .drop(1)
+        .collectLatest {
+          persistentConfigManager.notifyConfigDirty("global_settings")
+        }
+    }
+
+    viewModelScope.launch {
+      dao.observeProfiles().drop(1).collectLatest {
+        persistentConfigManager.notifyConfigDirty("profiles_table")
+      }
+    }
+
+    viewModelScope.launch {
+      dao.observeScheduledTasks().drop(1).collectLatest {
+        persistentConfigManager.notifyConfigDirty("scheduler_table")
+      }
+    }
+
+    viewModelScope.launch {
+      dao.observeSequencerPlaylists().drop(1).collectLatest {
+        persistentConfigManager.notifyConfigDirty("sequencer_table")
+      }
     }
 
     viewModelScope.launch {
@@ -362,7 +433,24 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
     viewModelScope.launch {
       settingsRepo.settingsFlow.collectLatest { settings ->
         audioEngine.updateGlobalSettings(settings)
-        _uiState.update { it.copy(settings = settings) }
+        if (!didApplyStartupFocus) {
+          didApplyStartupFocus = true
+          if (settings.startInFocusMode && !settings.isFocusMode) {
+            settingsRepo.setFocusMode(true)
+          }
+        }
+        _uiState.update { state ->
+          if (settings.isFocusMode && (state.isEditMode || state.isMultiSelectMode)) {
+            state.copy(
+              settings = settings,
+              isEditMode = false,
+              isMultiSelectMode = false,
+              selectedPadIds = emptySet()
+            )
+          } else {
+            state.copy(settings = settings)
+          }
+        }
 
         val profileChanged = settings.activeProfileId != lastLoadedProfileId
         val folderChanged = settings.folderUri != null && settings.folderUri != lastObservedFolderUri
@@ -530,8 +618,8 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
                 id = entity.id,
                 displayName = entity.displayName,
                 positionIndex = entity.positionIndex,
-                colorArgb = entity.colorArgb ?: demo.colorArgb,
-                glowColorArgb = entity.glowColorArgb ?: demo.glowColorArgb,
+                colorArgb = entity.colorArgb,
+                glowColorArgb = entity.glowColorArgb,
                 glowIntensity = entity.glowIntensity,
                 shapeStyle = entity.shapeStyle?.let { s -> runCatching { PadShapeStyle.valueOf(s) }.getOrNull() },
                 borderColorArgb = entity.borderColorArgb,
@@ -551,7 +639,14 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
             )
           }
         } else {
-          merged.add(demo.copy(positionIndex = nextPos++))
+          merged.add(
+            demo.copy(
+              positionIndex = nextPos++,
+              colorArgb = null,
+              glowColorArgb = null,
+              glowIntensity = 0f
+            )
+          )
         }
       }
       // Keep local voice tracks / cut exports too
@@ -591,6 +686,7 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
       val entities = ready.map { it.toPadEntity(profileId) }
       val settingEntities = ready.map { it.settings.toEntity(it.id) }
       dao.saveCompleteProfile(profile, entities, settingEntities)
+      persistentConfigManager.notifyConfigDirty("demo_tracks")
 
       lastObservedFolderUri = DemoTrackManager.DEMO_FOLDER_URI
       settingsRepo.setSelectedFolder(DemoTrackManager.DEMO_FOLDER_URI, DemoTrackManager.DEMO_FOLDER_NAME)
@@ -624,6 +720,7 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
   fun onFolderSelected(treeUri: Uri) {
     viewModelScope.launch {
       scanner.takePersistablePermission(treeUri)
+      val previousFolderUri = _uiState.value.settings.folderUri
       val folderName = scanner.resolveFolderDisplayName(treeUri)
       settingsRepo.setSelectedFolder(treeUri.toString(), folderName)
       lastObservedFolderUri = treeUri.toString()
@@ -636,6 +733,34 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
         showAutoDetectBadge = false
       )
       startObservingFolder(treeUri)
+
+      // Jika user memilih folder musik yang sebelumnya berbeda & di dalamnya terdapat .soundpadpro/,
+      // tawarkan restore config otomatis dengan pencocokan pad langsung ke folder musik ini.
+      val switchedToDifferentFolder = previousFolderUri.isNullOrBlank() ||
+        previousFolderUri == DemoTrackManager.DEMO_FOLDER_URI ||
+        previousFolderUri != treeUri.toString()
+      if (switchedToDifferentFolder) {
+        val inspection = withContext(Dispatchers.IO) {
+          val docRoot = runCatching { DocumentFile.fromTreeUri(app, treeUri) }.getOrNull()
+          val hasSubfolder = docRoot?.findFile(".soundpadpro")?.isDirectory == true
+          if (hasSubfolder) {
+            PersistentConfigRestoreEngine.inspectTreeUri(app, treeUri).getOrNull()
+          } else {
+            null
+          }
+        }
+        if (inspection != null) {
+          _uiState.update { state ->
+            state.copy(
+              restoreUiState = state.restoreUiState.copy(
+                pendingInspection = inspection,
+                selectedRelinkMusicUri = treeUri.toString(),
+                selectedRelinkMusicName = folderName
+              )
+            )
+          }
+        }
+      }
     }
   }
 
@@ -740,6 +865,7 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
       if (persist) {
         viewModelScope.launch {
           dao.upsertPadSetting(target.settings.toEntity(padId))
+          persistentConfigManager.notifyConfigDirty("pad_volume")
         }
       }
     }
@@ -831,6 +957,7 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
           newSetting = savedClone.settings.toEntity(savedClone.id),
           reindexedPositions = reindexed.map { it.id to it.positionIndex }
         )
+        persistentConfigManager.notifyConfigDirty("duplicate_pad")
       }
       return
     }
@@ -908,6 +1035,7 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
         newSetting = savedClone.settings.toEntity(savedClone.id),
         reindexedPositions = reindexed.map { it.id to it.positionIndex }
       )
+      persistentConfigManager.notifyConfigDirty("duplicate_pad_bank")
     }
   }
 
@@ -932,6 +1060,7 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
     viewModelScope.launch {
       dao.deletePadById(padId)
       dao.updateAllPadPositions(remaining.map { it.id to it.positionIndex })
+      persistentConfigManager.notifyConfigDirty("delete_pad")
     }
   }
 
@@ -992,6 +1121,7 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
         audioEngine.updatePlaylist(updatedPads)
         state.copy(pads = updatedPads)
       }
+      persistentConfigManager.notifyConfigDirty("pad_appearance")
     }
   }
 
@@ -1035,6 +1165,7 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
           statusMessage = "Applied button style to all ${updatedPads.size} songs"
         )
       }
+      persistentConfigManager.notifyConfigDirty("pad_style_all")
     }
   }
 
@@ -1059,6 +1190,7 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
 
     viewModelScope.launch {
       dao.upsertPadSetting(newSettings.toEntity(padId))
+      persistentConfigManager.notifyConfigDirty("pad_settings")
       var updatedTarget: SoundPad? = null
       _uiState.update { state ->
         val updatedPads = state.pads.map { pad ->
@@ -1120,6 +1252,7 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
     val nextFav = !target.isFavorite
     viewModelScope.launch {
       dao.updatePadFavoriteAndTag(padId, nextFav, target.categoryTag)
+      persistentConfigManager.notifyConfigDirty("pad_favorite")
       _uiState.update { state ->
         val updated = state.pads.map { p ->
           if (p.id == padId) p.copy(isFavorite = nextFav) else p
@@ -1138,6 +1271,7 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
     recordEditSnapshot(pads)
     viewModelScope.launch {
       dao.updatePadFavoriteAndTag(padId, target.isFavorite, cleaned)
+      persistentConfigManager.notifyConfigDirty("pad_tag")
       _uiState.update { state ->
         val updated = state.pads.map { p ->
           if (p.id == padId) p.copy(categoryTag = cleaned) else p
@@ -1315,8 +1449,9 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
         durationMs = recorded.durationMs,
         sizeBytes = recorded.file.length(),
         positionIndex = _uiState.value.pads.size,
-        colorArgb = 0xFFFF4D6DL,
-        glowColorArgb = 0xFFFF758FL,
+        colorArgb = null,
+        glowColorArgb = null,
+        glowIntensity = 0f,
         isPreloadedInRam = false,
         categoryTag = "Vocal",
         settings = PadSettings(volume = 1.0f, triggerMode = PadTriggerMode.ONE_SHOT)
@@ -1366,6 +1501,7 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
     }
     dao.upsertPad(readyPad.toPadEntity(profileId))
     dao.upsertPadSetting(readyPad.settings.toEntity(readyPad.id))
+    persistentConfigManager.notifyConfigDirty("add_created_pad")
 
     audioEngine.updatePlaylist(updatedList)
     _uiState.update {
@@ -1397,6 +1533,7 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
 
     viewModelScope.launch {
       dao.updateAllPadPositions(reindexed.map { it.id to it.positionIndex })
+      persistentConfigManager.notifyConfigDirty("swap_pad_positions")
     }
   }
 
@@ -1585,6 +1722,8 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
       padGridSpacingDp = gs.padGridSpacingDp,
       defaultPadShape = gs.defaultPadShape,
       defaultCornerGlowArgb = gs.defaultCornerGlowArgb,
+      defaultPadColorMode = gs.defaultPadColorMode,
+      defaultPadColorArgb = gs.defaultPadColorArgb,
       createdAtMs = profileEntity?.createdAtMs ?: System.currentTimeMillis(),
       updatedAtMs = profileEntity?.updatedAtMs ?: System.currentTimeMillis(),
       isActive = profileEntity?.isActive ?: true
@@ -1671,6 +1810,8 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
         profile.padGridSpacingDp?.let { settingsRepo.setPadGridSpacingDp(it) }
         profile.defaultPadShape?.let { settingsRepo.setDefaultPadShape(it) }
         profile.defaultCornerGlowArgb?.let { settingsRepo.setDefaultCornerGlow(it) }
+        profile.defaultPadColorMode?.let { settingsRepo.setDefaultPadColorMode(it) }
+        profile.defaultPadColorArgb?.let { settingsRepo.setDefaultPadColorArgb(it) }
         if (profile.folderUri != null) {
           val folderName = if (profile.folderUri == DemoTrackManager.DEMO_FOLDER_URI) {
             DemoTrackManager.DEMO_FOLDER_NAME
@@ -1816,6 +1957,12 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
         settingsRepo.setHasCompletedOnboarding(gs.hasCompletedOnboarding)
         settingsRepo.setShowFeatureTooltips(gs.showFeatureTooltips)
         settingsRepo.setAppLanguage(gs.appLanguage)
+        settingsRepo.setDefaultPadColorMode(gs.defaultPadColorMode)
+        settingsRepo.setDefaultPadColorArgb(gs.defaultPadColorArgb)
+        settingsRepo.setFocusMode(gs.isFocusMode)
+        settingsRepo.setStartInFocusMode(gs.startInFocusMode)
+        settingsRepo.setFocusCornerPanicEnabled(gs.focusCornerPanicEnabled)
+        settingsRepo.setFocusModeMidiNote(gs.focusModeMidiNote)
 
         if (gs.folderUri != null) {
           settingsRepo.setSelectedFolder(gs.folderUri, gs.folderName ?: "Restored Folder")
@@ -1874,6 +2021,24 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
     }
   }
 
+  fun armMidiLearnForFocusMode() {
+    _uiState.update {
+      it.copy(
+        isMidiLearnMode = true,
+        isEditMode = false,
+        midiLearnTarget = MidiLearnTarget.FocusModeNote,
+        statusMessage = "Tekan tombol MIDI untuk Toggle Fokus Mode"
+      )
+    }
+  }
+
+  fun clearFocusModeMidiNote() {
+    viewModelScope.launch {
+      settingsRepo.setFocusModeMidiNote(null)
+      _uiState.update { it.copy(statusMessage = "Mapping MIDI Note Fokus Mode dihapus") }
+    }
+  }
+
   fun cancelMidiLearn() {
     _uiState.update { it.copy(isMidiLearnMode = false, midiLearnTarget = null) }
   }
@@ -1881,6 +2046,7 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
   fun clearPadMidiNote(padId: String) {
     viewModelScope.launch {
       dao.updatePadMidiNote(padId, null)
+      persistentConfigManager.notifyConfigDirty("clear_pad_midi")
       _uiState.update { state ->
         val updated = state.pads.map { pad ->
           if (pad.id == padId) pad.copy(midiNote = null) else pad
@@ -1895,6 +2061,7 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
     val profileId = _uiState.value.settings.activeProfileId
     viewModelScope.launch {
       dao.deleteMidiCcMappingByTarget(profileId, target.name)
+      persistentConfigManager.notifyConfigDirty("clear_cc_midi")
       _uiState.update { state ->
         state.copy(
           midiCcMappings = state.midiCcMappings.filterNot { it.target == target },
@@ -1930,6 +2097,7 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
           val note = event.note
           viewModelScope.launch {
             dao.updatePadMidiNote(learnTarget.padId, note)
+            persistentConfigManager.notifyConfigDirty("midi_learn_pad")
             _uiState.update { cur ->
               val updated = cur.pads.map { pad ->
                 if (pad.id == learnTarget.padId) pad.copy(midiNote = note) else pad
@@ -1962,6 +2130,7 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
                 channel = mapping.channel
               )
             )
+            persistentConfigManager.notifyConfigDirty("midi_learn_cc")
             _uiState.update { cur ->
               val filtered = cur.midiCcMappings.filterNot { it.target == learnTarget.target }
               cur.copy(
@@ -1991,6 +2160,7 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
                 channel = mapping.channel
               )
             )
+            persistentConfigManager.notifyConfigDirty("midi_learn_pc")
             _uiState.update { cur ->
               val filtered = cur.midiPcMappings.filterNot { it.bankIndex == learnTarget.bankIndex }
               cur.copy(
@@ -2016,12 +2186,27 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
             }
           }
         }
+        learnTarget is MidiLearnTarget.FocusModeNote && event is MidiEvent.NoteOn -> {
+          val note = event.note
+          viewModelScope.launch {
+            settingsRepo.setFocusModeMidiNote(note)
+            _uiState.update { cur ->
+              cur.copy(
+                midiLearnTarget = null,
+                statusMessage = "Mapped ${MidiMessageParser.formatNoteName(note)} → Toggle Fokus Mode"
+              )
+            }
+          }
+        }
       }
       return
     }
 
     when (event) {
       is MidiEvent.NoteOn -> {
+        if (state.settings.focusModeMidiNote == event.note) {
+          toggleFocusMode()
+        }
         val matchingPads = state.pads.filter { it.midiNote == event.note }
         matchingPads.forEach { pad ->
           if (pad.settings.triggerMode == PadTriggerMode.HOLD) {
@@ -2057,6 +2242,7 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
               setCrossfadeDurationMs(ms)
             }
             MidiCcTarget.STOP_ALL -> if (event.value >= 64) stopAll()
+            MidiCcTarget.TOGGLE_FOCUS_MODE -> if (event.value >= 64) toggleFocusMode()
           }
         }
       }
@@ -2105,6 +2291,7 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
     val profileId = _uiState.value.settings.activeProfileId
     viewModelScope.launch {
       dao.deleteMidiPcMappingByBank(profileId, bankIndex)
+      persistentConfigManager.notifyConfigDirty("clear_pc_midi")
       _uiState.update { state ->
         state.copy(
           midiPcMappings = state.midiPcMappings.filterNot { it.bankIndex == bankIndex },
@@ -2331,6 +2518,7 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
   // ---- Global Settings & Playback Controls ----
 
   fun toggleEditMode() {
+    if (_uiState.value.settings.isFocusMode) return
     if (_uiState.value.settings.isLocked) {
       _uiState.update { it.copy(statusMessage = "Board is locked. Unlock Stage Mode to edit.") }
       return
@@ -2411,6 +2599,7 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
     viewModelScope.launch {
       selectedIds.forEach { dao.deletePadById(it) }
       dao.updateAllPadPositions(remaining.map { it.id to it.positionIndex })
+      persistentConfigManager.notifyConfigDirty("bulk_delete_pads")
     }
   }
 
@@ -2440,6 +2629,7 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
     val profileId = state.settings.activeProfileId
     viewModelScope.launch {
       dao.upsertPads(updatedPads.filter { it.id in selectedIds }.map { it.toPadEntity(profileId) })
+      persistentConfigManager.notifyConfigDirty("bulk_color_pads")
     }
   }
 
@@ -2501,6 +2691,7 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
         )
       }
       dao.upsertPads(updatedPads.map { it.toPadEntity(profileId) })
+      persistentConfigManager.notifyConfigDirty("bulk_move_pads")
     }
   }
 
@@ -2543,6 +2734,7 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
     viewModelScope.launch {
       dao.upsertPads(combined.map { it.toPadEntity(profileId) })
       dao.upsertPadSettings(insertedClones.map { it.settings.toEntity(it.id) })
+      persistentConfigManager.notifyConfigDirty("bulk_duplicate_pads")
     }
   }
 
@@ -2631,6 +2823,7 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
       )
       dao.syncProfilePadsPreservingSettings(profile, normalized.map { it.toPadEntity(profileId) })
       dao.upsertPadSettings(normalized.map { it.settings.toEntity(it.id) })
+      persistentConfigManager.notifyConfigDirty("undo_redo_snapshot")
     }
   }
 
@@ -2906,6 +3099,7 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
         dao.updatePadNormalizedGain(padId, gain)
       }
       settingsRepo.setAutoNormalizeEnabled(true)
+      persistentConfigManager.notifyConfigDirty("normalize_loudness")
       _uiState.update { state ->
         val updated = state.pads.map { pad ->
           val gain = computed[pad.id] ?: pad.settings.normalizedGain
@@ -2928,11 +3122,15 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
   fun selectMainOutputDevice(deviceId: Int?) {
     audioEngine.setPreferredOutputDeviceId(deviceId)
     _uiState.update { it.copy(selectedMainOutputId = deviceId) }
+    val devName = _uiState.value.outputDevices.firstOrNull { it.id == deviceId }?.name
+    viewModelScope.launch { settingsRepo.setPreferredMainOutput(deviceId, devName) }
   }
 
   fun selectCueOutputDevice(deviceId: Int?) {
     audioEngine.setCueOutputDeviceId(deviceId)
     _uiState.update { it.copy(selectedCueOutputId = deviceId) }
+    val devName = _uiState.value.outputDevices.firstOrNull { it.id == deviceId }?.name
+    viewModelScope.launch { settingsRepo.setPreferredCueOutput(deviceId, devName) }
   }
 
   fun toggleCuePreview(pad: SoundPad) {
@@ -3289,6 +3487,74 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
     viewModelScope.launch { settingsRepo.setDefaultCornerGlow(colorArgb) }
   }
 
+  fun setDefaultPadColorMode(mode: DefaultPadColorMode) {
+    viewModelScope.launch { settingsRepo.setDefaultPadColorMode(mode) }
+  }
+
+  fun setDefaultPadColorArgb(colorArgb: Long) {
+    viewModelScope.launch { settingsRepo.setDefaultPadColorArgb(colorArgb) }
+  }
+
+  fun resetAllPadsToGray() {
+    val profileId = _uiState.value.settings.activeProfileId
+    val currentPads = _uiState.value.pads
+    if (currentPads.isNotEmpty()) {
+      recordEditSnapshot(currentPads)
+    }
+    viewModelScope.launch {
+      settingsRepo.setDefaultPadColorMode(DefaultPadColorMode.GRAY)
+      val resetPads = currentPads.map { pad ->
+        pad.copy(
+          colorArgb = null,
+          glowColorArgb = null,
+          glowIntensity = 0f,
+          borderColorArgb = null,
+          textColorArgb = null
+        )
+      }
+      if (resetPads.isNotEmpty()) {
+        dao.upsertPads(resetPads.map { it.toPadEntity(profileId) })
+        audioEngine.updatePlaylist(resetPads)
+        persistentConfigManager.notifyConfigDirty("reset_pads_gray")
+      }
+      _uiState.update { state ->
+        state.copy(
+          pads = resetPads,
+          statusMessage = "Semua pad direset ke abu-abu netral"
+        )
+      }
+    }
+  }
+
+  fun setFocusMode(enabled: Boolean) {
+    viewModelScope.launch {
+      if (enabled) {
+        _uiState.update {
+          it.copy(
+            isEditMode = false,
+            isMultiSelectMode = false,
+            selectedPadIds = emptySet(),
+            isSearchVisible = false,
+            searchQuery = ""
+          )
+        }
+      }
+      settingsRepo.setFocusMode(enabled)
+    }
+  }
+
+  fun toggleFocusMode() {
+    setFocusMode(!_uiState.value.settings.isFocusMode)
+  }
+
+  fun setStartInFocusMode(enabled: Boolean) {
+    viewModelScope.launch { settingsRepo.setStartInFocusMode(enabled) }
+  }
+
+  fun setFocusCornerPanicEnabled(enabled: Boolean) {
+    viewModelScope.launch { settingsRepo.setFocusCornerPanicEnabled(enabled) }
+  }
+
   fun setBottomBarVisible(visible: Boolean) {
     viewModelScope.launch { settingsRepo.setBottomBarVisible(visible) }
   }
@@ -3337,6 +3603,418 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
 
   fun clearError() {
     _uiState.update { it.copy(errorMessage = null, hasFolderPermissionError = false) }
+  }
+
+  // ---- Persistent Config SAF Auto-Save & Snapshot Hooks (Stage b) ----
+
+  fun onPersistentBackupFolderSelected(treeUri: Uri) {
+    viewModelScope.launch {
+      val ok = persistentConfigManager.onBackupFolderSelected(treeUri)
+      _uiState.update {
+        if (ok) {
+          it.copy(statusMessage = "Folder backup config terhubung & tersimpan")
+        } else {
+          it.copy(errorMessage = "Folder backup tidak dapat diakses. Pastikan memberi izin tulis folder.")
+        }
+      }
+    }
+  }
+
+  fun dismissBackupFolderPrompt() {
+    viewModelScope.launch {
+      persistentConfigManager.dismissFirstLaunchPrompt()
+    }
+  }
+
+  fun verifyBackupFolderAccess() {
+    viewModelScope.launch {
+      persistentConfigManager.verifyBackupFolderAccess()
+    }
+  }
+
+  fun setPersistentAutoSyncEnabled(enabled: Boolean) {
+    viewModelScope.launch {
+      persistentConfigManager.setAutoSyncEnabled(enabled)
+    }
+  }
+
+  fun triggerManualBackupSync() {
+    viewModelScope.launch {
+      val res = persistentConfigManager.syncNow(createSnapshot = true, trigger = SnapshotTrigger.MANUAL)
+      _uiState.update {
+        if (res.success) {
+          it.copy(statusMessage = "Config & snapshot tersimpan ke folder backup")
+        } else {
+          it.copy(errorMessage = res.errorMessage ?: "Folder backup tidak dapat diakses")
+        }
+      }
+    }
+  }
+
+  fun onAppStopping() {
+    persistentConfigManager.onAppExiting()
+  }
+
+  // ---- Persistent Config Restore, Snapshot Picker, ZIP Export/Import/Share & Reset (Stage c & d) ----
+
+  fun setPersistentIncludeWaveforms(include: Boolean) {
+    viewModelScope.launch {
+      persistentConfigManager.setIncludeWaveforms(include)
+    }
+  }
+
+  fun setRestoreRelinkMusicFolder(treeUri: Uri) {
+    scanner.takePersistablePermission(treeUri)
+    val folderName = scanner.resolveFolderDisplayName(treeUri)
+    _uiState.update { state ->
+      state.copy(
+        restoreUiState = state.restoreUiState.copy(
+          selectedRelinkMusicUri = treeUri.toString(),
+          selectedRelinkMusicName = folderName
+        )
+      )
+    }
+  }
+
+  fun inspectRestoreFolderUri(treeUri: Uri) {
+    SafPersistentConfigStorage.takePersistableRwPermission(app, treeUri)
+    scanner.takePersistablePermission(treeUri)
+    viewModelScope.launch {
+      _uiState.update {
+        it.copy(restoreUiState = it.restoreUiState.copy(isInspecting = true))
+      }
+      val res = PersistentConfigRestoreEngine.inspectTreeUri(app, treeUri)
+      res.onSuccess { summary ->
+        val folderName = scanner.resolveFolderDisplayName(treeUri)
+        val relinkUri = summary.detectedMusicFolderUri
+          ?: _uiState.value.restoreUiState.selectedRelinkMusicUri
+          ?: _uiState.value.settings.folderUri?.takeIf { it != DemoTrackManager.DEMO_FOLDER_URI }
+        val relinkName = if (summary.detectedMusicFolderUri != null) {
+          folderName
+        } else {
+          _uiState.value.restoreUiState.selectedRelinkMusicName ?: _uiState.value.settings.folderName
+        }
+        _uiState.update {
+          it.copy(
+            restoreUiState = it.restoreUiState.copy(
+              isInspecting = false,
+              pendingInspection = summary,
+              selectedRelinkMusicUri = relinkUri,
+              selectedRelinkMusicName = relinkName
+            )
+          )
+        }
+      }.onFailure { err ->
+        _uiState.update {
+          it.copy(
+            restoreUiState = it.restoreUiState.copy(isInspecting = false),
+            errorMessage = err.localizedMessage ?: "Tidak ditemukan config backup yang valid di folder ini"
+          )
+        }
+      }
+    }
+  }
+
+  fun inspectRestoreZipUri(zipUri: Uri) {
+    viewModelScope.launch {
+      _uiState.update {
+        it.copy(restoreUiState = it.restoreUiState.copy(isInspecting = true))
+      }
+      val displayName = withContext(Dispatchers.IO) {
+        runCatching { DocumentFile.fromSingleUri(app, zipUri)?.name }.getOrNull() ?: "Backup.zip"
+      }
+      val res = ZipBackupArchiver.inspectZipUri(app, zipUri, displayName)
+      res.onSuccess { summary ->
+        val relinkUri = _uiState.value.settings.folderUri?.takeIf { it != DemoTrackManager.DEMO_FOLDER_URI }
+        _uiState.update {
+          it.copy(
+            restoreUiState = it.restoreUiState.copy(
+              isInspecting = false,
+              pendingInspection = summary,
+              selectedRelinkMusicUri = relinkUri,
+              selectedRelinkMusicName = _uiState.value.settings.folderName
+            )
+          )
+        }
+      }.onFailure { err ->
+        _uiState.update {
+          it.copy(
+            restoreUiState = it.restoreUiState.copy(isInspecting = false),
+            errorMessage = "Gagal membaca arsip .zip: ${err.localizedMessage ?: "format tidak valid"}"
+          )
+        }
+      }
+    }
+  }
+
+  fun openSnapshotPicker() {
+    viewModelScope.launch {
+      val list = withContext(Dispatchers.IO) {
+        persistentConfigManager.listCurrentSnapshots()
+      }
+      _uiState.update { state ->
+        state.copy(
+          restoreUiState = state.restoreUiState.copy(
+            availableSnapshots = list,
+            isSnapshotPickerOpen = true
+          )
+        )
+      }
+    }
+  }
+
+  fun closeSnapshotPicker() {
+    _uiState.update { state ->
+      state.copy(restoreUiState = state.restoreUiState.copy(isSnapshotPickerOpen = false))
+    }
+  }
+
+  fun inspectSnapshotBackup(snapshot: SnapshotFileInfo) {
+    val backupUriStr = _uiState.value.settings.persistentBackupFolderUri ?: return
+    val backupUri = Uri.parse(backupUriStr)
+    viewModelScope.launch {
+      _uiState.update {
+        it.copy(
+          restoreUiState = it.restoreUiState.copy(
+            isSnapshotPickerOpen = false,
+            isInspecting = true
+          )
+        )
+      }
+      val res = PersistentConfigRestoreEngine.inspectSnapshotFromTree(app, backupUri, snapshot)
+      res.onSuccess { summary ->
+        val relinkUri = _uiState.value.settings.folderUri?.takeIf { it != DemoTrackManager.DEMO_FOLDER_URI }
+        _uiState.update {
+          it.copy(
+            restoreUiState = it.restoreUiState.copy(
+              isInspecting = false,
+              pendingInspection = summary,
+              selectedRelinkMusicUri = relinkUri,
+              selectedRelinkMusicName = _uiState.value.settings.folderName
+            )
+          )
+        }
+      }.onFailure { err ->
+        _uiState.update {
+          it.copy(
+            restoreUiState = it.restoreUiState.copy(isInspecting = false),
+            errorMessage = err.localizedMessage ?: "Snapshot korup atau tidak bisa dibaca"
+          )
+        }
+      }
+    }
+  }
+
+  fun dismissRestorePreview() {
+    _uiState.update { state ->
+      state.copy(
+        restoreUiState = state.restoreUiState.copy(
+          pendingInspection = null,
+          selectedRelinkMusicUri = null,
+          selectedRelinkMusicName = null
+        )
+      )
+    }
+  }
+
+  fun confirmApplyRestore(options: RestoreSelectionOptions) {
+    val inspection = _uiState.value.restoreUiState.pendingInspection ?: return
+    val relinkMusicUriStr = _uiState.value.restoreUiState.selectedRelinkMusicUri
+      ?: inspection.detectedMusicFolderUri
+      ?: _uiState.value.settings.folderUri?.takeIf { it != DemoTrackManager.DEMO_FOLDER_URI }
+    val musicTreeUri = relinkMusicUriStr?.let { runCatching { Uri.parse(it) }.getOrNull() }
+
+    viewModelScope.launch {
+      audioEngine.stopAll()
+      audioEngine.stopCuePreview()
+      sequencerEngine.stop()
+
+      _uiState.update {
+        it.copy(
+          restoreUiState = it.restoreUiState.copy(
+            pendingInspection = null,
+            isRestoreInProgress = true,
+            restoreProgress = 0.05f,
+            restoreStageText = "Memulai pemulihan config…"
+          )
+        )
+      }
+
+      val outcome = persistentConfigManager.pauseSyncDuring {
+        PersistentConfigRestoreEngine.applyRestore(
+          context = app,
+          dao = dao,
+          settingsRepo = settingsRepo,
+          inspection = inspection,
+          options = options,
+          musicFolderUri = musicTreeUri,
+          onProgress = { pct, label ->
+            _uiState.update { cur ->
+              cur.copy(
+                restoreUiState = cur.restoreUiState.copy(
+                  restoreProgress = pct,
+                  restoreStageText = label
+                )
+              )
+            }
+          }
+        )
+      }
+
+      if (outcome.success) {
+        undoStack.clear()
+        redoStack.clear()
+        val activeProfileId = dao.getAllProfilesOnce().firstOrNull { it.isActive }?.id
+          ?: DEFAULT_PROFILE_ID
+        lastLoadedProfileId = activeProfileId
+        val preload = _uiState.value.settings.preloadShortAudio
+        loadProfilePads(activeProfileId, preload)
+        val restoredGs = inspection.bundle.settings.settings
+        if (options.restoreSettings) {
+          audioEngine.setMasterEq(restoredGs.masterEqEnabled, restoredGs.masterEqBandsDb)
+        }
+        val activeMusicStr = musicTreeUri?.toString()
+          ?: restoredGs.folderUri?.takeIf { it != DemoTrackManager.DEMO_FOLDER_URI }
+        if (!activeMusicStr.isNullOrBlank()) {
+          lastObservedFolderUri = activeMusicStr
+        }
+
+        val summaryStatus = buildString {
+          append("Config dipulihkan: ${outcome.restoredProfileCount} profil, ${outcome.restoredPadCount} pad")
+          if (outcome.relinkedPadCount > 0) {
+            append(" · ${outcome.relinkedPadCount} file ditautkan")
+          }
+          if (outcome.missingFilePadCount > 0) {
+            append(" · ${outcome.missingFilePadCount} file hilang (lihat Log Error)")
+          }
+        }
+        _uiState.update {
+          it.copy(
+            canUndoEdit = false,
+            canRedoEdit = false,
+            statusMessage = summaryStatus,
+            restoreUiState = RestoreUiState(lastRestoreOutcome = outcome)
+          )
+        }
+        persistentConfigManager.notifyConfigDirty("restore_completed")
+      } else {
+        _uiState.update {
+          it.copy(
+            errorMessage = outcome.errorMessage ?: "Gagal memulihkan config",
+            restoreUiState = RestoreUiState(lastRestoreOutcome = outcome)
+          )
+        }
+      }
+    }
+  }
+
+  fun exportConfigZipToUri(targetUri: Uri) {
+    viewModelScope.launch {
+      val gs = _uiState.value.settings
+      val bundle = PersistentConfigSnapshotAssembler.captureFromDatabase(
+        dao = dao,
+        settings = gs,
+        context = app,
+        appVersionName = BuildConfig.VERSION_NAME,
+        appVersionCode = BuildConfig.VERSION_CODE,
+        includeWaveforms = gs.persistentIncludeWaveforms,
+        computeFileHashes = true,
+        outputDeviceNameResolver = { devId ->
+          if (devId == null) null else AudioOutputRouter.listOutputDevices(app).firstOrNull { it.id == devId }?.name
+        }
+      )
+      ZipBackupArchiver.exportBundleToUri(app, bundle, targetUri, gs.persistentIncludeWaveforms)
+        .onSuccess { count ->
+          _uiState.update {
+            it.copy(statusMessage = "Arsip backup .zip tersimpan ($count file config)")
+          }
+        }
+        .onFailure { err ->
+          _uiState.update {
+            it.copy(errorMessage = "Export .zip gagal: ${err.localizedMessage}")
+          }
+        }
+    }
+  }
+
+  fun prepareAndShareConfigZip(onIntentReady: (Intent) -> Unit) {
+    viewModelScope.launch {
+      val gs = _uiState.value.settings
+      val bundle = PersistentConfigSnapshotAssembler.captureFromDatabase(
+        dao = dao,
+        settings = gs,
+        context = app,
+        appVersionName = BuildConfig.VERSION_NAME,
+        appVersionCode = BuildConfig.VERSION_CODE,
+        includeWaveforms = gs.persistentIncludeWaveforms,
+        computeFileHashes = true,
+        outputDeviceNameResolver = { devId ->
+          if (devId == null) null else AudioOutputRouter.listOutputDevices(app).firstOrNull { it.id == devId }?.name
+        }
+      )
+      ZipBackupArchiver.createShareableZipFile(app, bundle, gs.persistentIncludeWaveforms)
+        .onSuccess { (_, contentUri) ->
+          val chooser = ZipBackupArchiver.buildShareBackupIntent(app, contentUri)
+          onIntentReady(chooser)
+        }
+        .onFailure { err ->
+          _uiState.update {
+            it.copy(errorMessage = "Gagal menyiapkan file backup untuk dibagikan: ${err.localizedMessage}")
+          }
+        }
+    }
+  }
+
+  fun deleteAllConfig(alsoClearSafBackupFolder: Boolean) {
+    viewModelScope.launch {
+      audioEngine.stopAll()
+      audioEngine.stopCuePreview()
+      sequencerEngine.stop()
+      folderObserverJob?.cancel()
+
+      persistentConfigManager.pauseSyncDuring {
+        if (alsoClearSafBackupFolder) {
+          persistentConfigManager.clearBackupFolderFilesIfConfigured()
+        }
+        dao.clearAllConfigTables()
+        val now = System.currentTimeMillis()
+        dao.upsertProfile(
+          PadProfileEntity(
+            id = DEFAULT_PROFILE_ID,
+            name = DEFAULT_PROFILE_NAME,
+            folderUri = null,
+            gridPreset = GridPreset.GRID_4X4.name,
+            gridRows = 4,
+            gridCols = 4,
+            createdAtMs = now,
+            updatedAtMs = now,
+            isActive = true
+          )
+        )
+        settingsRepo.resetAllSettingsToDefaults(clearBackupFolder = alsoClearSafBackupFolder)
+      }
+
+      runCatching { PadSchedulerManager.rescheduleAllActive(app) }
+      undoStack.clear()
+      redoStack.clear()
+      lastObservedFolderUri = null
+      lastLoadedProfileId = DEFAULT_PROFILE_ID
+      audioEngine.updatePlaylist(emptyList())
+      sequencerEngine.updateAvailablePads(emptyList())
+      audioEngine.setMasterEq(false, listOf(0f, 0f, 0f, 0f, 0f))
+
+      _uiState.update {
+        it.copy(
+          pads = emptyList(),
+          midiCcMappings = emptyList(),
+          midiPcMappings = emptyList(),
+          preloadedCount = 0,
+          canUndoEdit = false,
+          canRedoEdit = false,
+          statusMessage = "Semua config berhasil dihapus & dikembalikan ke awal"
+        )
+      }
+    }
   }
 
   private suspend fun loadProfilePads(profileId: String, preloadRam: Boolean) {
@@ -3487,12 +4165,44 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
     var nextPos = (existingEntities.maxOfOrNull { it.positionIndex } ?: -1) + 1
     var newFilesCount = 0
     val mergedPads = mutableListOf<SoundPad>()
+    val relinkedScannedUris = mutableSetOf<String>()
+    val preservedEntityIds = mutableSetOf<String>()
+
+    // Langkah 1: Cocokkan lebih dulu pad "File hilang" (hasil restore) ke file musik hasil scan baru
+    val missingRestoredEntities = existingEntities.filter {
+      it.errorMessage?.startsWith(PersistentConfigRestoreEngine.MISSING_FILE_ERROR_PREFIX) == true
+    }
+    for (missingEntity in missingRestoredEntities) {
+      val matchedScanned = AudioFileRelinker.matchScannedPadToMissingEntity(result.pads, missingEntity)
+      if (matchedScanned != null) {
+        preservedEntityIds.add(missingEntity.id)
+        relinkedScannedUris.add(matchedScanned.uriString)
+        mergedPads.add(
+          mergeScannedWithEntity(
+            scanned = matchedScanned,
+            entity = missingEntity,
+            settings = existingSettings[missingEntity.id].toDomain(),
+            isPreloadedInRam = matchedScanned.id in preloadedIds || ramCache.isCached(matchedScanned.uriString)
+          )
+        )
+      } else {
+        // File tetap belum ditemukan -> pertahankan posisi slot & penanda "File hilang"
+        preservedEntityIds.add(missingEntity.id)
+        mergedPads.add(
+          entityToDomain(missingEntity, existingSettings[missingEntity.id].toDomain()).copy(
+            isPreloadedInRam = false
+          )
+        )
+      }
+    }
 
     val scannedUris = result.pads.map { it.uriString }.toSet()
     for (scanned in result.pads) {
-      val matchingExisting = existingByUri[scanned.uriString]
-      if (!matchingExisting.isNullOrEmpty()) {
+      val matchingExisting = existingByUri[scanned.uriString].orEmpty()
+        .filter { it.id !in preservedEntityIds }
+      if (matchingExisting.isNotEmpty()) {
         for (entity in matchingExisting) {
+          preservedEntityIds.add(entity.id)
           mergedPads.add(
             mergeScannedWithEntity(
               scanned = scanned,
@@ -3502,7 +4212,7 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
             )
           )
         }
-      } else {
+      } else if (scanned.uriString !in relinkedScannedUris) {
         newFilesCount++
         mergedPads.add(
           scanned.copy(
@@ -3514,7 +4224,9 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
     }
 
     existingEntities.filter {
-      it.uriString !in scannedUris && it.uriString.startsWith("file://")
+      it.id !in preservedEntityIds &&
+        it.uriString !in scannedUris &&
+        (it.uriString.startsWith("file://") || it.uriString.startsWith("demo://"))
     }.forEach { localEntity ->
       mergedPads.add(
         entityToDomain(localEntity, existingSettings[localEntity.id].toDomain()).copy(
@@ -3566,6 +4278,7 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
     )
     val entities = normalized.map { it.toPadEntity(profileId) }
     dao.syncProfilePadsPreservingSettings(profile, entities)
+    persistentConfigManager.notifyConfigDirty("scan_folder")
 
     audioEngine.updatePlaylist(normalized)
     _uiState.update {

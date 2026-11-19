@@ -91,6 +91,9 @@ fun MidiControllerSheet(
   pcMappings: List<MidiProgramBankMapping> = emptyList(),
   onArmBankPcLearn: (Int, String) -> Unit = { _, _ -> },
   onClearBankPcMapping: (Int) -> Unit = {},
+  focusModeMidiNote: Int? = null,
+  onArmFocusModeLearn: () -> Unit = {},
+  onClearFocusModeNote: () -> Unit = {},
   onDismiss: () -> Unit
 ) {
   val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -203,6 +206,7 @@ fun MidiControllerSheet(
                 is MidiLearnTarget.CcControl -> "Waiting MIDI CC fader/knob for \"${midiLearnTarget.target.label}\""
                 is MidiLearnTarget.ProgramChangeBank -> "Waiting MIDI Program Change for Bank \"${midiLearnTarget.bankLabel}\""
                 is MidiLearnTarget.SequencerPlaylistNote -> "Waiting MIDI Note On for Playlist \"${midiLearnTarget.playlistName}\""
+                MidiLearnTarget.FocusModeNote -> "Waiting MIDI Note On untuk \"Toggle Fokus Mode\""
               }
               Surface(
                 shape = RoundedCornerShape(8.dp),
@@ -704,6 +708,86 @@ fun MidiControllerSheet(
                     contentDescription = if (isArmed) "Cancel Program Change Learn" else "Learn Program Change for ${bank.title}"
                   )
                 }
+              }
+            }
+          }
+        }
+      }
+
+      // Focus Mode MIDI Note Trigger
+      item(key = "focus_mode_midi_note") {
+        val isArmed = midiLearnTarget == MidiLearnTarget.FocusModeNote
+        Surface(
+          shape = RoundedCornerShape(10.dp),
+          color = if (isArmed) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceContainer,
+          border = BorderStroke(
+            width = 1.dp,
+            color = if (isArmed) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.outlineVariant
+          )
+        ) {
+          Row(
+            modifier = Modifier
+              .fillMaxWidth()
+              .padding(horizontal = 12.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+          ) {
+            Column(modifier = Modifier.weight(1f)) {
+              Text(
+                text = "Toggle Fokus Mode (MIDI Note)",
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.Medium,
+                color = MaterialTheme.colorScheme.onSurface
+              )
+              Text(
+                text = when {
+                  isArmed -> "Tekan tuts / pad MIDI untuk toggle Mode Fokus..."
+                  focusModeMidiNote != null -> "Note ${MidiMessageParser.formatNoteName(focusModeMidiNote)}"
+                  else -> "Unassigned"
+                },
+                style = MaterialTheme.typography.labelSmall,
+                color = when {
+                  isArmed -> MaterialTheme.colorScheme.secondary
+                  focusModeMidiNote != null -> MaterialTheme.colorScheme.primary
+                  else -> MaterialTheme.colorScheme.onSurfaceVariant
+                }
+              )
+            }
+
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+              if (focusModeMidiNote != null) {
+                IconButton(
+                  onClick = onClearFocusModeNote,
+                  modifier = Modifier
+                    .minimumInteractiveComponentSize()
+                    .testTag("clear_focus_mode_midi_note")
+                ) {
+                  Icon(
+                    imageVector = Icons.Filled.LinkOff,
+                    contentDescription = "Clear Focus Mode MIDI note",
+                    tint = MaterialTheme.colorScheme.error
+                  )
+                }
+              }
+
+              FilledTonalIconButton(
+                onClick = { if (isArmed) onCancelLearn() else onArmFocusModeLearn() },
+                modifier = Modifier
+                  .minimumInteractiveComponentSize()
+                  .testTag("learn_focus_mode_midi_note"),
+                colors = if (isArmed) {
+                  IconButtonDefaults.filledTonalIconButtonColors(
+                    containerColor = MaterialTheme.colorScheme.secondary,
+                    contentColor = MaterialTheme.colorScheme.onSecondary
+                  )
+                } else {
+                  IconButtonDefaults.filledTonalIconButtonColors()
+                }
+              ) {
+                Icon(
+                  imageVector = if (isArmed) Icons.Filled.Close else Icons.Filled.Sensors,
+                  contentDescription = if (isArmed) "Cancel Focus Mode MIDI Learn" else "Learn MIDI note for Focus Mode"
+                )
               }
             }
           }

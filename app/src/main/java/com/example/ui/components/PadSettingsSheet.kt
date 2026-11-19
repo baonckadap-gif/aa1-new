@@ -82,6 +82,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.R
 import com.example.audio.StereoPanMath
+import com.example.domain.model.DefaultPadColorMode
 import com.example.domain.model.EqPreset
 import com.example.domain.model.FadeCurve
 import com.example.domain.model.FxPreset
@@ -112,6 +113,8 @@ fun PadSettingsSheet(
   allPads: List<SoundPad>,
   defaultPadShape: PadShapeStyle,
   defaultCornerGlowColor: Color,
+  defaultPadColorMode: DefaultPadColorMode = DefaultPadColorMode.GRAY,
+  defaultCustomPadColorArgb: Long = SoundPadColorPalette.DEFAULT_CUSTOM_PAD_COLOR_ARGB,
   isCuePlaying: Boolean = false,
   isPreparingReverse: Boolean = false,
   onSelectPad: (String) -> Unit,
@@ -458,6 +461,8 @@ fun PadSettingsSheet(
             globalCrossfadeEnabled = false,
             defaultPadShape = defaultPadShape,
             defaultCornerGlowColor = defaultCornerGlowColor,
+            defaultPadColorMode = defaultPadColorMode,
+            defaultCustomPadColorArgb = defaultCustomPadColorArgb,
             onClick = { previewPlaying = !previewPlaying },
             onHoldStart = {},
             onHoldRelease = {},
@@ -483,7 +488,8 @@ fun PadSettingsSheet(
             OutlinedIconButton(
               onClick = {
                 val reset = PadVisualConfig(
-                  displayName = pad.fileName.substringBeforeLast('.')
+                  displayName = pad.fileName.substringBeforeLast('.'),
+                  glowIntensity = 0f
                 )
                 commitVisual(reset)
               },

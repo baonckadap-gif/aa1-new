@@ -12,6 +12,7 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.example.data.profile.ProfileJsonSerializer
 import com.example.domain.model.AppLanguage
+import com.example.domain.model.DefaultPadColorMode
 import com.example.domain.model.EqPreset
 import com.example.domain.model.FadeCurve
 import com.example.domain.model.GlobalSettings
@@ -74,6 +75,25 @@ class GlobalSettingsRepository(private val context: Context) {
     val HAS_COMPLETED_ONBOARDING = booleanPreferencesKey("has_completed_onboarding")
     val SHOW_FEATURE_TOOLTIPS = booleanPreferencesKey("show_feature_tooltips")
     val APP_LANGUAGE = stringPreferencesKey("app_language")
+    val DEFAULT_PAD_COLOR_MODE = stringPreferencesKey("default_pad_color_mode")
+    val DEFAULT_PAD_COLOR_ARGB = longPreferencesKey("default_pad_color_argb")
+    val IS_FOCUS_MODE = booleanPreferencesKey("is_focus_mode")
+    val START_IN_FOCUS_MODE = booleanPreferencesKey("start_in_focus_mode")
+    val FOCUS_CORNER_PANIC_ENABLED = booleanPreferencesKey("focus_corner_panic_enabled")
+    val FOCUS_MODE_MIDI_NOTE = intPreferencesKey("focus_mode_midi_note")
+    val PREFERRED_MAIN_OUTPUT_ID = intPreferencesKey("preferred_main_output_id")
+    val PREFERRED_MAIN_OUTPUT_NAME = stringPreferencesKey("preferred_main_output_name")
+    val PREFERRED_CUE_OUTPUT_ID = intPreferencesKey("preferred_cue_output_id")
+    val PREFERRED_CUE_OUTPUT_NAME = stringPreferencesKey("preferred_cue_output_name")
+    val AUDIO_BUFFER_SIZE_MS = intPreferencesKey("audio_buffer_size_ms")
+    val PERSISTENT_BACKUP_FOLDER_URI = stringPreferencesKey("persistent_backup_folder_uri")
+    val PERSISTENT_BACKUP_FOLDER_NAME = stringPreferencesKey("persistent_backup_folder_name")
+    val PERSISTENT_AUTO_SYNC_ENABLED = booleanPreferencesKey("persistent_auto_sync_enabled")
+    val PERSISTENT_LAST_SYNC_AT_MS = longPreferencesKey("persistent_last_sync_at_ms")
+    val PERSISTENT_INCLUDE_WAVEFORMS = booleanPreferencesKey("persistent_include_waveforms")
+    val HAS_PROMPTED_BACKUP_FOLDER = booleanPreferencesKey("has_prompted_backup_folder")
+    val LAST_DAILY_SNAPSHOT_DAY = stringPreferencesKey("last_daily_snapshot_day")
+    val LAST_BACKED_UP_VERSION_CODE = intPreferencesKey("last_backed_up_version_code")
   }
 
   val settingsFlow: Flow<GlobalSettings> = context.soundPadDataStore.data.map { prefs ->
@@ -117,6 +137,10 @@ class GlobalSettingsRepository(private val context: Context) {
       prefs[Keys.APP_LANGUAGE]?.let { AppLanguage.valueOf(it) }
     }.getOrNull() ?: AppLanguage.SYSTEM
 
+    val defaultPadColorMode = runCatching {
+      prefs[Keys.DEFAULT_PAD_COLOR_MODE]?.let { DefaultPadColorMode.valueOf(it) }
+    }.getOrNull() ?: DefaultPadColorMode.GRAY
+
     GlobalSettings(
       activeProfileId = prefs[Keys.ACTIVE_PROFILE_ID] ?: "default_profile",
       folderUri = prefs[Keys.FOLDER_URI],
@@ -158,7 +182,23 @@ class GlobalSettingsRepository(private val context: Context) {
       doubleTapToStopEnabled = prefs[Keys.DOUBLE_TAP_STOP_ENABLED] ?: true,
       hasCompletedOnboarding = prefs[Keys.HAS_COMPLETED_ONBOARDING] ?: false,
       showFeatureTooltips = prefs[Keys.SHOW_FEATURE_TOOLTIPS] ?: true,
-      appLanguage = appLanguage
+      appLanguage = appLanguage,
+      defaultPadColorMode = defaultPadColorMode,
+      defaultPadColorArgb = prefs[Keys.DEFAULT_PAD_COLOR_ARGB] ?: 0xFF4A4F57L,
+      isFocusMode = prefs[Keys.IS_FOCUS_MODE] ?: false,
+      startInFocusMode = prefs[Keys.START_IN_FOCUS_MODE] ?: false,
+      focusCornerPanicEnabled = prefs[Keys.FOCUS_CORNER_PANIC_ENABLED] ?: true,
+      focusModeMidiNote = prefs[Keys.FOCUS_MODE_MIDI_NOTE],
+      preferredMainOutputId = prefs[Keys.PREFERRED_MAIN_OUTPUT_ID],
+      preferredMainOutputName = prefs[Keys.PREFERRED_MAIN_OUTPUT_NAME],
+      preferredCueOutputId = prefs[Keys.PREFERRED_CUE_OUTPUT_ID],
+      preferredCueOutputName = prefs[Keys.PREFERRED_CUE_OUTPUT_NAME],
+      audioBufferSizeMs = (prefs[Keys.AUDIO_BUFFER_SIZE_MS] ?: 50).coerceIn(20, 500),
+      persistentBackupFolderUri = prefs[Keys.PERSISTENT_BACKUP_FOLDER_URI],
+      persistentBackupFolderName = prefs[Keys.PERSISTENT_BACKUP_FOLDER_NAME],
+      persistentAutoSyncEnabled = prefs[Keys.PERSISTENT_AUTO_SYNC_ENABLED] ?: true,
+      persistentLastSyncAtMs = prefs[Keys.PERSISTENT_LAST_SYNC_AT_MS] ?: 0L,
+      persistentIncludeWaveforms = prefs[Keys.PERSISTENT_INCLUDE_WAVEFORMS] ?: false
     )
   }
 
@@ -326,4 +366,231 @@ class GlobalSettingsRepository(private val context: Context) {
   suspend fun setAppLanguage(language: AppLanguage) {
     context.soundPadDataStore.edit { prefs -> prefs[Keys.APP_LANGUAGE] = language.name }
   }
+
+  suspend fun setDefaultPadColorMode(mode: DefaultPadColorMode) {
+    context.soundPadDataStore.edit { prefs -> prefs[Keys.DEFAULT_PAD_COLOR_MODE] = mode.name }
+  }
+
+  suspend fun setDefaultPadColorArgb(colorArgb: Long) {
+    context.soundPadDataStore.edit { prefs -> prefs[Keys.DEFAULT_PAD_COLOR_ARGB] = colorArgb }
+  }
+
+  suspend fun setFocusMode(enabled: Boolean) {
+    context.soundPadDataStore.edit { prefs -> prefs[Keys.IS_FOCUS_MODE] = enabled }
+  }
+
+  suspend fun setStartInFocusMode(enabled: Boolean) {
+    context.soundPadDataStore.edit { prefs -> prefs[Keys.START_IN_FOCUS_MODE] = enabled }
+  }
+
+  suspend fun setFocusCornerPanicEnabled(enabled: Boolean) {
+    context.soundPadDataStore.edit { prefs -> prefs[Keys.FOCUS_CORNER_PANIC_ENABLED] = enabled }
+  }
+
+  suspend fun setFocusModeMidiNote(note: Int?) {
+    context.soundPadDataStore.edit { prefs ->
+      if (note == null) {
+        prefs.remove(Keys.FOCUS_MODE_MIDI_NOTE)
+      } else {
+        prefs[Keys.FOCUS_MODE_MIDI_NOTE] = note.coerceIn(0, 127)
+      }
+    }
+  }
+
+  suspend fun setPreferredMainOutput(deviceId: Int?, deviceName: String?) {
+    context.soundPadDataStore.edit { prefs ->
+      if (deviceId == null) prefs.remove(Keys.PREFERRED_MAIN_OUTPUT_ID)
+      else prefs[Keys.PREFERRED_MAIN_OUTPUT_ID] = deviceId
+      if (deviceName.isNullOrBlank()) prefs.remove(Keys.PREFERRED_MAIN_OUTPUT_NAME)
+      else prefs[Keys.PREFERRED_MAIN_OUTPUT_NAME] = deviceName
+    }
+  }
+
+  suspend fun setPreferredCueOutput(deviceId: Int?, deviceName: String?) {
+    context.soundPadDataStore.edit { prefs ->
+      if (deviceId == null) prefs.remove(Keys.PREFERRED_CUE_OUTPUT_ID)
+      else prefs[Keys.PREFERRED_CUE_OUTPUT_ID] = deviceId
+      if (deviceName.isNullOrBlank()) prefs.remove(Keys.PREFERRED_CUE_OUTPUT_NAME)
+      else prefs[Keys.PREFERRED_CUE_OUTPUT_NAME] = deviceName
+    }
+  }
+
+  suspend fun setAudioBufferSizeMs(bufferMs: Int) {
+    context.soundPadDataStore.edit { prefs ->
+      prefs[Keys.AUDIO_BUFFER_SIZE_MS] = bufferMs.coerceIn(20, 500)
+    }
+  }
+
+  suspend fun setPersistentBackupFolder(uri: String?, name: String?) {
+    context.soundPadDataStore.edit { prefs ->
+      if (uri.isNullOrBlank()) prefs.remove(Keys.PERSISTENT_BACKUP_FOLDER_URI)
+      else prefs[Keys.PERSISTENT_BACKUP_FOLDER_URI] = uri
+      if (name.isNullOrBlank()) prefs.remove(Keys.PERSISTENT_BACKUP_FOLDER_NAME)
+      else prefs[Keys.PERSISTENT_BACKUP_FOLDER_NAME] = name
+    }
+  }
+
+  suspend fun setPersistentAutoSyncEnabled(enabled: Boolean) {
+    context.soundPadDataStore.edit { prefs ->
+      prefs[Keys.PERSISTENT_AUTO_SYNC_ENABLED] = enabled
+    }
+  }
+
+  suspend fun setPersistentLastSyncAtMs(timestampMs: Long) {
+    context.soundPadDataStore.edit { prefs ->
+      prefs[Keys.PERSISTENT_LAST_SYNC_AT_MS] = timestampMs.coerceAtLeast(0L)
+    }
+  }
+
+  suspend fun setPersistentIncludeWaveforms(include: Boolean) {
+    context.soundPadDataStore.edit { prefs ->
+      prefs[Keys.PERSISTENT_INCLUDE_WAVEFORMS] = include
+    }
+  }
+
+  val hasPromptedBackupFolderFlow: Flow<Boolean> = context.soundPadDataStore.data.map { prefs ->
+    prefs[Keys.HAS_PROMPTED_BACKUP_FOLDER] ?: false
+  }
+
+  val persistentSyncMetaFlow: Flow<PersistentSyncInternalMeta> = context.soundPadDataStore.data.map { prefs ->
+    PersistentSyncInternalMeta(
+      hasPromptedBackupFolder = prefs[Keys.HAS_PROMPTED_BACKUP_FOLDER] ?: false,
+      lastDailySnapshotDay = prefs[Keys.LAST_DAILY_SNAPSHOT_DAY] ?: "",
+      lastBackedUpVersionCode = prefs[Keys.LAST_BACKED_UP_VERSION_CODE] ?: 0
+    )
+  }
+
+  suspend fun setHasPromptedBackupFolder(prompted: Boolean) {
+    context.soundPadDataStore.edit { prefs ->
+      prefs[Keys.HAS_PROMPTED_BACKUP_FOLDER] = prompted
+    }
+  }
+
+  suspend fun setLastDailySnapshotDay(dayIso: String) {
+    context.soundPadDataStore.edit { prefs ->
+      prefs[Keys.LAST_DAILY_SNAPSHOT_DAY] = dayIso
+    }
+  }
+
+  suspend fun setLastBackedUpVersionCode(versionCode: Int) {
+    context.soundPadDataStore.edit { prefs ->
+      prefs[Keys.LAST_BACKED_UP_VERSION_CODE] = versionCode.coerceAtLeast(0)
+    }
+  }
+
+  suspend fun applyRestoredGlobalSettings(
+    gs: GlobalSettings,
+    restoreSyncFolderConfig: Boolean = false
+  ) {
+    context.soundPadDataStore.edit { prefs ->
+      prefs[Keys.ACTIVE_PROFILE_ID] = gs.activeProfileId
+      if (!gs.folderUri.isNullOrBlank()) {
+        prefs[Keys.FOLDER_URI] = gs.folderUri
+      }
+      if (!gs.folderName.isNullOrBlank()) {
+        prefs[Keys.FOLDER_NAME] = gs.folderName
+      }
+      prefs[Keys.GRID_PRESET] = gs.gridConfig.preset.name
+      prefs[Keys.GRID_ROWS] = gs.gridConfig.rows.coerceIn(1, 16)
+      prefs[Keys.GRID_COLS] = gs.gridConfig.cols.coerceIn(1, 16)
+      prefs[Keys.PLAY_MODE] = gs.playMode.name
+      prefs[Keys.MASTER_VOLUME] = gs.masterVolume.coerceIn(0f, 1f)
+      prefs[Keys.MASTER_PAN] = gs.masterPan.coerceIn(-1f, 1f)
+      prefs[Keys.MASTER_EQ_ENABLED] = gs.masterEqEnabled
+      prefs[Keys.MASTER_EQ_PRESET] = gs.masterEqPreset.name
+      prefs[Keys.MASTER_EQ_BANDS_JSON] = ProfileJsonSerializer.encodeEqBandsString(gs.masterEqBandsDb)
+      prefs[Keys.MINI_WAVEFORM_ENABLED] = gs.miniWaveformEnabled
+      prefs[Keys.PRELOAD_SHORT_AUDIO] = gs.preloadShortAudio
+      prefs[Keys.AUDIO_EFFECTS_ENABLED] = gs.audioEffectsEnabled
+      prefs[Keys.VISUAL_EFFECTS_ENABLED] = gs.visualEffectsEnabled
+      prefs[Keys.KEEP_SCREEN_ON] = gs.keepScreenOn
+      prefs[Keys.THEME_MODE] = gs.themeMode.name
+      prefs[Keys.USE_DYNAMIC_COLOR] = gs.useDynamicColor
+      prefs[Keys.APP_ACCENT_COLOR_ARGB] = gs.appAccentColorArgb
+      prefs[Keys.PAD_GRID_SPACING_DP] = gs.padGridSpacingDp.coerceIn(2, 16)
+      prefs[Keys.DEFAULT_PAD_SHAPE] = gs.defaultPadShape.name
+      prefs[Keys.DEFAULT_CORNER_GLOW_ARGB] = gs.defaultCornerGlowArgb
+      prefs[Keys.BOTTOM_BAR_VISIBLE] = gs.isBottomBarVisible
+      prefs[Keys.FULLSCREEN] = gs.isFullscreen
+      prefs[Keys.GLOBAL_FADE_IN_MS] = gs.globalFadeInMs.coerceIn(0L, 10000L)
+      prefs[Keys.GLOBAL_FADE_OUT_MS] = gs.globalFadeOutMs.coerceIn(0L, 10000L)
+      prefs[Keys.GLOBAL_FADE_CURVE] = gs.globalFadeCurve.name
+      prefs[Keys.GLOBAL_CROSSFADE_ENABLED] = gs.globalCrossfadeEnabled
+      prefs[Keys.CROSSFADE_DURATION_MS] = gs.crossfadeDurationMs.coerceIn(200L, 12000L)
+      prefs[Keys.CROSSFADE_CURVE] = gs.crossfadeCurve.name
+      prefs[Keys.MASTER_LIMITER_ENABLED] = gs.masterLimiterEnabled
+      prefs[Keys.DUCKING_ENABLED] = gs.duckingEnabled
+      prefs[Keys.DUCKING_ATTENUATION] = gs.duckingAttenuation.coerceIn(0.05f, 0.90f)
+      prefs[Keys.AUTO_NORMALIZE_ENABLED] = gs.autoNormalizeEnabled
+      prefs[Keys.IS_LOCKED] = gs.isLocked
+      prefs[Keys.IS_GLOBAL_CUE_ENABLED] = gs.isGlobalCueEnabled
+      prefs[Keys.HAPTIC_INTENSITY] = gs.hapticIntensity.name
+      prefs[Keys.SWIPE_PAD_VOLUME_ENABLED] = gs.swipePadVolumeEnabled
+      prefs[Keys.DOUBLE_TAP_STOP_ENABLED] = gs.doubleTapToStopEnabled
+      prefs[Keys.SHOW_FEATURE_TOOLTIPS] = gs.showFeatureTooltips
+      prefs[Keys.APP_LANGUAGE] = gs.appLanguage.name
+      prefs[Keys.DEFAULT_PAD_COLOR_MODE] = gs.defaultPadColorMode.name
+      prefs[Keys.DEFAULT_PAD_COLOR_ARGB] = gs.defaultPadColorArgb
+      prefs[Keys.IS_FOCUS_MODE] = gs.isFocusMode
+      prefs[Keys.START_IN_FOCUS_MODE] = gs.startInFocusMode
+      prefs[Keys.FOCUS_CORNER_PANIC_ENABLED] = gs.focusCornerPanicEnabled
+      if (gs.focusModeMidiNote != null) {
+        prefs[Keys.FOCUS_MODE_MIDI_NOTE] = gs.focusModeMidiNote.coerceIn(0, 127)
+      } else {
+        prefs.remove(Keys.FOCUS_MODE_MIDI_NOTE)
+      }
+      if (gs.preferredMainOutputId != null) {
+        prefs[Keys.PREFERRED_MAIN_OUTPUT_ID] = gs.preferredMainOutputId
+      } else {
+        prefs.remove(Keys.PREFERRED_MAIN_OUTPUT_ID)
+      }
+      if (!gs.preferredMainOutputName.isNullOrBlank()) {
+        prefs[Keys.PREFERRED_MAIN_OUTPUT_NAME] = gs.preferredMainOutputName
+      } else {
+        prefs.remove(Keys.PREFERRED_MAIN_OUTPUT_NAME)
+      }
+      if (gs.preferredCueOutputId != null) {
+        prefs[Keys.PREFERRED_CUE_OUTPUT_ID] = gs.preferredCueOutputId
+      } else {
+        prefs.remove(Keys.PREFERRED_CUE_OUTPUT_ID)
+      }
+      if (!gs.preferredCueOutputName.isNullOrBlank()) {
+        prefs[Keys.PREFERRED_CUE_OUTPUT_NAME] = gs.preferredCueOutputName
+      } else {
+        prefs.remove(Keys.PREFERRED_CUE_OUTPUT_NAME)
+      }
+      prefs[Keys.AUDIO_BUFFER_SIZE_MS] = gs.audioBufferSizeMs.coerceIn(20, 500)
+      prefs[Keys.PERSISTENT_AUTO_SYNC_ENABLED] = gs.persistentAutoSyncEnabled
+      prefs[Keys.PERSISTENT_INCLUDE_WAVEFORMS] = gs.persistentIncludeWaveforms
+      if (restoreSyncFolderConfig) {
+        if (!gs.persistentBackupFolderUri.isNullOrBlank()) {
+          prefs[Keys.PERSISTENT_BACKUP_FOLDER_URI] = gs.persistentBackupFolderUri
+        }
+        if (!gs.persistentBackupFolderName.isNullOrBlank()) {
+          prefs[Keys.PERSISTENT_BACKUP_FOLDER_NAME] = gs.persistentBackupFolderName
+        }
+      }
+    }
+  }
+
+  suspend fun resetAllSettingsToDefaults(clearBackupFolder: Boolean = true) {
+    context.soundPadDataStore.edit { prefs ->
+      val savedBackupUri = prefs[Keys.PERSISTENT_BACKUP_FOLDER_URI]
+      val savedBackupName = prefs[Keys.PERSISTENT_BACKUP_FOLDER_NAME]
+      prefs.clear()
+      prefs[Keys.HAS_COMPLETED_ONBOARDING] = true
+      if (!clearBackupFolder && !savedBackupUri.isNullOrBlank()) {
+        prefs[Keys.PERSISTENT_BACKUP_FOLDER_URI] = savedBackupUri
+        if (!savedBackupName.isNullOrBlank()) {
+          prefs[Keys.PERSISTENT_BACKUP_FOLDER_NAME] = savedBackupName
+        }
+      }
+    }
+  }
 }
+
+data class PersistentSyncInternalMeta(
+  val hasPromptedBackupFolder: Boolean = false,
+  val lastDailySnapshotDay: String = "",
+  val lastBackedUpVersionCode: Int = 0
+)

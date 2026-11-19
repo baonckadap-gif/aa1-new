@@ -67,6 +67,12 @@ enum class PadBadgeIcon(val label: String) {
   WAVE("Synth")
 }
 
+enum class DefaultPadColorMode(val label: String) {
+  GRAY("Abu-abu"),
+  AUTO("Otomatis berwarna"),
+  CUSTOM("Pilih sendiri")
+}
+
 enum class GridPreset(val rows: Int, val cols: Int, val label: String) {
   GRID_4X4(4, 4, "4×4"),
   GRID_10X10(10, 10, "10×10"),
@@ -210,7 +216,7 @@ data class SoundPad(
   val subfolderName: String = "",
   val colorArgb: Long? = null,
   val glowColorArgb: Long? = null,
-  val glowIntensity: Float = 1.0f,
+  val glowIntensity: Float = 0f,
   val shapeStyle: PadShapeStyle? = null, // null inherits GlobalSettings.defaultPadShape
   val borderColorArgb: Long? = null,
   val borderWidthDp: Float = 1.25f,
@@ -283,6 +289,8 @@ data class PadProfile(
   val padGridSpacingDp: Int? = null,
   val defaultPadShape: PadShapeStyle? = null,
   val defaultCornerGlowArgb: Long? = null,
+  val defaultPadColorMode: DefaultPadColorMode? = null,
+  val defaultPadColorArgb: Long? = null,
   val createdAtMs: Long,
   val updatedAtMs: Long,
   val isActive: Boolean,
@@ -357,7 +365,23 @@ data class GlobalSettings(
   val doubleTapToStopEnabled: Boolean = true,
   val hasCompletedOnboarding: Boolean = false,
   val showFeatureTooltips: Boolean = true,
-  val appLanguage: AppLanguage = AppLanguage.SYSTEM
+  val appLanguage: AppLanguage = AppLanguage.SYSTEM,
+  val defaultPadColorMode: DefaultPadColorMode = DefaultPadColorMode.GRAY,
+  val defaultPadColorArgb: Long = 0xFF4A4F57L,
+  val isFocusMode: Boolean = false,
+  val startInFocusMode: Boolean = false,
+  val focusCornerPanicEnabled: Boolean = true,
+  val focusModeMidiNote: Int? = null,
+  val preferredMainOutputId: Int? = null,
+  val preferredMainOutputName: String? = null,
+  val preferredCueOutputId: Int? = null,
+  val preferredCueOutputName: String? = null,
+  val audioBufferSizeMs: Int = 50,
+  val persistentBackupFolderUri: String? = null,
+  val persistentBackupFolderName: String? = null,
+  val persistentAutoSyncEnabled: Boolean = true,
+  val persistentLastSyncAtMs: Long = 0L,
+  val persistentIncludeWaveforms: Boolean = false
 )
 
 enum class MidiCcTarget(val label: String) {
@@ -365,7 +389,8 @@ enum class MidiCcTarget(val label: String) {
   PAD_SPEED("Live Speed Fader"),
   PAD_PITCH("Live Pitch Fader"),
   CROSSFADE_DURATION("Crossfade Time"),
-  STOP_ALL("Panic Stop All")
+  STOP_ALL("Panic Stop All"),
+  TOGGLE_FOCUS_MODE("Toggle Fokus Mode")
 }
 
 data class MidiCcMapping(
@@ -381,6 +406,7 @@ sealed interface MidiLearnTarget {
   data class CcControl(val target: MidiCcTarget) : MidiLearnTarget
   data class ProgramChangeBank(val bankIndex: Int, val bankLabel: String) : MidiLearnTarget
   data class SequencerPlaylistNote(val playlistId: String, val playlistName: String) : MidiLearnTarget
+  data object FocusModeNote : MidiLearnTarget
 }
 
 data class MidiProgramBankMapping(

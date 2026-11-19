@@ -35,6 +35,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.data.backup.SafPersistentConfigStorage
 import com.example.domain.model.AppLanguage
 import com.example.domain.model.PadErrorType
 import com.example.domain.model.SoundPad
@@ -72,13 +73,30 @@ class MainActivity : ComponentActivity() {
       contract = ActivityResultContracts.OpenDocumentTree()
     ) { uri ->
       if (uri != null) {
-        runCatching {
+        val rwOk = runCatching {
           contentResolver.takePersistableUriPermission(
             uri,
-            Intent.FLAG_GRANT_READ_URI_PERMISSION
+            Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
           )
+        }.isSuccess
+        if (!rwOk) {
+          runCatching {
+            contentResolver.takePersistableUriPermission(
+              uri,
+              Intent.FLAG_GRANT_READ_URI_PERMISSION
+            )
+          }
         }
         viewModel.onFolderSelected(uri)
+      }
+    }
+
+    val backupFolderPickerLauncher = rememberLauncherForActivityResult(
+      contract = ActivityResultContracts.OpenDocumentTree()
+    ) { uri ->
+      if (uri != null) {
+        SafPersistentConfigStorage.takePersistableRwPermission(this, uri)
+        viewModel.onPersistentBackupFolderSelected(uri)
       }
     }
 
@@ -172,19 +190,21 @@ class MainActivity : ComponentActivity() {
       mutableStateOf(PadSchedulerManager.canScheduleExactAlarms(this))
     }
 
-    LaunchedEffect(uiState.settings.keepScreenOn) {
-      if (uiState.settings.keepScreenOn) {
+    val keepAwake = uiState.settings.keepScreenOn || uiState.settings.isFocusMode
+    LaunchedEffect(keepAwake) {
+      if (keepAwake) {
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
       } else {
         window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
       }
     }
 
-    LaunchedEffect(uiState.settings.isFullscreen) {
+    val hideSystemBars = uiState.settings.isFullscreen || uiState.settings.isFocusMode
+    LaunchedEffect(hideSystemBars) {
       val controller = WindowCompat.getInsetsController(window, window.decorView)
       controller.systemBarsBehavior =
         WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-      if (uiState.settings.isFullscreen) {
+      if (hideSystemBars) {
         controller.hide(WindowInsetsCompat.Type.systemBars())
       } else {
         controller.show(WindowInsetsCompat.Type.systemBars())
@@ -194,9 +214,16 @@ class MainActivity : ComponentActivity() {
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
       val observer = LifecycleEventObserver { _, event ->
-        if (event == Lifecycle.Event.ON_RESUME) {
-          canScheduleExactAlarms = PadSchedulerManager.canScheduleExactAlarms(this@MainActivity)
-          viewModel.checkForNewFilesOnResume()
+        when (event) {
+          Lifecycle.Event.ON_RESUME -> {
+            canScheduleExactAlarms = PadSchedulerManager.canScheduleExactAlarms(this@MainActivity)
+            viewModel.checkForNewFilesOnResume()
+            viewModel.verifyBackupFolderAccess()
+          }
+          Lifecycle.Event.ON_STOP -> {
+            viewModel.onAppStopping()
+          }
+          else -> Unit
         }
       }
       lifecycleOwner.lifecycle.addObserver(observer)
@@ -227,7 +254,8 @@ class MainActivity : ComponentActivity() {
         exportCutWavLauncher = exportCutWavLauncher,
         recordAudioPermissionLauncher = recordAudioPermissionLauncher,
         bluetoothMidiPermissionLauncher = bluetoothMidiPermissionLauncher,
-        masterRecordFolderLauncher = masterRecordFolderLauncher
+        masterRecordFolderLauncher = masterRecordFolderLauncher,
+        backupFolderPickerLauncher = backupFolderPickerLauncher
       )
     }
 
@@ -322,9 +350,13 @@ class MainActivity : ComponentActivity() {
     private val exportCutWavLauncher: ActivityResultLauncher<String>,
     private val recordAudioPermissionLauncher: ActivityResultLauncher<String>,
     private val bluetoothMidiPermissionLauncher: ActivityResultLauncher<Array<String>>,
-    private val masterRecordFolderLauncher: ActivityResultLauncher<Uri?>
+    private val masterRecordFolderLauncher: ActivityResultLauncher<Uri?>,
+    private val backupFolderPickerLauncher: ActivityResultLauncher<Uri?>
   ) {
     val onPickFolderClick: () -> Unit = { folderPickerLauncher.launch(null) }
+    val onPickBackupFolderClick: () -> Unit = {
+      backupFolderPickerLauncher.launch(SafPersistentConfigStorage.buildSuggestedBackupInitialUri())
+    }
     val onLoadDemoTracks: () -> Unit = { viewModel.loadDemoTracks(showBanner = true) }
     val onOpenTrackCustomizerDefault: () -> Unit = { viewModel.openTrackCustomizer() }
     val onPadCustomizeClick: (SoundPad) -> Unit = { pad -> viewModel.openTrackCustomizer(pad.id) }
@@ -378,6 +410,50 @@ class MainActivity : ComponentActivity() {
     fun onPadTapped(pad: SoundPad, isEditMode: Boolean) {
       activity.handlePadTapped(pad, isEditMode, notificationPermissionLauncher)
     }
+
+    val onHapticIntensityChanged = viewModel::setHapticIntensity
+    val onSwipePadVolumeToggle = viewModel::setSwipePadVolumeEnabled
+    val onDoubleTapToStopToggle = viewModel::setDoubleTapToStopEnabled
+    val onHasCompletedOnboardingToggle = viewModel::setHasCompletedOnboarding
+    val onShowFeatureTooltipsToggle = viewModel::setShowFeatureTooltips
+    val onAppLanguageChanged = viewModel::setAppLanguage
+    val onOpenMasterRecorder = viewModel::openMasterRecordSheet
+    val onCloseMasterRecorder = viewModel::closeMasterRecordSheet
+    val onSelectMasterRecordSampleRate = viewModel::setMasterRecordSampleRate
+    val onToggleMasterRecordAutoAddPad = viewModel::setMasterRecordAutoAddAsPad
+    val onStartMasterRecording = viewModel::startMasterRecording
+    val onStopAndSaveMasterRecording = viewModel::stopAndSaveMasterRecording
+    val onOpenScheduler = viewModel::openSchedulerSheet
+    val onCloseScheduler = viewModel::closeSchedulerSheet
+    val onSaveScheduledTask = viewModel::saveScheduledTask
+    val onToggleScheduledTaskEnabled = viewModel::toggleScheduledTaskEnabled
+    val onDeleteScheduledTask = viewModel::deleteScheduledTask
+    val onTestTriggerScheduledTask = viewModel::testTriggerScheduledTask
+    val onOpenSequencer = viewModel::openSequencerSheet
+    val onCloseSequencer = viewModel::closeSequencerSheet
+    val onSaveSequencerPlaylist = viewModel::saveSequencerPlaylist
+    val onDeleteSequencerPlaylist = viewModel::deleteSequencerPlaylist
+    val onPlaySequencerPlaylist = viewModel::startSequencerPlaylist
+    val onToggleSequencerPlayPause = viewModel::toggleSequencerPlayPause
+    val onSequencerNext = viewModel::sequencerNext
+    val onSequencerPrev = viewModel::sequencerPrev
+    val onStopSequencer = viewModel::stopSequencer
+    val onArmSequencerMidiLearn = viewModel::armMidiLearnForSequencer
+    val onClearSequencerMidiTrigger = viewModel::clearSequencerMidiNote
+    val onArmMidiLearnForBankPc = viewModel::armMidiLearnForBankPc
+    val onClearMidiPcMappingForBank = viewModel::clearMidiPcMappingForBank
+    val onDefaultPadColorModeChanged = viewModel::setDefaultPadColorMode
+    val onDefaultPadColorArgbChanged = viewModel::setDefaultPadColorArgb
+    val onResetAllPadsToGray = viewModel::resetAllPadsToGray
+    val onSetFocusMode = viewModel::setFocusMode
+    val onToggleFocusMode = viewModel::toggleFocusMode
+    val onStartInFocusModeToggle = viewModel::setStartInFocusMode
+    val onFocusCornerPanicToggle = viewModel::setFocusCornerPanicEnabled
+    val onArmMidiLearnForFocusMode = viewModel::armMidiLearnForFocusMode
+    val onClearFocusModeMidiNote = viewModel::clearFocusModeMidiNote
+    val onConsumeBankSwitchRequest = viewModel::consumeBankSwitchRequest
+    val onDismissBackupPrompt = viewModel::dismissBackupFolderPrompt
+    val onSyncBackupNow = viewModel::triggerManualBackupSync
   }
 
   @Composable
@@ -509,43 +585,55 @@ class MainActivity : ComponentActivity() {
       onBulkDuplicateSelected = viewModel::bulkDuplicateSelectedPads,
       onDeleteErrorLog = viewModel::deleteErrorLogById,
       onFixErrorLog = actions.onFixErrorLog,
-      onHapticIntensityChanged = viewModel::setHapticIntensity,
-      onSwipePadVolumeToggle = viewModel::setSwipePadVolumeEnabled,
-      onDoubleTapToStopToggle = viewModel::setDoubleTapToStopEnabled,
-      onHasCompletedOnboardingToggle = viewModel::setHasCompletedOnboarding,
-      onShowFeatureTooltipsToggle = viewModel::setShowFeatureTooltips,
-      onAppLanguageChanged = viewModel::setAppLanguage,
+      onHapticIntensityChanged = actions.onHapticIntensityChanged,
+      onSwipePadVolumeToggle = actions.onSwipePadVolumeToggle,
+      onDoubleTapToStopToggle = actions.onDoubleTapToStopToggle,
+      onHasCompletedOnboardingToggle = actions.onHasCompletedOnboardingToggle,
+      onShowFeatureTooltipsToggle = actions.onShowFeatureTooltipsToggle,
+      onAppLanguageChanged = actions.onAppLanguageChanged,
       onRequestRecordAudioPermission = actions.onRequestRecordAudioPermission,
       onRequestBleMidiPermissions = actions.onRequestBleMidiPermissions,
       canScheduleExactAlarms = canScheduleExactAlarms,
       onRequestExactAlarmPermission = actions.onRequestExactAlarmPermission,
-      onOpenMasterRecorder = viewModel::openMasterRecordSheet,
-      onCloseMasterRecorder = viewModel::closeMasterRecordSheet,
-      onSelectMasterRecordSampleRate = viewModel::setMasterRecordSampleRate,
+      onOpenMasterRecorder = actions.onOpenMasterRecorder,
+      onCloseMasterRecorder = actions.onCloseMasterRecorder,
+      onSelectMasterRecordSampleRate = actions.onSelectMasterRecordSampleRate,
       onPickMasterRecordFolder = actions.onPickMasterRecordFolder,
-      onToggleMasterRecordAutoAddPad = viewModel::setMasterRecordAutoAddAsPad,
-      onStartMasterRecording = viewModel::startMasterRecording,
-      onStopAndSaveMasterRecording = viewModel::stopAndSaveMasterRecording,
-      onOpenScheduler = viewModel::openSchedulerSheet,
-      onCloseScheduler = viewModel::closeSchedulerSheet,
-      onSaveScheduledTask = viewModel::saveScheduledTask,
-      onToggleScheduledTaskEnabled = viewModel::toggleScheduledTaskEnabled,
-      onDeleteScheduledTask = viewModel::deleteScheduledTask,
-      onTestTriggerScheduledTask = viewModel::testTriggerScheduledTask,
-      onOpenSequencer = viewModel::openSequencerSheet,
-      onCloseSequencer = viewModel::closeSequencerSheet,
-      onSaveSequencerPlaylist = viewModel::saveSequencerPlaylist,
-      onDeleteSequencerPlaylist = viewModel::deleteSequencerPlaylist,
-      onPlaySequencerPlaylist = viewModel::startSequencerPlaylist,
-      onToggleSequencerPlayPause = viewModel::toggleSequencerPlayPause,
-      onSequencerNext = viewModel::sequencerNext,
-      onSequencerPrev = viewModel::sequencerPrev,
-      onStopSequencer = viewModel::stopSequencer,
-      onArmSequencerMidiLearn = viewModel::armMidiLearnForSequencer,
-      onClearSequencerMidiTrigger = viewModel::clearSequencerMidiNote,
-      onArmMidiLearnForBankPc = viewModel::armMidiLearnForBankPc,
-      onClearMidiPcMappingForBank = viewModel::clearMidiPcMappingForBank,
-      onConsumeBankSwitchRequest = viewModel::consumeBankSwitchRequest
+      onToggleMasterRecordAutoAddPad = actions.onToggleMasterRecordAutoAddPad,
+      onStartMasterRecording = actions.onStartMasterRecording,
+      onStopAndSaveMasterRecording = actions.onStopAndSaveMasterRecording,
+      onOpenScheduler = actions.onOpenScheduler,
+      onCloseScheduler = actions.onCloseScheduler,
+      onSaveScheduledTask = actions.onSaveScheduledTask,
+      onToggleScheduledTaskEnabled = actions.onToggleScheduledTaskEnabled,
+      onDeleteScheduledTask = actions.onDeleteScheduledTask,
+      onTestTriggerScheduledTask = actions.onTestTriggerScheduledTask,
+      onOpenSequencer = actions.onOpenSequencer,
+      onCloseSequencer = actions.onCloseSequencer,
+      onSaveSequencerPlaylist = actions.onSaveSequencerPlaylist,
+      onDeleteSequencerPlaylist = actions.onDeleteSequencerPlaylist,
+      onPlaySequencerPlaylist = actions.onPlaySequencerPlaylist,
+      onToggleSequencerPlayPause = actions.onToggleSequencerPlayPause,
+      onSequencerNext = actions.onSequencerNext,
+      onSequencerPrev = actions.onSequencerPrev,
+      onStopSequencer = actions.onStopSequencer,
+      onArmSequencerMidiLearn = actions.onArmSequencerMidiLearn,
+      onClearSequencerMidiTrigger = actions.onClearSequencerMidiTrigger,
+      onArmMidiLearnForBankPc = actions.onArmMidiLearnForBankPc,
+      onClearMidiPcMappingForBank = actions.onClearMidiPcMappingForBank,
+      onDefaultPadColorModeChanged = actions.onDefaultPadColorModeChanged,
+      onDefaultPadColorArgbChanged = actions.onDefaultPadColorArgbChanged,
+      onResetAllPadsToGray = actions.onResetAllPadsToGray,
+      onSetFocusMode = actions.onSetFocusMode,
+      onToggleFocusMode = actions.onToggleFocusMode,
+      onStartInFocusModeToggle = actions.onStartInFocusModeToggle,
+      onFocusCornerPanicToggle = actions.onFocusCornerPanicToggle,
+      onArmMidiLearnForFocusMode = actions.onArmMidiLearnForFocusMode,
+      onClearFocusModeMidiNote = actions.onClearFocusModeMidiNote,
+      onConsumeBankSwitchRequest = actions.onConsumeBankSwitchRequest,
+      onPickBackupFolderClick = actions.onPickBackupFolderClick,
+      onDismissBackupPrompt = actions.onDismissBackupPrompt,
+      onSyncBackupNow = actions.onSyncBackupNow
     )
   }
 }

@@ -339,4 +339,47 @@ class SoundPadUnitTest {
     assertEquals("B2", state.bankPages[1].title)
     assertEquals(0, state.bankPages[1].pads.size)
   }
+
+  @Test
+  fun `soundPad and globalSettings defaults enforce neutral gray pads and focus mode defaults`() {
+    val pad = SoundPad(
+      id = "pad_default",
+      uriString = "content://test/default.wav",
+      fileName = "default.wav",
+      displayName = "Default",
+      extension = "WAV",
+      durationMs = 1200L,
+      sizeBytes = 4096L,
+      positionIndex = 0
+    )
+    assertEquals(null, pad.colorArgb)
+    assertEquals(null, pad.glowColorArgb)
+    assertEquals(0f, pad.glowIntensity, 0.0001f)
+
+    val settings = com.example.domain.model.GlobalSettings()
+    assertEquals(com.example.domain.model.DefaultPadColorMode.GRAY, settings.defaultPadColorMode)
+    assertEquals(0xFF4A4F57L, settings.defaultPadColorArgb)
+    assertEquals(false, settings.isFocusMode)
+    assertEquals(false, settings.startInFocusMode)
+    assertEquals(true, settings.focusCornerPanicEnabled)
+    assertEquals(null, settings.focusModeMidiNote)
+  }
+
+  @Test
+  fun `defaultPadColorMode and midiCcTarget include Stage A entries`() {
+    assertEquals(
+      listOf(
+        com.example.domain.model.DefaultPadColorMode.GRAY,
+        com.example.domain.model.DefaultPadColorMode.AUTO,
+        com.example.domain.model.DefaultPadColorMode.CUSTOM
+      ),
+      com.example.domain.model.DefaultPadColorMode.entries
+    )
+    assertTrue(
+      com.example.domain.model.MidiCcTarget.entries.contains(
+        com.example.domain.model.MidiCcTarget.TOGGLE_FOCUS_MODE
+      )
+    )
+  }
 }
+

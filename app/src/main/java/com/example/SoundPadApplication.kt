@@ -8,6 +8,7 @@ import com.example.audio.SoundPadAudioEngine
 import com.example.audio.SoundPadPlaybackService
 import com.example.audio.VoiceTrackRecorder
 import com.example.audio.toDomain
+import com.example.data.backup.PersistentConfigSyncManager
 import com.example.data.local.db.SoundPadDatabase
 import com.example.data.local.preferences.GlobalSettingsRepository
 import com.example.data.saf.SafAudioScanner
@@ -55,6 +56,14 @@ class SoundPadApplication : Application() {
   val sequencerEngine: SequencerEngine by lazy { SequencerEngine(audioEngine) }
   val voiceRecorder: VoiceTrackRecorder by lazy { VoiceTrackRecorder(this) }
   val midiController: MidiControllerManager by lazy { MidiControllerManager(this) }
+  val persistentConfigManager: PersistentConfigSyncManager by lazy {
+    PersistentConfigSyncManager(
+      context = this,
+      dao = database.soundPadDao(),
+      settingsRepo = settingsRepository,
+      appScope = appScope
+    )
+  }
 
   private fun executeScheduledTaskInBackground(taskId: String) {
     appScope.launch {
@@ -109,6 +118,7 @@ class SoundPadApplication : Application() {
 
   override fun onTerminate() {
     super.onTerminate()
+    persistentConfigManager.onAppExiting()
     SoundPadPlaybackService.onScheduledTaskRequested = null
     midiController.release()
     masterRecorder.cancelRecording()

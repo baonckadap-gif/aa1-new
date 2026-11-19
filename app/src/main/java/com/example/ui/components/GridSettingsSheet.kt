@@ -22,10 +22,18 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Backup
 import androidx.compose.material.icons.filled.BatteryChargingFull
+import androidx.compose.material.icons.filled.CenterFocusStrong
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.CloudDone
+import androidx.compose.material.icons.filled.CloudOff
+import androidx.compose.material.icons.filled.CloudSync
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Info
@@ -48,6 +56,7 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -63,10 +72,15 @@ import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.R
 import com.example.audio.StereoPanMath
+import com.example.data.backup.BackupSyncStatus
+import com.example.data.backup.PersistentBackupUiState
 import com.example.domain.model.AppLanguage
+import com.example.domain.model.DefaultPadColorMode
 import com.example.domain.model.FadeCurve
 import com.example.domain.model.GlobalSettings
 import com.example.domain.model.GridConfig
@@ -75,6 +89,8 @@ import com.example.domain.model.HapticIntensity
 import com.example.domain.model.PadShapeStyle
 import com.example.domain.model.ThemeMode
 import com.example.ui.theme.SoundPadColorPalette
+import java.text.SimpleDateFormat
+import java.util.Date
 import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.roundToInt
@@ -111,13 +127,30 @@ fun GridSettingsSheet(
   onDoubleTapToStopToggle: (Boolean) -> Unit = {},
   onAppLanguageChange: (AppLanguage) -> Unit = {},
   onShowFeatureTooltipsToggle: (Boolean) -> Unit = {},
+  onDefaultPadColorModeChange: (DefaultPadColorMode) -> Unit = {},
+  onDefaultPadColorArgbChange: (Long) -> Unit = {},
+  onResetAllPadsToGray: () -> Unit = {},
+  onEnterFocusMode: () -> Unit = {},
+  onStartInFocusModeToggle: (Boolean) -> Unit = {},
+  onFocusCornerPanicToggle: (Boolean) -> Unit = {},
   onReplayOnboarding: () -> Unit = {},
   onOpenMiuiGuide: () -> Unit = {},
+  backupState: PersistentBackupUiState = PersistentBackupUiState(),
+  onPickBackupFolderClick: () -> Unit = {},
+  onSetAutoSyncEnabled: (Boolean) -> Unit = {},
+  onSetIncludeWaveforms: (Boolean) -> Unit = {},
+  onSyncBackupNow: () -> Unit = {},
+  onInspectRestoreFolderClick: () -> Unit = {},
+  onOpenSnapshotPickerClick: () -> Unit = {},
+  onExportZipClick: () -> Unit = {},
+  onImportZipClick: () -> Unit = {},
+  onShareZipClick: () -> Unit = {},
+  onRequestDeleteAllConfig: () -> Unit = {},
   onDismiss: () -> Unit
 ) {
   val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
   val gridConfig = settings.gridConfig
-  var selectedSection by remember { mutableIntStateOf(0) } // 0=Tampilan, 1=Audio, 2=Grid, 3=Interaksi, 4=Tentang
+  var selectedSection by remember { mutableIntStateOf(0) } // 0=Tampilan, 1=Audio, 2=Grid, 3=Interaksi, 4=Backup, 5=Tentang
 
   var appHue by remember(settings.appAccentColorArgb) {
     val hsv = FloatArray(3)
@@ -128,6 +161,17 @@ fun GridSettingsSheet(
   var glowHue by remember(settings.defaultCornerGlowArgb) {
     val hsv = FloatArray(3)
     android.graphics.Color.colorToHSV(Color(settings.defaultCornerGlowArgb.toInt()).toArgb(), hsv)
+    mutableFloatStateOf(hsv[0])
+  }
+
+  var defaultPadHue by remember(settings.defaultPadColorArgb) {
+    val hsv = FloatArray(3)
+    val baseColor = if (settings.defaultPadColorArgb == SoundPadColorPalette.DEFAULT_PAD_GRAY_ARGB) {
+      SoundPadColorPalette.DEFAULT_CUSTOM_PAD_COLOR_ARGB
+    } else {
+      settings.defaultPadColorArgb
+    }
+    android.graphics.Color.colorToHSV(Color(baseColor.toInt()).toArgb(), hsv)
     mutableFloatStateOf(hsv[0])
   }
 
@@ -148,6 +192,12 @@ fun GridSettingsSheet(
         text = stringResource(R.string.settings_sheet_title),
         style = MaterialTheme.typography.headlineSmall,
         color = MaterialTheme.colorScheme.onSurface
+      )
+
+      PersistentSyncStatusStrip(
+        backupState = backupState,
+        onPickBackupFolderClick = onPickBackupFolderClick,
+        onSyncBackupNow = onSyncBackupNow
       )
 
       // 5 Grouped Section Tabs: Tampilan | Audio | Grid | Interaksi | Tentang
@@ -188,6 +238,13 @@ fun GridSettingsSheet(
         FilterChip(
           selected = selectedSection == 4,
           onClick = { selectedSection = 4 },
+          leadingIcon = { Icon(Icons.Filled.Backup, contentDescription = null, modifier = Modifier.size(16.dp)) },
+          label = { Text(stringResource(R.string.settings_tab_backup), style = MaterialTheme.typography.labelMedium) },
+          modifier = Modifier.testTag("settings_tab_backup")
+        )
+        FilterChip(
+          selected = selectedSection == 5,
+          onClick = { selectedSection = 5 },
           leadingIcon = { Icon(Icons.Filled.Info, contentDescription = null, modifier = Modifier.size(16.dp)) },
           label = { Text(stringResource(R.string.settings_tab_about), style = MaterialTheme.typography.labelMedium) },
           modifier = Modifier.testTag("settings_tab_about")
@@ -203,7 +260,110 @@ fun GridSettingsSheet(
               style = MaterialTheme.typography.labelMedium,
               color = MaterialTheme.colorScheme.onSurfaceVariant
             )
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(
+              text = stringResource(R.string.settings_default_pad_color_title),
+              style = MaterialTheme.typography.labelMedium,
+              color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
             Row(
+              modifier = Modifier.fillMaxWidth(),
+              horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+              DefaultPadColorMode.entries.forEach { mode ->
+                FilterChip(
+                  selected = settings.defaultPadColorMode == mode,
+                  onClick = {
+                    onDefaultPadColorModeChange(mode)
+                    if (mode == DefaultPadColorMode.CUSTOM &&
+                      settings.defaultPadColorArgb == SoundPadColorPalette.DEFAULT_PAD_GRAY_ARGB
+                    ) {
+                      onDefaultPadColorArgbChange(SoundPadColorPalette.DEFAULT_CUSTOM_PAD_COLOR_ARGB)
+                    }
+                  },
+                  label = {
+                    Text(
+                      text = mode.label,
+                      style = MaterialTheme.typography.labelSmall,
+                      maxLines = 1
+                    )
+                  },
+                  modifier = Modifier
+                    .weight(1f)
+                    .testTag("default_pad_color_${mode.name.lowercase()}")
+                )
+              }
+            }
+
+            if (settings.defaultPadColorMode == DefaultPadColorMode.CUSTOM) {
+              @OptIn(ExperimentalLayoutApi::class)
+              FlowRow(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+              ) {
+                SoundPadColorPalette.PAD_PRESETS_12.forEachIndexed { idx, preset ->
+                  val isSelected = settings.defaultPadColorArgb == preset.argb
+                  Box(
+                    modifier = Modifier
+                      .size(30.dp)
+                      .clip(CircleShape)
+                      .background(Color(preset.argb.toInt()))
+                      .border(
+                        width = if (isSelected) 2.5.dp else 1.dp,
+                        color = if (isSelected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.outline,
+                        shape = CircleShape
+                      )
+                      .testTag("default_pad_custom_color_$idx")
+                      .clickable { onDefaultPadColorArgbChange(preset.argb) },
+                    contentAlignment = Alignment.Center
+                  ) {
+                    if (isSelected) {
+                      Icon(
+                        imageVector = Icons.Filled.Check,
+                        contentDescription = preset.name,
+                        tint = Color.Black,
+                        modifier = Modifier.size(15.dp)
+                      )
+                    }
+                  }
+                }
+              }
+              Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+              ) {
+                Text("Pad Hue", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Slider(
+                  value = defaultPadHue,
+                  onValueChange = { hue ->
+                    defaultPadHue = hue
+                    val argb = android.graphics.Color.HSVToColor(floatArrayOf(hue, 0.85f, 0.95f))
+                    onDefaultPadColorArgbChange(argb.toLong() and 0xFFFFFFFFL)
+                  },
+                  valueRange = 0f..360f,
+                  modifier = Modifier.weight(1f)
+                )
+              }
+            }
+
+            OutlinedButton(
+              onClick = onResetAllPadsToGray,
+              modifier = Modifier
+                .fillMaxWidth()
+                .height(48.dp)
+                .testTag("reset_all_pads_gray_button")
+            ) {
+              Icon(Icons.Filled.RestartAlt, contentDescription = null, modifier = Modifier.size(18.dp))
+              Spacer(modifier = Modifier.width(8.dp))
+              Text(stringResource(R.string.settings_default_pad_color_reset_all))
+            }
+          }
+
+          HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+
+          Row(
               modifier = Modifier.fillMaxWidth(),
               horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
@@ -991,10 +1151,104 @@ fun GridSettingsSheet(
               onCheckedChange = onKeepScreenOnToggle
             )
           }
+
+          HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+
+          Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(
+              text = stringResource(R.string.settings_focus_section_title),
+              style = MaterialTheme.typography.labelMedium,
+              color = MaterialTheme.colorScheme.primary
+            )
+
+            OutlinedButton(
+              onClick = {
+                onDismiss()
+                onEnterFocusMode()
+              },
+              modifier = Modifier
+                .fillMaxWidth()
+                .height(48.dp)
+                .testTag("settings_enter_focus_mode_button")
+            ) {
+              Icon(Icons.Filled.CenterFocusStrong, contentDescription = null, modifier = Modifier.size(18.dp))
+              Spacer(modifier = Modifier.width(8.dp))
+              Text(stringResource(R.string.settings_focus_enter_now))
+            }
+
+            Row(
+              modifier = Modifier.fillMaxWidth(),
+              horizontalArrangement = Arrangement.SpaceBetween,
+              verticalAlignment = Alignment.CenterVertically
+            ) {
+              Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
+                Text(
+                  text = stringResource(R.string.settings_focus_start_title),
+                  style = MaterialTheme.typography.titleSmall,
+                  color = MaterialTheme.colorScheme.onSurface
+                )
+                Text(
+                  text = stringResource(R.string.settings_focus_start_subtitle),
+                  style = MaterialTheme.typography.bodySmall,
+                  color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+              }
+              Switch(
+                checked = settings.startInFocusMode,
+                onCheckedChange = onStartInFocusModeToggle,
+                modifier = Modifier.testTag("settings_start_in_focus_switch")
+              )
+            }
+
+            Row(
+              modifier = Modifier.fillMaxWidth(),
+              horizontalArrangement = Arrangement.SpaceBetween,
+              verticalAlignment = Alignment.CenterVertically
+            ) {
+              Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
+                Text(
+                  text = stringResource(R.string.settings_focus_panic_title),
+                  style = MaterialTheme.typography.titleSmall,
+                  color = MaterialTheme.colorScheme.onSurface
+                )
+                Text(
+                  text = stringResource(R.string.settings_focus_panic_subtitle),
+                  style = MaterialTheme.typography.bodySmall,
+                  color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+              }
+              Switch(
+                checked = settings.focusCornerPanicEnabled,
+                onCheckedChange = onFocusCornerPanicToggle,
+                modifier = Modifier.testTag("settings_focus_corner_panic_switch")
+              )
+            }
+          }
+        }
+
+        4 -> {
+          // ---- TAB 4: BACKUP & RESTORE ----
+          BackupSettingsTabContent(
+            backupState = backupState,
+            currentMusicFolderName = settings.folderName,
+            onPickBackupFolderClick = onPickBackupFolderClick,
+            onSetAutoSyncEnabled = onSetAutoSyncEnabled,
+            onSetIncludeWaveforms = onSetIncludeWaveforms,
+            onSyncNowClick = onSyncBackupNow,
+            onInspectRestoreFolderClick = onInspectRestoreFolderClick,
+            onOpenSnapshotPickerClick = onOpenSnapshotPickerClick,
+            onExportZipClick = onExportZipClick,
+            onImportZipClick = onImportZipClick,
+            onShareZipClick = onShareZipClick,
+            onRequestDeleteAllConfig = {
+              onDismiss()
+              onRequestDeleteAllConfig()
+            }
+          )
         }
 
         else -> {
-          // ---- TAB 4: TENTANG & DEMO ----
+          // ---- TAB 5: TENTANG & DEMO ----
           Surface(
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(12.dp),
@@ -1107,6 +1361,125 @@ fun GridSettingsSheet(
       }
 
       Spacer(modifier = Modifier.height(8.dp))
+    }
+  }
+}
+
+@Composable
+private fun PersistentSyncStatusStrip(
+  backupState: PersistentBackupUiState,
+  onPickBackupFolderClick: () -> Unit,
+  onSyncBackupNow: () -> Unit
+) {
+  val isError = backupState.status == BackupSyncStatus.ERROR_INACCESSIBLE
+  val isUnconfigured = backupState.status == BackupSyncStatus.UNCONFIGURED
+  val containerColor = when {
+    isError -> MaterialTheme.colorScheme.errorContainer
+    isUnconfigured -> MaterialTheme.colorScheme.surfaceContainerHigh
+    else -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f)
+  }
+  val contentColor = when {
+    isError -> MaterialTheme.colorScheme.onErrorContainer
+    isUnconfigured -> MaterialTheme.colorScheme.onSurfaceVariant
+    else -> MaterialTheme.colorScheme.onSurface
+  }
+  val iconTint = when {
+    isError -> MaterialTheme.colorScheme.error
+    isUnconfigured -> MaterialTheme.colorScheme.onSurfaceVariant
+    else -> MaterialTheme.colorScheme.primary
+  }
+  val statusIcon = when (backupState.status) {
+    BackupSyncStatus.ERROR_INACCESSIBLE -> Icons.Filled.CloudOff
+    BackupSyncStatus.SAVING, BackupSyncStatus.PENDING -> Icons.Filled.CloudSync
+    BackupSyncStatus.SAVED, BackupSyncStatus.IDLE -> Icons.Filled.CloudDone
+    BackupSyncStatus.UNCONFIGURED -> Icons.Filled.FolderOpen
+  }
+  val formattedTime = remember(backupState.lastSyncAtMs) {
+    if (backupState.lastSyncAtMs <= 0L) null
+    else SimpleDateFormat("HH:mm · dd MMM", Locale.getDefault()).format(Date(backupState.lastSyncAtMs))
+  }
+  val primaryLabel = when (backupState.status) {
+    BackupSyncStatus.SAVED -> if (formattedTime != null) {
+      "${stringResource(R.string.backup_status_saved)} · $formattedTime"
+    } else {
+      stringResource(R.string.backup_status_saved)
+    }
+    BackupSyncStatus.SAVING -> stringResource(R.string.backup_status_saving)
+    BackupSyncStatus.PENDING -> stringResource(R.string.backup_status_pending)
+    BackupSyncStatus.ERROR_INACCESSIBLE -> stringResource(R.string.backup_status_inaccessible)
+    BackupSyncStatus.IDLE -> if (formattedTime != null) {
+      "${stringResource(R.string.backup_status_saved)} · $formattedTime"
+    } else {
+      stringResource(R.string.backup_status_pending)
+    }
+    BackupSyncStatus.UNCONFIGURED -> stringResource(R.string.backup_status_unconfigured)
+  }
+
+  Surface(
+    modifier = Modifier
+      .fillMaxWidth()
+      .testTag("settings_backup_status_strip"),
+    shape = RoundedCornerShape(12.dp),
+    color = containerColor,
+    border = BorderStroke(
+      width = 1.dp,
+      color = if (isError) MaterialTheme.colorScheme.error.copy(alpha = 0.6f)
+      else MaterialTheme.colorScheme.outlineVariant
+    )
+  ) {
+    Row(
+      modifier = Modifier
+        .fillMaxWidth()
+        .padding(horizontal = 12.dp, vertical = 8.dp),
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+      Icon(
+        imageVector = statusIcon,
+        contentDescription = primaryLabel,
+        tint = iconTint,
+        modifier = Modifier.size(18.dp)
+      )
+      Column(modifier = Modifier.weight(1f)) {
+        Text(
+          text = primaryLabel,
+          style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
+          color = contentColor,
+          maxLines = 1,
+          overflow = TextOverflow.Ellipsis
+        )
+        if (!backupState.folderName.isNullOrBlank()) {
+          Text(
+            text = backupState.folderName,
+            style = MaterialTheme.typography.labelSmall,
+            color = contentColor.copy(alpha = 0.78f),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+          )
+        }
+      }
+      if (isError || isUnconfigured) {
+        TextButton(
+          onClick = onPickBackupFolderClick,
+          modifier = Modifier.testTag("settings_pick_backup_folder_btn")
+        ) {
+          Text(
+            text = if (isError) stringResource(R.string.backup_action_repick)
+            else stringResource(R.string.backup_pick_folder_short),
+            style = MaterialTheme.typography.labelMedium
+          )
+        }
+      } else {
+        TextButton(
+          onClick = onSyncBackupNow,
+          modifier = Modifier.testTag("settings_sync_backup_now_btn")
+        ) {
+          Text(
+            text = stringResource(R.string.backup_sync_now_short),
+            style = MaterialTheme.typography.labelMedium
+          )
+        }
+      }
     }
   }
 }

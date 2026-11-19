@@ -66,6 +66,18 @@ val PadDisabledContentLight = Color(0xFF6B768C)
 val PadStatusChipDark = Color(0x33FFFFFF)
 val PadStatusChipLight = Color(0x1F0F1522)
 
+// Default Neutral Gray Pad Tokens (no color glow)
+val PadDefaultGrayDark = Color(0xFF4A4F57)
+val PadDefaultGrayBorderDark = Color(0xFF636A75)
+val PadDefaultGrayLight = Color(0xFFD5DCE6)
+val PadDefaultGrayBorderLight = Color(0xFF99A5B8)
+
+// Focus Mode Overlay Tokens
+val FocusOverlayBgDark = Color(0xD910141E)
+val FocusOverlayBgLight = Color(0xEBFFFFFF)
+val FocusEdgeHintBgDark = Color(0x99141822)
+val FocusEdgeHintBgLight = Color(0xCCE7ECF5)
+
 // Play Mode Segmented Bar Tokens
 val PlayModeActiveGreenDark = RamEmerald
 val PlayModeActiveGreenLight = Color(0xFF059669)
@@ -81,6 +93,9 @@ data class PadColorPreset(
 )
 
 object SoundPadColorPalette {
+  const val DEFAULT_PAD_GRAY_ARGB = 0xFF4A4F57L
+  const val DEFAULT_CUSTOM_PAD_COLOR_ARGB = 0xFF00E5FFL
+
   val PAD_PRESETS_12: List<PadColorPreset> = listOf(
     PadColorPreset("Cyan", 0xFF00E5FFL),
     PadColorPreset("Amber", 0xFFFFB300L),

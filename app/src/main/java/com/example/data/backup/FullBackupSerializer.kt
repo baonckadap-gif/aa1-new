@@ -3,6 +3,7 @@ package com.example.data.backup
 import com.example.data.profile.ExportedProfileBundle
 import com.example.data.profile.ProfileJsonSerializer
 import com.example.domain.model.AppLanguage
+import com.example.domain.model.DefaultPadColorMode
 import com.example.domain.model.EqPreset
 import com.example.domain.model.FadeCurve
 import com.example.domain.model.GlobalSettings
@@ -72,6 +73,22 @@ object FullBackupSerializer {
       put("hasCompletedOnboarding", settings.hasCompletedOnboarding)
       put("showFeatureTooltips", settings.showFeatureTooltips)
       put("appLanguage", settings.appLanguage.name)
+      put("defaultPadColorMode", settings.defaultPadColorMode.name)
+      put("defaultPadColorArgb", settings.defaultPadColorArgb)
+      put("isFocusMode", settings.isFocusMode)
+      put("startInFocusMode", settings.startInFocusMode)
+      put("focusCornerPanicEnabled", settings.focusCornerPanicEnabled)
+      put("focusModeMidiNote", settings.focusModeMidiNote ?: JSONObject.NULL)
+      put("preferredMainOutputId", settings.preferredMainOutputId ?: JSONObject.NULL)
+      put("preferredMainOutputName", settings.preferredMainOutputName ?: JSONObject.NULL)
+      put("preferredCueOutputId", settings.preferredCueOutputId ?: JSONObject.NULL)
+      put("preferredCueOutputName", settings.preferredCueOutputName ?: JSONObject.NULL)
+      put("audioBufferSizeMs", settings.audioBufferSizeMs)
+      put("persistentBackupFolderUri", settings.persistentBackupFolderUri ?: JSONObject.NULL)
+      put("persistentBackupFolderName", settings.persistentBackupFolderName ?: JSONObject.NULL)
+      put("persistentAutoSyncEnabled", settings.persistentAutoSyncEnabled)
+      put("persistentLastSyncAtMs", settings.persistentLastSyncAtMs)
+      put("persistentIncludeWaveforms", settings.persistentIncludeWaveforms)
     }
 
     val profilesArr = JSONArray()
@@ -160,7 +177,25 @@ object FullBackupSerializer {
       showFeatureTooltips = s.optBoolean("showFeatureTooltips", true),
       appLanguage = runCatching {
         AppLanguage.valueOf(s.optString("appLanguage", AppLanguage.SYSTEM.name))
-      }.getOrDefault(AppLanguage.SYSTEM)
+      }.getOrDefault(AppLanguage.SYSTEM),
+      defaultPadColorMode = runCatching {
+        DefaultPadColorMode.valueOf(s.optString("defaultPadColorMode", DefaultPadColorMode.GRAY.name))
+      }.getOrDefault(DefaultPadColorMode.GRAY),
+      defaultPadColorArgb = s.optLong("defaultPadColorArgb", 0xFF4A4F57L),
+      isFocusMode = s.optBoolean("isFocusMode", false),
+      startInFocusMode = s.optBoolean("startInFocusMode", false),
+      focusCornerPanicEnabled = s.optBoolean("focusCornerPanicEnabled", true),
+      focusModeMidiNote = if (s.isNull("focusModeMidiNote")) null else s.optInt("focusModeMidiNote").coerceIn(0, 127),
+      preferredMainOutputId = if (s.isNull("preferredMainOutputId")) null else s.optInt("preferredMainOutputId"),
+      preferredMainOutputName = if (s.isNull("preferredMainOutputName")) null else s.optString("preferredMainOutputName", "").ifBlank { null },
+      preferredCueOutputId = if (s.isNull("preferredCueOutputId")) null else s.optInt("preferredCueOutputId"),
+      preferredCueOutputName = if (s.isNull("preferredCueOutputName")) null else s.optString("preferredCueOutputName", "").ifBlank { null },
+      audioBufferSizeMs = s.optInt("audioBufferSizeMs", 50).coerceIn(20, 500),
+      persistentBackupFolderUri = if (s.isNull("persistentBackupFolderUri")) null else s.optString("persistentBackupFolderUri", "").ifBlank { null },
+      persistentBackupFolderName = if (s.isNull("persistentBackupFolderName")) null else s.optString("persistentBackupFolderName", "").ifBlank { null },
+      persistentAutoSyncEnabled = s.optBoolean("persistentAutoSyncEnabled", true),
+      persistentLastSyncAtMs = s.optLong("persistentLastSyncAtMs", 0L).coerceAtLeast(0L),
+      persistentIncludeWaveforms = s.optBoolean("persistentIncludeWaveforms", false)
     )
 
     val profilesArr = root.optJSONArray("profiles") ?: JSONArray()

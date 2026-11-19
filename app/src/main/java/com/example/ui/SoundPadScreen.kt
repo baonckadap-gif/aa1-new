@@ -1,5 +1,6 @@
 package com.example.ui
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.foundation.BorderStroke
@@ -8,6 +9,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -52,6 +54,7 @@ import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckBox
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.ContentCut
 import androidx.compose.material.icons.filled.Delete
@@ -81,6 +84,7 @@ import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.SwapVert
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledIconButton
@@ -138,8 +142,10 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.min
 import com.example.R
+import com.example.data.backup.BackupSyncStatus
 import com.example.domain.model.AppErrorLog
 import com.example.domain.model.AppLanguage
+import com.example.domain.model.DefaultPadColorMode
 import com.example.domain.model.EqPreset
 import com.example.domain.model.FadeCurve
 import com.example.domain.model.GridConfig
@@ -170,6 +176,7 @@ import com.example.ui.components.AudioEditorSheet
 import com.example.ui.components.AudioOutputSheet
 import com.example.ui.components.BottomConsoleBar
 import com.example.ui.components.ErrorLogSheet
+import com.example.ui.components.FocusModeOverlay
 import com.example.ui.components.GridSettingsSheet
 import com.example.ui.components.HoldToUnlockControl
 import com.example.ui.components.LandscapeBankRail
@@ -353,8 +360,24 @@ fun SoundPadScreen(
   onClearSequencerMidiTrigger: (SequencerPlaylist) -> Unit = {},
   onArmMidiLearnForBankPc: (Int, String) -> Unit = { _, _ -> },
   onClearMidiPcMappingForBank: (Int) -> Unit = {},
-  onConsumeBankSwitchRequest: () -> Unit = {}
+  onDefaultPadColorModeChanged: (DefaultPadColorMode) -> Unit = {},
+  onDefaultPadColorArgbChanged: (Long) -> Unit = {},
+  onResetAllPadsToGray: () -> Unit = {},
+  onSetFocusMode: (Boolean) -> Unit = {},
+  onToggleFocusMode: () -> Unit = {},
+  onStartInFocusModeToggle: (Boolean) -> Unit = {},
+  onFocusCornerPanicToggle: (Boolean) -> Unit = {},
+  onArmMidiLearnForFocusMode: () -> Unit = {},
+  onClearFocusModeMidiNote: () -> Unit = {},
+  onConsumeBankSwitchRequest: () -> Unit = {},
+  onPickBackupFolderClick: () -> Unit = {},
+  onDismissBackupPrompt: () -> Unit = {},
+  onSyncBackupNow: () -> Unit = {}
 ) {
+  val isFocusMode = uiState.settings.isFocusMode
+  BackHandler(enabled = isFocusMode) {
+    onSetFocusMode(false)
+  }
   val context = LocalContext.current
   val powerManager = remember(context) { context.getSystemService(Context.POWER_SERVICE) as? PowerManager }
   var isBatterySaver by remember { mutableStateOf(powerManager?.isPowerSaveMode == true) }
@@ -441,74 +464,78 @@ fun SoundPadScreen(
     contentWindowInsets = WindowInsets(0, 0, 0, 0),
     snackbarHost = { SnackbarHost(hostState = snackbarHostState) },
     topBar = {
-      val topMod = if (uiState.settings.isFullscreen) Modifier else Modifier.statusBarsPadding()
-      val currentBankPage = memoizedBankPages.getOrNull(sharedPagerState.currentPage)
-      val distinctBankCount = remember(memoizedBankPages) { memoizedBankPages.map { it.bankKey }.distinct().size }
-      TopControlBar(
-        activeProfileName = activeProfileName,
-        folderName = uiState.settings.folderName,
-        padCount = uiState.pads.size,
-        isScanning = uiState.isScanning,
-        newlyDetectedCount = uiState.newlyDetectedCount,
-        playMode = uiState.settings.playMode,
-        gridConfig = uiState.settings.gridConfig,
-        isSearchVisible = uiState.isSearchVisible,
-        searchQuery = uiState.searchQuery,
-        isFullscreen = uiState.settings.isFullscreen,
-        isCrossfadeEnabled = uiState.settings.globalCrossfadeEnabled,
-        isGlobalCueEnabled = uiState.settings.isGlobalCueEnabled,
-        isLocked = uiState.settings.isLocked,
-        midiConnectedCount = uiState.midiDevices.size,
-        isMidiLearnMode = uiState.isMidiLearnMode,
-        errorLogCount = uiState.errorLogs.size,
-        isSequencerPlaying = uiState.sequencerPlayback.isPlaying,
-        activeSchedulesCount = uiState.scheduledTasks.count { it.enabled },
-        canRescanCurrentBank = currentBankPage?.canRescanSubfolder == true,
-        canReorderBanks = distinctBankCount > 1,
-        onPickFolderClick = onPickFolderClick,
-        onRescanClick = onRescanClick,
-        onRescanCurrentBank = {
-          val bankKey = currentBankPage?.bankKey
-          if (bankKey != null && currentBankPage.canRescanSubfolder) {
-            onRescanBank(bankKey)
-          } else {
-            onRescanClick()
-          }
-        },
-        onOpenReorderBanks = {
-          if (!uiState.settings.isLocked) showReorderBanksDialog = true
-        },
-        onOpenRenameCurrentBank = {
-          if (!uiState.settings.isLocked) {
-            renamingBankKey = currentBankPage?.bankKey ?: sharedPagerState.currentPage
-          }
-        },
-        onToggleSearch = onToggleSearch,
-        onSearchQueryChange = onSearchQueryChange,
-        onPlayModeSelected = onPlayModeSelected,
-        onOpenProfiles = { showProfileSheet = true },
-        onOpenMidiController = {
-          onRefreshMidiDevices()
-          showMidiSheet = true
-        },
-        onOpenAudioOutput = {
-          onRefreshOutputDevices()
-          showAudioOutputSheet = true
-        },
-        onOpenSequencer = onOpenSequencer,
-        onOpenScheduler = onOpenScheduler,
-        onToggleLockMode = onToggleLockMode,
-        onLockUnlockHint = onLockUnlockHint,
-        onOpenGridSettings = { showGridSheet = true },
-        onToggleCrossfade = onToggleCrossfade,
-        onToggleFullscreen = onToggleFullscreen,
-        onOpenErrorLogs = { showErrorLogSheet = true },
-        onOpenMiuiGuide = { showMiuiDialog = true },
-        modifier = topMod
-      )
+      if (!isFocusMode) {
+        val topMod = if (uiState.settings.isFullscreen) Modifier else Modifier.statusBarsPadding()
+        val currentBankPage = memoizedBankPages.getOrNull(sharedPagerState.currentPage)
+        val distinctBankCount = remember(memoizedBankPages) { memoizedBankPages.map { it.bankKey }.distinct().size }
+        TopControlBar(
+          activeProfileName = activeProfileName,
+          folderName = uiState.settings.folderName,
+          padCount = uiState.pads.size,
+          isScanning = uiState.isScanning,
+          newlyDetectedCount = uiState.newlyDetectedCount,
+          playMode = uiState.settings.playMode,
+          gridConfig = uiState.settings.gridConfig,
+          isSearchVisible = uiState.isSearchVisible,
+          searchQuery = uiState.searchQuery,
+          isFullscreen = uiState.settings.isFullscreen,
+          isCrossfadeEnabled = uiState.settings.globalCrossfadeEnabled,
+          isGlobalCueEnabled = uiState.settings.isGlobalCueEnabled,
+          isLocked = uiState.settings.isLocked,
+          midiConnectedCount = uiState.midiDevices.size,
+          isMidiLearnMode = uiState.isMidiLearnMode,
+          errorLogCount = uiState.errorLogs.size,
+          isSequencerPlaying = uiState.sequencerPlayback.isPlaying,
+          activeSchedulesCount = uiState.scheduledTasks.count { it.enabled },
+          canRescanCurrentBank = currentBankPage?.canRescanSubfolder == true,
+          canReorderBanks = distinctBankCount > 1,
+          isFocusMode = isFocusMode,
+          onPickFolderClick = onPickFolderClick,
+          onRescanClick = onRescanClick,
+          onRescanCurrentBank = {
+            val bankKey = currentBankPage?.bankKey
+            if (bankKey != null && currentBankPage.canRescanSubfolder) {
+              onRescanBank(bankKey)
+            } else {
+              onRescanClick()
+            }
+          },
+          onOpenReorderBanks = {
+            if (!uiState.settings.isLocked) showReorderBanksDialog = true
+          },
+          onOpenRenameCurrentBank = {
+            if (!uiState.settings.isLocked) {
+              renamingBankKey = currentBankPage?.bankKey ?: sharedPagerState.currentPage
+            }
+          },
+          onToggleSearch = onToggleSearch,
+          onSearchQueryChange = onSearchQueryChange,
+          onPlayModeSelected = onPlayModeSelected,
+          onOpenProfiles = { showProfileSheet = true },
+          onOpenMidiController = {
+            onRefreshMidiDevices()
+            showMidiSheet = true
+          },
+          onOpenAudioOutput = {
+            onRefreshOutputDevices()
+            showAudioOutputSheet = true
+          },
+          onOpenSequencer = onOpenSequencer,
+          onOpenScheduler = onOpenScheduler,
+          onToggleLockMode = onToggleLockMode,
+          onLockUnlockHint = onLockUnlockHint,
+          onOpenGridSettings = { showGridSheet = true },
+          onToggleCrossfade = onToggleCrossfade,
+          onToggleFullscreen = onToggleFullscreen,
+          onToggleFocusMode = onToggleFocusMode,
+          onOpenErrorLogs = { showErrorLogSheet = true },
+          onOpenMiuiGuide = { showMiuiDialog = true },
+          modifier = topMod
+        )
+      }
     },
     bottomBar = {
-      AnimatedVisibility(visible = uiState.settings.isBottomBarVisible) {
+      AnimatedVisibility(visible = uiState.settings.isBottomBarVisible && !isFocusMode) {
         BottomConsoleBar(
           activeVoices = uiState.activeCount,
           masterVolume = uiState.settings.masterVolume,
@@ -540,10 +567,12 @@ fun SoundPadScreen(
       val isLandscapeStage = remember(maxWidth, maxHeight) {
         maxWidth > maxHeight && maxWidth >= 600.dp
       }
-      val showBankSideRail = isLandscapeStage &&
+      val showBankSideRail = !isFocusMode &&
+        isLandscapeStage &&
         uiState.pads.isNotEmpty() &&
         memoizedFilteredPads.isNotEmpty()
-      val showMixerSidePanel = (widthClass == AdaptiveWidthClass.EXPANDED || (isLandscapeStage && maxWidth >= 720.dp)) &&
+      val showMixerSidePanel = !isFocusMode &&
+        (widthClass == AdaptiveWidthClass.EXPANDED || (isLandscapeStage && maxWidth >= 720.dp)) &&
         uiState.pads.isNotEmpty() &&
         !uiState.settings.isLocked
 
@@ -580,7 +609,7 @@ fun SoundPadScreen(
             .weight(1f)
             .fillMaxHeight()
         ) {
-          AnimatedVisibility(visible = uiState.settings.isLocked) {
+          AnimatedVisibility(visible = uiState.settings.isLocked && !isFocusMode) {
             Surface(
               modifier = Modifier
                 .fillMaxWidth()
@@ -618,7 +647,7 @@ fun SoundPadScreen(
             }
           }
 
-          AnimatedVisibility(visible = uiState.isEditMode && !uiState.settings.isLocked) {
+          AnimatedVisibility(visible = uiState.isEditMode && !uiState.settings.isLocked && !isFocusMode) {
             Surface(
               modifier = Modifier
                 .fillMaxWidth()
@@ -782,12 +811,13 @@ fun SoundPadScreen(
             }
           }
 
-      AnimatedVisibility(visible = uiState.isMidiLearnMode || uiState.midiLearnTarget != null) {
+      AnimatedVisibility(visible = !isFocusMode && (uiState.isMidiLearnMode || uiState.midiLearnTarget != null)) {
         val bannerText = when (val target = uiState.midiLearnTarget) {
           is MidiLearnTarget.PadNote -> "MIDI LEARN: Press a MIDI key for \"${target.padName}\""
           is MidiLearnTarget.CcControl -> "MIDI LEARN: Move MIDI fader/knob for \"${target.target.label}\""
           is MidiLearnTarget.ProgramChangeBank -> "MIDI LEARN: Kirim Program Change untuk pindah ke \"${target.bankLabel}\""
           is MidiLearnTarget.SequencerPlaylistNote -> "MIDI LEARN: Tekan tuts MIDI untuk memicu playlist \"${target.playlistName}\""
+          MidiLearnTarget.FocusModeNote -> "MIDI LEARN: Tekan tuts MIDI untuk toggle Mode Fokus"
           null -> "MIDI LEARN: Tap any pad on the board, then press a MIDI key to map"
         }
         Surface(
@@ -835,7 +865,7 @@ fun SoundPadScreen(
         }
       }
 
-      AnimatedVisibility(visible = uiState.newlyDetectedCount > 0) {
+      AnimatedVisibility(visible = !isFocusMode && uiState.newlyDetectedCount > 0) {
         Surface(
           modifier = Modifier
             .fillMaxWidth()
@@ -870,7 +900,7 @@ fun SoundPadScreen(
         }
       }
 
-      AnimatedVisibility(visible = uiState.statusMessage != null) {
+      AnimatedVisibility(visible = !isFocusMode && uiState.statusMessage != null) {
         Surface(
           modifier = Modifier
             .fillMaxWidth()
@@ -905,7 +935,7 @@ fun SoundPadScreen(
         }
       }
 
-      AnimatedVisibility(visible = uiState.errorMessage != null) {
+      AnimatedVisibility(visible = !isFocusMode && uiState.errorMessage != null) {
         Surface(
           modifier = Modifier
             .fillMaxWidth()
@@ -953,7 +983,47 @@ fun SoundPadScreen(
         }
       }
 
-      AnimatedVisibility(visible = uiState.sequencerPlayback.isPlaying) {
+      AnimatedVisibility(visible = !isFocusMode && uiState.persistentBackupState.status == BackupSyncStatus.ERROR_INACCESSIBLE) {
+        Surface(
+          modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 4.dp)
+            .testTag("backup_inaccessible_banner"),
+          shape = RoundedCornerShape(10.dp),
+          color = MaterialTheme.colorScheme.errorContainer,
+          border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.6f))
+        ) {
+          Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+          ) {
+            Icon(
+              imageVector = Icons.Filled.CloudOff,
+              contentDescription = null,
+              tint = MaterialTheme.colorScheme.error,
+              modifier = Modifier.size(18.dp)
+            )
+            Text(
+              text = stringResource(R.string.backup_error_inaccessible_title),
+              style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
+              color = MaterialTheme.colorScheme.onErrorContainer,
+              modifier = Modifier.weight(1f)
+            )
+            TextButton(
+              onClick = onPickBackupFolderClick,
+              modifier = Modifier.testTag("backup_inaccessible_repick_button")
+            ) {
+              Text(
+                text = stringResource(R.string.backup_action_repick),
+                color = MaterialTheme.colorScheme.error
+              )
+            }
+          }
+        }
+      }
+
+      AnimatedVisibility(visible = !isFocusMode && uiState.sequencerPlayback.isPlaying) {
         val seq = uiState.sequencerPlayback
         Surface(
           modifier = Modifier
@@ -1067,7 +1137,8 @@ fun SoundPadScreen(
         }
         else -> {
           AnimatedVisibility(
-            visible = uiState.settings.showFeatureTooltips &&
+            visible = !isFocusMode &&
+              uiState.settings.showFeatureTooltips &&
               !uiState.settings.isLocked &&
               !uiState.isEditMode
           ) {
@@ -1112,7 +1183,9 @@ fun SoundPadScreen(
             }
           }
 
-          if (uiState.pads.any { it.isFavorite } || uiState.availableCategoryTags.isNotEmpty() || uiState.showFavoritesOnly || uiState.selectedCategoryTag != null) {
+          if (!isFocusMode &&
+            (uiState.pads.any { it.isFavorite } || uiState.availableCategoryTags.isNotEmpty() || uiState.showFavoritesOnly || uiState.selectedCategoryTag != null)
+          ) {
             LazyRow(
               modifier = Modifier
                 .fillMaxWidth()
@@ -1150,16 +1223,18 @@ fun SoundPadScreen(
           BankedPadMatrix(
             bankPages = memoizedBankPages,
             pagerState = sharedPagerState,
-            showInlineBankStrip = !showBankSideRail,
+            showInlineBankStrip = !showBankSideRail && !isFocusMode,
+            showPagerDots = !isFocusMode,
+            isFocusMode = isFocusMode,
             gridConfig = uiState.settings.gridConfig,
             playbackStates = uiState.playbackStates,
-            isEditMode = uiState.isEditMode && !uiState.settings.isLocked && uiState.searchQuery.isBlank() && !uiState.showFavoritesOnly && uiState.selectedCategoryTag == null,
-            isMultiSelectMode = uiState.isMultiSelectMode,
+            isEditMode = !isFocusMode && uiState.isEditMode && !uiState.settings.isLocked && uiState.searchQuery.isBlank() && !uiState.showFavoritesOnly && uiState.selectedCategoryTag == null,
+            isMultiSelectMode = !isFocusMode && uiState.isMultiSelectMode,
             selectedPadIds = uiState.selectedPadIds,
             hapticIntensity = uiState.settings.hapticIntensity,
             swipePadVolumeEnabled = uiState.settings.swipePadVolumeEnabled,
             doubleTapToStopEnabled = uiState.settings.doubleTapToStopEnabled,
-            isMidiLearnMode = uiState.isMidiLearnMode,
+            isMidiLearnMode = !isFocusMode && uiState.isMidiLearnMode,
             armedLearnPadId = uiState.armedLearnPadId,
             cuePreviewPadId = uiState.cuePreviewPadId,
             preparingReversePadId = uiState.isPreparingReversePadId,
@@ -1171,6 +1246,8 @@ fun SoundPadScreen(
             miniWaveformEnabled = uiState.settings.miniWaveformEnabled,
             defaultPadShape = uiState.settings.defaultPadShape,
             defaultCornerGlowColor = Color(uiState.settings.defaultCornerGlowArgb.toInt()),
+            defaultPadColorMode = uiState.settings.defaultPadColorMode,
+            defaultCustomPadColorArgb = uiState.settings.defaultPadColorArgb,
             onRenameBankRequest = { bankKey ->
               if (!uiState.settings.isLocked) renamingBankKey = bankKey
             },
@@ -1179,7 +1256,7 @@ fun SoundPadScreen(
             },
             onPadTapped = onPadTapped,
             onPadCustomizeClick = { pad ->
-              if (!uiState.settings.isLocked) {
+              if (!isFocusMode && !uiState.settings.isLocked) {
                 if (pad.errorMessage != null) {
                   onPadTapped(pad)
                 } else {
@@ -1193,7 +1270,8 @@ fun SoundPadScreen(
             onSwipeVolumeChange = onSwipeVolumeChange,
             onTogglePadSelection = onTogglePadSelection,
             onSwapPads = onSwapPads,
-            onEmptyPadClick = { if (!uiState.settings.isLocked) onPickFolderClick() },
+            onEmptyPadClick = { if (!isFocusMode && !uiState.settings.isLocked) onPickFolderClick() },
+            onExitFocusMode = { onSetFocusMode(false) },
             modifier = Modifier.weight(1f)
           )
         }
@@ -1221,7 +1299,7 @@ fun SoundPadScreen(
         }
       } // end adaptive Row
 
-      if (!uiState.settings.isBottomBarVisible) {
+      if (!uiState.settings.isBottomBarVisible && !isFocusMode) {
         FilledIconButton(
           onClick = { onBottomBarVisibleChanged(true) },
           modifier = Modifier
@@ -1241,6 +1319,21 @@ fun SoundPadScreen(
           )
         }
       }
+
+      if (isFocusMode) {
+        val currentBankTitle = memoizedBankPages.getOrNull(sharedPagerState.currentPage)?.title ?: "Bank 1"
+        FocusModeOverlay(
+          currentBankTitle = currentBankTitle,
+          activeVoices = uiState.activeCount,
+          masterVolume = uiState.settings.masterVolume,
+          focusCornerPanicEnabled = uiState.settings.focusCornerPanicEnabled,
+          hapticIntensity = uiState.settings.hapticIntensity,
+          onMasterVolumeChange = onMasterVolumeChanged,
+          onStopAll = onStopAll,
+          onExitFocusMode = { onSetFocusMode(false) },
+          modifier = Modifier.fillMaxSize()
+        )
+      }
     }
   }
 
@@ -1251,6 +1344,8 @@ fun SoundPadScreen(
       allPads = uiState.pads,
       defaultPadShape = uiState.settings.defaultPadShape,
       defaultCornerGlowColor = Color(uiState.settings.defaultCornerGlowArgb.toInt()),
+      defaultPadColorMode = uiState.settings.defaultPadColorMode,
+      defaultCustomPadColorArgb = uiState.settings.defaultPadColorArgb,
       isCuePlaying = uiState.cuePreviewPadId == editingPad.id,
       isPreparingReverse = uiState.isPreparingReversePadId == editingPad.id,
       onSelectPad = onSelectEditingPad,
@@ -1351,8 +1446,17 @@ fun SoundPadScreen(
       onDoubleTapToStopToggle = onDoubleTapToStopToggle,
       onAppLanguageChange = onAppLanguageChanged,
       onShowFeatureTooltipsToggle = onShowFeatureTooltipsToggle,
+      onDefaultPadColorModeChange = onDefaultPadColorModeChanged,
+      onDefaultPadColorArgbChange = onDefaultPadColorArgbChanged,
+      onResetAllPadsToGray = onResetAllPadsToGray,
+      onEnterFocusMode = { onSetFocusMode(true) },
+      onStartInFocusModeToggle = onStartInFocusModeToggle,
+      onFocusCornerPanicToggle = onFocusCornerPanicToggle,
       onReplayOnboarding = { showOnboardingManual = true },
       onOpenMiuiGuide = { showMiuiDialog = true },
+      backupState = uiState.persistentBackupState,
+      onPickBackupFolderClick = onPickBackupFolderClick,
+      onSyncBackupNow = onSyncBackupNow,
       onDismiss = { showGridSheet = false }
     )
   }
@@ -1387,6 +1491,9 @@ fun SoundPadScreen(
       pcMappings = uiState.midiPcMappings,
       onArmBankPcLearn = onArmMidiLearnForBankPc,
       onClearBankPcMapping = onClearMidiPcMappingForBank,
+      focusModeMidiNote = uiState.settings.focusModeMidiNote,
+      onArmFocusModeLearn = onArmMidiLearnForFocusMode,
+      onClearFocusModeNote = onClearFocusModeMidiNote,
       onDismiss = { showMidiSheet = false }
     )
   }
@@ -1515,6 +1622,49 @@ fun SoundPadScreen(
       onDismissSkip = {
         showOnboardingManual = false
         onHasCompletedOnboardingToggle(true)
+      }
+    )
+  } else if (!isFocusMode && uiState.persistentBackupState.shouldShowFirstLaunchPrompt) {
+    AlertDialog(
+      onDismissRequest = onDismissBackupPrompt,
+      containerColor = MaterialTheme.colorScheme.surface,
+      icon = {
+        Icon(
+          imageVector = Icons.Filled.FolderOpen,
+          contentDescription = null,
+          tint = MaterialTheme.colorScheme.primary
+        )
+      },
+      title = {
+        Text(
+          text = stringResource(R.string.backup_prompt_title),
+          style = MaterialTheme.typography.titleLarge
+        )
+      },
+      text = {
+        Text(
+          text = stringResource(R.string.backup_prompt_desc),
+          style = MaterialTheme.typography.bodyMedium,
+          color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+      },
+      confirmButton = {
+        Button(
+          onClick = onPickBackupFolderClick,
+          modifier = Modifier
+            .height(48.dp)
+            .testTag("backup_prompt_pick_button")
+        ) {
+          Text(stringResource(R.string.backup_prompt_pick_folder))
+        }
+      },
+      dismissButton = {
+        TextButton(
+          onClick = onDismissBackupPrompt,
+          modifier = Modifier.testTag("backup_prompt_later_button")
+        ) {
+          Text(stringResource(R.string.backup_prompt_later))
+        }
       }
     )
   }
@@ -1649,6 +1799,8 @@ private fun BankedPadMatrix(
   bankPages: List<BankPageUi>,
   pagerState: PagerState,
   showInlineBankStrip: Boolean,
+  showPagerDots: Boolean,
+  isFocusMode: Boolean,
   gridConfig: GridConfig,
   playbackStates: Map<String, PadPlaybackState>,
   isEditMode: Boolean,
@@ -1669,6 +1821,8 @@ private fun BankedPadMatrix(
   miniWaveformEnabled: Boolean,
   defaultPadShape: PadShapeStyle,
   defaultCornerGlowColor: Color,
+  defaultPadColorMode: DefaultPadColorMode,
+  defaultCustomPadColorArgb: Long,
   onRenameBankRequest: (Int) -> Unit,
   onAddBankRequest: () -> Unit,
   onPadTapped: (SoundPad) -> Unit,
@@ -1680,6 +1834,7 @@ private fun BankedPadMatrix(
   onTogglePadSelection: (String) -> Unit,
   onSwapPads: (fromPadId: String, toPadId: String) -> Unit,
   onEmptyPadClick: () -> Unit,
+  onExitFocusMode: () -> Unit,
   modifier: Modifier = Modifier
 ) {
   val pageCount = bankPages.size.coerceAtLeast(1)
@@ -1832,6 +1987,7 @@ private fun BankedPadMatrix(
         rows = gridConfig.rows,
         cols = gridConfig.cols,
         padGridSpacingDp = padGridSpacingDp,
+        isFocusMode = isFocusMode,
         playbackStates = playbackStates,
         isEditMode = isEditMode,
         isMultiSelectMode = isMultiSelectMode,
@@ -1849,6 +2005,8 @@ private fun BankedPadMatrix(
         miniWaveformEnabled = miniWaveformEnabled,
         defaultPadShape = defaultPadShape,
         defaultCornerGlowColor = defaultCornerGlowColor,
+        defaultPadColorMode = defaultPadColorMode,
+        defaultCustomPadColorArgb = defaultCustomPadColorArgb,
         onDragActiveChange = { isDraggingAnyPad = it },
         onPadTapped = onPadTapped,
         onPadCustomizeClick = onPadCustomizeClick,
@@ -1859,12 +2017,13 @@ private fun BankedPadMatrix(
         onTogglePadSelection = onTogglePadSelection,
         onSwapPads = onSwapPads,
         onEmptyPadClick = onEmptyPadClick,
+        onExitFocusMode = onExitFocusMode,
         modifier = Modifier.fillMaxSize()
       )
     }
 
     // Dot indicator below the pad grid (replaces top "1/1" pill badge)
-    if (showInlineBankStrip) {
+    if (showInlineBankStrip && showPagerDots) {
       val visibleDots = minOf(pageCount, topBarTokens.maxPagerDots)
       Row(
         modifier = Modifier
@@ -1915,6 +2074,7 @@ private fun PadMatrixGrid(
   rows: Int,
   cols: Int,
   padGridSpacingDp: Int,
+  isFocusMode: Boolean,
   playbackStates: Map<String, PadPlaybackState>,
   isEditMode: Boolean,
   isMultiSelectMode: Boolean,
@@ -1932,6 +2092,8 @@ private fun PadMatrixGrid(
   miniWaveformEnabled: Boolean,
   defaultPadShape: PadShapeStyle,
   defaultCornerGlowColor: Color,
+  defaultPadColorMode: DefaultPadColorMode,
+  defaultCustomPadColorArgb: Long,
   onDragActiveChange: (Boolean) -> Unit,
   onPadTapped: (SoundPad) -> Unit,
   onPadCustomizeClick: (SoundPad) -> Unit,
@@ -1942,6 +2104,7 @@ private fun PadMatrixGrid(
   onTogglePadSelection: (String) -> Unit,
   onSwapPads: (fromPadId: String, toPadId: String) -> Unit,
   onEmptyPadClick: () -> Unit,
+  onExitFocusMode: () -> Unit,
   modifier: Modifier = Modifier
 ) {
   val spacing: Dp = remember(padGridSpacingDp, rows, cols) {
@@ -1952,7 +2115,7 @@ private fun PadMatrixGrid(
       else -> (baseGap * 0.30f).roundToInt().coerceIn(1, 4).dp
     }
   }
-  val outerPadding: Dp = if (cols > 10 || rows > 10) SoundPadTheme.spacing.xs else SoundPadTheme.spacing.sm
+  val outerPadding: Dp = if (cols > 10 || rows > 10 || isFocusMode) SoundPadTheme.spacing.xs else SoundPadTheme.spacing.sm
 
   val cellBounds = remember { mutableStateMapOf<String, Rect>() }
   var gridRootOrigin by remember { mutableStateOf(Offset.Zero) }
@@ -1964,12 +2127,23 @@ private fun PadMatrixGrid(
   BoxWithConstraints(
     modifier = modifier
       .padding(horizontal = outerPadding, vertical = SoundPadTheme.spacing.xs)
+      .then(
+        if (isFocusMode) {
+          Modifier.pointerInput(onExitFocusMode) {
+            detectTapGestures(onDoubleTap = { onExitFocusMode() })
+          }
+        } else {
+          Modifier
+        }
+      )
       .onGloballyPositioned { coords ->
         gridRootOrigin = coords.positionInRoot()
       }
   ) {
     val totalHorizontalSpacing = spacing * (cols - 1)
     val cellWidth = ((maxWidth - totalHorizontalSpacing) / cols).coerceAtLeast(16.dp)
+    val totalVerticalSpacing = spacing * (rows - 1)
+    val focusCellHeight = ((maxHeight - totalVerticalSpacing) / rows).coerceAtLeast(48.dp)
 
     val density = remember(cellWidth, cols, rows) {
       when {
@@ -2009,7 +2183,7 @@ private fun PadMatrixGrid(
       ) { localIndex ->
         val pad = pads.getOrNull(localIndex)
         val playbackState = pad?.let { playbackStates[it.id] }
-        val cellModifier = if (pad != null && isEditMode && !isMultiSelectMode) {
+        val cellModifier = if (pad != null && isEditMode && !isMultiSelectMode && !isFocusMode) {
           Modifier
             .onGloballyPositioned { coords -> cellBounds[pad.id] = coords.boundsInRoot() }
             .pointerInput(pad.id, isEditMode, isMultiSelectMode, hapticIntensity) {
@@ -2050,6 +2224,16 @@ private fun PadMatrixGrid(
           Modifier
         }
 
+        val sizeModifier = if (isFocusMode) {
+          Modifier
+            .fillMaxWidth()
+            .height(focusCellHeight)
+        } else {
+          Modifier
+            .fillMaxWidth()
+            .aspectRatio(1f)
+        }
+
         PadCell(
           pad = pad,
           slotNumber = bankOffset + localIndex + 1,
@@ -2066,6 +2250,8 @@ private fun PadMatrixGrid(
           globalCrossfadeEnabled = globalCrossfadeEnabled,
           defaultPadShape = defaultPadShape,
           defaultCornerGlowColor = defaultCornerGlowColor,
+          defaultPadColorMode = defaultPadColorMode,
+          defaultCustomPadColorArgb = defaultCustomPadColorArgb,
           miniWaveformEnabled = miniWaveformEnabled && density == PadDensity.STANDARD && totalSlots <= 64,
           isLoading = pad != null && preparingReversePadId == pad.id,
           gridRows = rows,
@@ -2077,15 +2263,13 @@ private fun PadMatrixGrid(
           doubleTapToStopEnabled = doubleTapToStopEnabled,
           onClick = clickHandler,
           onEmptyClick = onEmptyPadClick,
+          onEmptyDoubleClick = if (isFocusMode) onExitFocusMode else null,
           onCustomizeClick = onPadCustomizeClick,
           onHoldStart = onPadHoldStart,
           onHoldRelease = onPadHoldRelease,
           onDoubleTapStop = doubleTapStopHandler,
           onSwipeVolumeChange = swipeVolumeHandler,
-          modifier = Modifier
-            .fillMaxWidth()
-            .aspectRatio(1f)
-            .then(cellModifier)
+          modifier = sizeModifier.then(cellModifier)
         )
       }
     }
