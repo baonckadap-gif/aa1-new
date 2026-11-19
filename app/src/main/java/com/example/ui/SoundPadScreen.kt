@@ -46,6 +46,7 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.DriveFileMove
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.filled.QueueMusic
@@ -63,7 +64,6 @@ import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.ContentCut
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
-import androidx.compose.material.icons.filled.DriveFileMove
 import androidx.compose.material.icons.filled.DriveFileRenameOutline
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.FolderOpen
@@ -143,6 +143,8 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
@@ -750,7 +752,7 @@ fun SoundPadScreen(
                     enabled = uiState.canUndoEdit,
                     onClick = onUndoEdit,
                     modifier = Modifier
-                      .size(32.dp)
+                      .minimumInteractiveComponentSize()
                       .testTag("undo_edit_button")
                   ) {
                     Icon(
@@ -768,7 +770,7 @@ fun SoundPadScreen(
                     enabled = uiState.canRedoEdit,
                     onClick = onRedoEdit,
                     modifier = Modifier
-                      .size(32.dp)
+                      .minimumInteractiveComponentSize()
                       .testTag("redo_edit_button")
                   ) {
                     Icon(
@@ -815,7 +817,7 @@ fun SoundPadScreen(
                         selected = false,
                         enabled = hasSelected,
                         onClick = { showBulkMoveBankDialog = true },
-                        leadingIcon = { Icon(Icons.Filled.DriveFileMove, contentDescription = null, modifier = Modifier.size(14.dp)) },
+                        leadingIcon = { Icon(Icons.AutoMirrored.Filled.DriveFileMove, contentDescription = null, modifier = Modifier.size(14.dp)) },
                         label = { Text(stringResource(R.string.edit_bulk_move), style = MaterialTheme.typography.labelSmall) },
                         modifier = Modifier.testTag("bulk_move_bank_button")
                       )
@@ -861,7 +863,7 @@ fun SoundPadScreen(
                       item {
                         IconButton(
                           onClick = onClearPadSelection,
-                          modifier = Modifier.size(32.dp).testTag("bulk_clear_button")
+                          modifier = Modifier.minimumInteractiveComponentSize().testTag("bulk_clear_button")
                         ) {
                           Icon(Icons.Filled.Close, contentDescription = stringResource(R.string.action_close), modifier = Modifier.size(16.dp))
                         }
@@ -974,11 +976,11 @@ fun SoundPadScreen(
             }
             IconButton(
               onClick = onCancelMidiLearn,
-              modifier = Modifier.size(28.dp)
+              modifier = Modifier.minimumInteractiveComponentSize()
             ) {
               Icon(
                 imageVector = Icons.Filled.Close,
-                contentDescription = "Exit MIDI Learn mode",
+                contentDescription = stringResource(R.string.cd_exit_midi_learn),
                 tint = MaterialTheme.colorScheme.onPrimaryContainer,
                 modifier = Modifier.size(16.dp)
               )
@@ -1009,11 +1011,11 @@ fun SoundPadScreen(
             )
             IconButton(
               onClick = onDismissNewFilesNotice,
-              modifier = Modifier.size(28.dp)
+              modifier = Modifier.minimumInteractiveComponentSize()
             ) {
               Icon(
                 imageVector = Icons.Filled.Close,
-                contentDescription = "Dismiss",
+                contentDescription = stringResource(R.string.cd_dismiss),
                 tint = MaterialTheme.colorScheme.onPrimaryContainer,
                 modifier = Modifier.size(16.dp)
               )
@@ -1044,11 +1046,11 @@ fun SoundPadScreen(
             )
             IconButton(
               onClick = onDismissStatus,
-              modifier = Modifier.size(28.dp)
+              modifier = Modifier.minimumInteractiveComponentSize()
             ) {
               Icon(
                 imageVector = Icons.Filled.Close,
-                contentDescription = "Dismiss notice",
+                contentDescription = stringResource(R.string.cd_dismiss),
                 tint = MaterialTheme.colorScheme.onTertiaryContainer,
                 modifier = Modifier.size(16.dp)
               )
@@ -1080,22 +1082,22 @@ fun SoundPadScreen(
               Spacer(modifier = Modifier.width(8.dp))
               FilledIconButton(
                 onClick = onPickFolderClick,
-                modifier = Modifier.size(36.dp),
+                modifier = Modifier.minimumInteractiveComponentSize(),
                 colors = IconButtonDefaults.filledIconButtonColors(
                   containerColor = MaterialTheme.colorScheme.error,
                   contentColor = MaterialTheme.colorScheme.onError
                 )
               ) {
-                Icon(Icons.Filled.FolderOpen, contentDescription = "Grant folder permission", modifier = Modifier.size(18.dp))
+                Icon(Icons.Filled.FolderOpen, contentDescription = stringResource(R.string.cd_grant_folder_permission), modifier = Modifier.size(18.dp))
               }
             } else {
               IconButton(
                 onClick = onDismissError,
-                modifier = Modifier.size(28.dp)
+                modifier = Modifier.minimumInteractiveComponentSize()
               ) {
                 Icon(
                   imageVector = Icons.Filled.Close,
-                  contentDescription = "Dismiss error",
+                  contentDescription = stringResource(R.string.cd_dismiss_error),
                   tint = MaterialTheme.colorScheme.onErrorContainer,
                   modifier = Modifier.size(16.dp)
                 )
@@ -1191,31 +1193,33 @@ fun SoundPadScreen(
             }
             IconButton(
               onClick = { onToggleSequencerPlayPause(null) },
-              modifier = Modifier.size(32.dp)
+              modifier = Modifier.minimumInteractiveComponentSize()
             ) {
               Icon(
                 imageVector = if (seq.isPaused) Icons.Filled.PlayArrow else Icons.Filled.Pause,
-                contentDescription = if (seq.isPaused) "Resume Sequencer" else "Pause Sequencer",
+                contentDescription = stringResource(
+                  if (seq.isPaused) R.string.cd_sequencer_resume else R.string.cd_sequencer_pause
+                ),
                 modifier = Modifier.size(18.dp)
               )
             }
             IconButton(
               onClick = onSequencerNext,
-              modifier = Modifier.size(32.dp)
+              modifier = Modifier.minimumInteractiveComponentSize()
             ) {
               Icon(
                 imageVector = Icons.Filled.SkipNext,
-                contentDescription = "Next Sequencer Item",
+                contentDescription = stringResource(R.string.cd_sequencer_next),
                 modifier = Modifier.size(18.dp)
               )
             }
             IconButton(
               onClick = onStopSequencer,
-              modifier = Modifier.size(32.dp)
+              modifier = Modifier.minimumInteractiveComponentSize()
             ) {
               Icon(
                 imageVector = Icons.Filled.Stop,
-                contentDescription = "Stop Sequencer",
+                contentDescription = stringResource(R.string.cd_sequencer_stop),
                 tint = MaterialTheme.colorScheme.error,
                 modifier = Modifier.size(18.dp)
               )
@@ -2240,7 +2244,7 @@ private fun BankedPadMatrix(
               onClick = onAddBankRequest,
               enabled = !isLocked,
               modifier = Modifier
-                .size(topBarTokens.bankAddButtonDp)
+                .minimumInteractiveComponentSize()
                 .testTag("add_bank_button")
             ) {
               Icon(
@@ -2986,7 +2990,7 @@ private fun PadQuickActionSheet(
         onClick = onDuplicateHere
       )
       QuickActionRow(
-        icon = Icons.Filled.DriveFileMove,
+        icon = Icons.AutoMirrored.Filled.DriveFileMove,
         title = "Duplikat ke Bank Lain",
         subtitle = "Salin pad dengan setting independen ke bank tujuan atau slot tertentu",
         tint = MaterialTheme.colorScheme.tertiary,
@@ -3230,16 +3234,16 @@ private fun ReorderBanksDialog(
                 IconButton(
                   enabled = idx > 0,
                   onClick = { onMoveBank(bankKey, -1) },
-                  modifier = Modifier.size(36.dp)
+                  modifier = Modifier.minimumInteractiveComponentSize()
                 ) {
-                  Icon(Icons.Filled.KeyboardArrowUp, contentDescription = "Geser bank ke atas")
+                  Icon(Icons.Filled.KeyboardArrowUp, contentDescription = stringResource(R.string.cd_move_bank_up))
                 }
                 IconButton(
                   enabled = idx < distinctBanks.lastIndex,
                   onClick = { onMoveBank(bankKey, 1) },
-                  modifier = Modifier.size(36.dp)
+                  modifier = Modifier.minimumInteractiveComponentSize()
                 ) {
-                  Icon(Icons.Filled.KeyboardArrowDown, contentDescription = "Geser bank ke bawah")
+                  Icon(Icons.Filled.KeyboardArrowDown, contentDescription = stringResource(R.string.cd_move_bank_down))
                 }
               }
             }
@@ -3386,32 +3390,48 @@ private fun BulkColorPickerDialog(
     text = {
       FlowRow(
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp)
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp)
       ) {
-        Surface(
+        val resetCd = stringResource(R.string.cd_reset_default_color)
+        Box(
           modifier = Modifier
-            .size(40.dp)
+            .size(SoundPadTheme.spacing.minTouchTarget)
             .clip(CircleShape)
+            .semantics { contentDescription = resetCd }
             .clickable { onSelectColor(null) }
             .testTag("bulk_color_default"),
-          shape = CircleShape,
-          color = MaterialTheme.colorScheme.surfaceVariant,
-          border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
+          contentAlignment = Alignment.Center
         ) {
-          Box(contentAlignment = Alignment.Center) {
-            Icon(Icons.Filled.Close, contentDescription = "Reset default color", modifier = Modifier.size(18.dp))
+          Surface(
+            modifier = Modifier.size(40.dp),
+            shape = CircleShape,
+            color = MaterialTheme.colorScheme.surfaceVariant,
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
+          ) {
+            Box(contentAlignment = Alignment.Center) {
+              Icon(Icons.Filled.Close, contentDescription = null, modifier = Modifier.size(18.dp))
+            }
           }
         }
         SoundPadColorPalette.PAD_PRESETS_12.forEachIndexed { idx, preset ->
+          val presetCd = stringResource(R.string.cd_select_preset_color, preset.name)
           Box(
             modifier = Modifier
-              .size(40.dp)
+              .size(SoundPadTheme.spacing.minTouchTarget)
               .clip(CircleShape)
-              .background(Color(preset.argb.toInt()))
+              .semantics { contentDescription = presetCd }
               .clickable { onSelectColor(preset.argb) }
-              .testTag("bulk_color_preset_$idx")
-          )
+              .testTag("bulk_color_preset_$idx"),
+            contentAlignment = Alignment.Center
+          ) {
+            Box(
+              modifier = Modifier
+                .size(40.dp)
+                .clip(CircleShape)
+                .background(Color(preset.argb.toInt()))
+            )
+          }
         }
       }
     },

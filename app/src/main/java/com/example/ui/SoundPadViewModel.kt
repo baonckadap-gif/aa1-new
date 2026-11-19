@@ -914,7 +914,7 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
       audioEngine.updateActivePadParameters(target)
       if (persist) {
         viewModelScope.launch {
-          dao.upsertPadSetting(target.settings.toEntity(padId))
+          persistPadSettingSafely(padId, target.settings)
           persistentConfigManager.notifyConfigDirty("pad_volume")
         }
       }
@@ -1028,7 +1028,7 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
 
       viewModelScope.launch {
         dao.upsertPads(changedPads.map { it.toPadEntity(profileId) })
-        dao.upsertPadSetting(savedClone.settings.toEntity(savedClone.id))
+        dao.upsertPadSettingSafely(savedClone.settings.toEntity(savedClone.id))
         persistentConfigManager.notifyConfigDirty("duplicate_pad")
       }
       return
@@ -1121,7 +1121,7 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
         )
       }
       dao.upsertPads(padsToPersist.map { it.toPadEntity(profileId) })
-      dao.upsertPadSetting(savedClone.settings.toEntity(savedClone.id))
+      dao.upsertPadSettingSafely(savedClone.settings.toEntity(savedClone.id))
       persistentConfigManager.notifyConfigDirty("duplicate_pad_bank")
     }
   }
@@ -1275,7 +1275,7 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
     val shouldPrepareReverse = reverseSourcePad != null
 
     viewModelScope.launch {
-      dao.upsertPadSetting(newSettings.toEntity(padId))
+      persistPadSettingSafely(padId, newSettings)
       persistentConfigManager.notifyConfigDirty("pad_settings")
       var updatedTarget: SoundPad? = null
       _uiState.update { state ->
@@ -1318,7 +1318,7 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
             padId = padId
           )
           val reverted = newSettings.copy(isReversed = false)
-          dao.upsertPadSetting(reverted.toEntity(padId))
+          persistPadSettingSafely(padId, reverted)
           _uiState.update { state ->
             val updated = state.pads.map { p ->
               if (p.id == padId) p.copy(settings = reverted) else p
@@ -1596,7 +1596,7 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
       )
     }
     dao.upsertPad(readyPad.toPadEntity(profileId))
-    dao.upsertPadSetting(readyPad.settings.toEntity(readyPad.id))
+    dao.upsertPadSettingSafely(readyPad.settings.toEntity(readyPad.id))
     persistentConfigManager.notifyConfigDirty("add_created_pad")
 
     audioEngine.updatePlaylist(updatedList)
@@ -3251,7 +3251,7 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
     val profileId = state.settings.activeProfileId
     viewModelScope.launch {
       dao.upsertPads(clonedPairs.map { it.toPadEntity(profileId) })
-      dao.upsertPadSettings(clonedPairs.map { it.settings.toEntity(it.id) })
+      dao.upsertPadSettingsSafely(clonedPairs.map { it.settings.toEntity(it.id) })
       persistentConfigManager.notifyConfigDirty("bulk_duplicate_pads")
     }
   }
@@ -3340,9 +3340,39 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
         isActive = true
       )
       dao.syncProfilePadsPreservingSettings(profile, normalized.map { it.toPadEntity(profileId) })
-      dao.upsertPadSettings(normalized.map { it.settings.toEntity(it.id) })
+      dao.upsertPadSettingsSafely(normalized.map { it.settings.toEntity(it.id) })
       persistentConfigManager.notifyConfigDirty("undo_redo_snapshot")
     }
+  }
+
+  private suspend fun persistPadSettingSafely(padId: String, settings: PadSettings) {
+    val entity = settings.toEntity(padId)
+    if (dao.upsertPadSettingSafely(entity)) return
+    val currentPad = _uiState.value.pads.firstOrNull { it.id == padId } ?: return
+    val gs = _uiState.value.settings
+    val profileId = gs.activeProfileId
+    if (dao.getProfileById(profileId) == null) {
+      val now = System.currentTimeMillis()
+      val grid = gs.gridConfig
+      dao.upsertProfile(
+        PadProfileEntity(
+          id = profileId,
+          name = DEFAULT_PROFILE_NAME,
+          folderUri = gs.folderUri,
+          gridPreset = grid.preset.name,
+          gridRows = grid.rows,
+          gridCols = grid.cols,
+          masterEqEnabled = gs.masterEqEnabled,
+          masterEqPreset = gs.masterEqPreset.name,
+          masterEqBandsJson = ProfileJsonSerializer.encodeEqBandsString(gs.masterEqBandsDb),
+          createdAtMs = now,
+          updatedAtMs = now,
+          isActive = true
+        )
+      )
+    }
+    dao.upsertPad(currentPad.copy(settings = settings).toPadEntity(profileId))
+    dao.upsertPadSettingSafely(entity)
   }
 
   fun toggleFavoritesFilter() {

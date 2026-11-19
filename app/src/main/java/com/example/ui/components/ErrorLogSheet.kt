@@ -1,5 +1,8 @@
 package com.example.ui.components
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -7,6 +10,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -16,7 +20,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AudioFile
 import androidx.compose.material.icons.filled.BrokenImage
@@ -43,6 +46,7 @@ import androidx.compose.material3.OutlinedIconButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -52,10 +56,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -63,6 +66,7 @@ import androidx.compose.ui.unit.dp
 import com.example.R
 import com.example.domain.model.AppErrorLog
 import com.example.domain.model.PadErrorType
+import com.example.ui.theme.SoundPadTheme
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -87,6 +91,7 @@ fun ErrorLogSheet(
   onDismiss: () -> Unit
 ) {
   val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+  val spacing = SoundPadTheme.spacing
   var selectedFilter by remember { mutableStateOf<PadErrorType?>(null) }
   val filteredLogs = remember(errorLogs, selectedFilter) {
     if (selectedFilter == null) errorLogs else errorLogs.filter { it.errorType == selectedFilter }
@@ -102,8 +107,8 @@ fun ErrorLogSheet(
       modifier = Modifier
         .fillMaxWidth()
         .navigationBarsPadding()
-        .padding(horizontal = 20.dp, vertical = 10.dp),
-      verticalArrangement = Arrangement.spacedBy(12.dp)
+        .padding(horizontal = spacing.lg + spacing.xs, vertical = spacing.sm + spacing.xxs),
+      verticalArrangement = Arrangement.spacedBy(spacing.md)
     ) {
       Row(
         modifier = Modifier.fillMaxWidth(),
@@ -112,27 +117,27 @@ fun ErrorLogSheet(
       ) {
         Column(modifier = Modifier.weight(1f)) {
           Text(
-            text = "Log Error & Diagnostik",
+            text = stringResource(R.string.error_log_title),
             style = MaterialTheme.typography.headlineSmall,
             color = MaterialTheme.colorScheme.onSurface
           )
           Text(
-            text = "${errorLogs.size} catatan error / crash",
+            text = stringResource(R.string.error_log_count, errorLogs.size),
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
           )
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        Row(horizontalArrangement = Arrangement.spacedBy(spacing.xs)) {
           OutlinedIconButton(
             enabled = errorLogs.isNotEmpty(),
             onClick = onExportTxt,
             modifier = Modifier
-              .size(44.dp)
+              .minimumInteractiveComponentSize()
               .testTag("export_error_logs_button")
           ) {
             Icon(
               imageVector = Icons.Filled.Download,
-              contentDescription = "Ekspor log ke .txt",
+              contentDescription = stringResource(R.string.cd_export_error_logs),
               tint = MaterialTheme.colorScheme.primary
             )
           }
@@ -140,27 +145,35 @@ fun ErrorLogSheet(
             enabled = errorLogs.isNotEmpty(),
             onClick = onClearLogs,
             modifier = Modifier
-              .size(44.dp)
+              .minimumInteractiveComponentSize()
               .testTag("clear_error_logs_button")
           ) {
             Icon(
               imageVector = Icons.Filled.DeleteSweep,
-              contentDescription = "Bersihkan semua log",
+              contentDescription = stringResource(R.string.cd_clear_error_logs),
               tint = MaterialTheme.colorScheme.error
             )
           }
-          IconButton(onClick = onDismiss) {
-            Icon(Icons.Filled.Close, contentDescription = "Tutup")
+          IconButton(
+            onClick = onDismiss,
+            modifier = Modifier.minimumInteractiveComponentSize()
+          ) {
+            Icon(Icons.Filled.Close, contentDescription = stringResource(R.string.action_close))
           }
         }
       }
 
-      LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+      LazyRow(horizontalArrangement = Arrangement.spacedBy(spacing.xs + spacing.xxs)) {
         item {
           FilterChip(
             selected = selectedFilter == null,
             onClick = { selectedFilter = null },
-            label = { Text("Semua (${errorLogs.size})", style = MaterialTheme.typography.labelSmall) },
+            label = {
+              Text(
+                stringResource(R.string.error_log_filter_all, errorLogs.size),
+                style = MaterialTheme.typography.labelSmall
+              )
+            },
             modifier = Modifier.testTag("error_filter_all")
           )
         }
@@ -190,16 +203,16 @@ fun ErrorLogSheet(
       if (filteredLogs.isEmpty()) {
         Surface(
           modifier = Modifier.fillMaxWidth(),
-          shape = RoundedCornerShape(14.dp),
+          shape = MaterialTheme.shapes.medium,
           color = MaterialTheme.colorScheme.surfaceContainer,
           border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
         ) {
           Column(
             modifier = Modifier
               .fillMaxWidth()
-              .padding(24.dp),
+              .padding(spacing.xl),
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+            verticalArrangement = Arrangement.spacedBy(spacing.sm)
           ) {
             Icon(
               imageVector = Icons.Filled.CheckCircle,
@@ -208,12 +221,12 @@ fun ErrorLogSheet(
               modifier = Modifier.size(36.dp)
             )
             Text(
-              text = "Tidak ada error tercatat",
+              text = stringResource(R.string.error_log_empty_title),
               style = MaterialTheme.typography.titleSmall,
               color = MaterialTheme.colorScheme.onSurface
             )
             Text(
-              text = "File audio rusak, file DRM, izin SAF hilang, dan crash tak terduga akan otomatis muncul di sini.",
+              text = stringResource(R.string.error_log_empty_desc),
               style = MaterialTheme.typography.bodySmall,
               color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -224,7 +237,7 @@ fun ErrorLogSheet(
           modifier = Modifier
             .fillMaxWidth()
             .heightIn(max = 420.dp),
-          verticalArrangement = Arrangement.spacedBy(10.dp)
+          verticalArrangement = Arrangement.spacedBy(spacing.sm + spacing.xxs)
         ) {
           items(filteredLogs, key = { it.id }) { log ->
             ErrorLogCard(
@@ -237,7 +250,7 @@ fun ErrorLogSheet(
         }
       }
 
-      Spacer(modifier = Modifier.height(6.dp))
+      Spacer(modifier = Modifier.height(spacing.xs + spacing.xxs))
     }
   }
 }
@@ -249,22 +262,22 @@ private fun ErrorLogCard(
   onFixLog: () -> Unit,
   onDeleteLog: () -> Unit
 ) {
+  val spacing = SoundPadTheme.spacing
+  val context = LocalContext.current
   var expanded by remember(log.id) { mutableStateOf(false) }
   var copiedFeedback by remember(log.id) { mutableStateOf(false) }
-  @Suppress("DEPRECATION")
-  val clipboard = LocalClipboardManager.current
 
   Surface(
     modifier = Modifier.fillMaxWidth(),
-    shape = RoundedCornerShape(12.dp),
+    shape = MaterialTheme.shapes.medium,
     color = MaterialTheme.colorScheme.surfaceContainer,
     border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.45f))
   ) {
     Column(
       modifier = Modifier
         .fillMaxWidth()
-        .padding(12.dp),
-      verticalArrangement = Arrangement.spacedBy(6.dp)
+        .padding(spacing.md),
+      verticalArrangement = Arrangement.spacedBy(spacing.xs + spacing.xxs)
     ) {
       Row(
         modifier = Modifier.fillMaxWidth(),
@@ -272,13 +285,13 @@ private fun ErrorLogCard(
         verticalAlignment = Alignment.CenterVertically
       ) {
         Surface(
-          shape = RoundedCornerShape(6.dp),
+          shape = MaterialTheme.shapes.extraSmall,
           color = MaterialTheme.colorScheme.errorContainer
         ) {
           Row(
-            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+            modifier = Modifier.padding(horizontal = spacing.sm, vertical = 3.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(4.dp)
+            horizontalArrangement = Arrangement.spacedBy(spacing.xs)
           ) {
             Icon(
               imageVector = errorTypeIcon(log.errorType),
@@ -317,14 +330,14 @@ private fun ErrorLogCard(
       if (log.suggestion.isNotBlank()) {
         Surface(
           modifier = Modifier.fillMaxWidth(),
-          shape = RoundedCornerShape(8.dp),
+          shape = MaterialTheme.shapes.small,
           color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f)
         ) {
           Text(
-            text = "Saran: ${log.suggestion}",
+            text = stringResource(R.string.error_log_suggestion, log.suggestion),
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onPrimaryContainer,
-            modifier = Modifier.padding(8.dp)
+            modifier = Modifier.padding(spacing.sm)
           )
         }
       }
@@ -333,13 +346,16 @@ private fun ErrorLogCard(
         Row(
           modifier = Modifier
             .fillMaxWidth()
+            .defaultMinSize(minHeight = spacing.minTouchTarget)
             .clickable { expanded = !expanded }
-            .padding(vertical = 2.dp),
+            .padding(vertical = spacing.xxs),
           verticalAlignment = Alignment.CenterVertically,
           horizontalArrangement = Arrangement.SpaceBetween
         ) {
           Text(
-            text = if (expanded) "Sembunyikan Detail Stacktrace" else "Lihat Detail Stacktrace",
+            text = stringResource(
+              if (expanded) R.string.error_log_hide_stacktrace else R.string.error_log_show_stacktrace
+            ),
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.primary
           )
@@ -363,6 +379,9 @@ private fun ErrorLogCard(
         }
       }
 
+      val suggestionFormatted = if (log.suggestion.isNotBlank()) {
+        stringResource(R.string.error_log_suggestion, log.suggestion)
+      } else ""
       Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.End,
@@ -380,17 +399,18 @@ private fun ErrorLogCard(
             val detail = buildString {
               appendLine("[${log.errorType.label}] ${log.fileName}")
               appendLine(log.message)
-              if (log.suggestion.isNotBlank()) appendLine("Saran: ${log.suggestion}")
+              if (suggestionFormatted.isNotBlank()) appendLine(suggestionFormatted)
               if (log.stackTrace.isNotBlank()) appendLine(log.stackTrace)
             }
-            clipboard.setText(AnnotatedString(detail))
+            val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+            cm?.setPrimaryClip(ClipData.newPlainText("SoundPad Error Log", detail))
             copiedFeedback = true
           },
           modifier = Modifier.testTag("error_log_copy_${log.id}")
         ) {
           Icon(Icons.Filled.ContentCopy, contentDescription = null, modifier = Modifier.size(15.dp))
           Text(
-            text = if (copiedFeedback) " Disalin" else " ${stringResource(R.string.action_copy)}",
+            text = if (copiedFeedback) " ${stringResource(R.string.error_log_copied)}" else " ${stringResource(R.string.action_copy)}",
             style = MaterialTheme.typography.labelSmall
           )
         }

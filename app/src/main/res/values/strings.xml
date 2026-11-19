@@ -311,4 +311,183 @@
     <string name="master_rec_format_label">Format File Output</string>
     <string name="master_rec_samplerate_label">Sample Rate Output</string>
     <string name="master_rec_stop_format">Stop &amp; Simpan %1$s</string>
+
+    <!-- Tahap 5: AudioOutputSheet -->
+    <string name="audio_output_title">Mixer, Limiter &amp; Output Audio</string>
+    <string name="audio_output_subtitle">Limiter anti-klipping, auto-ducking, normalisasi loudness &amp; cue headphone</string>
+    <string name="cd_refresh_audio_devices">Segarkan daftar perangkat output audio</string>
+    <string name="cd_close_audio_output">Tutup panel output audio</string>
+    <string name="audio_output_limiter_title">Master Limiter</string>
+    <string name="audio_output_limiter_subtitle">Mencegah klipping audio saat banyak pad diputar bersamaan</string>
+    <string name="audio_output_ducking_title">Auto-Ducking</string>
+    <string name="audio_output_ducking_subtitle">Menurunkan volume pad latar saat Voice Recording atau pad Duck Source aktif</string>
+    <string name="audio_output_ducking_level_label">LEVEL LATAR AUTO-DUCKING</string>
+    <string name="audio_output_normalize_title">Normalisasi Loudness</string>
+    <string name="audio_output_normalize_subtitle">Menyeimbangkan file pelan &amp; keras secara otomatis per pad</string>
+    <string name="cd_analyze_loudness_all">Analisis loudness untuk semua pad</string>
+    <string name="audio_output_master_eq_title">Equalizer Master 5-Band</string>
+    <string name="audio_output_master_eq_subtitle">Berlaku global untuk semua pad (-12dB s/d +12dB)</string>
+    <string name="audio_output_main_device_section">PERANGKAT OUTPUT UTAMA</string>
+    <string name="audio_output_default_label">Output Default Sistem</string>
+    <string name="audio_output_default_subtitle">Perutean audio Android otomatis</string>
+    <string name="audio_output_default_type">Default</string>
+    <string name="audio_output_cue_device_section">PERANGKAT MONITOR CUE / HEADPHONE</string>
+    <string name="audio_output_cue_default_label">Ikuti Utama / Headphone Otomatis</string>
+    <string name="audio_output_cue_default_subtitle">Preview cue diputar ke output monitor default</string>
+    <string name="audio_output_cue_default_type">Headphone</string>
+    <string name="audio_output_cue_private_subtitle">Monitor cue pribadi di %1$s</string>
+    <string name="audio_output_latency_usb">USB ~8ms</string>
+    <string name="audio_output_latency_bt">BT ~120ms</string>
+    <string name="audio_output_latency_wired">Kabel Rendah-Lat</string>
+    <string name="audio_output_latency_auto">Rute Otomatis</string>
+    <string name="audio_output_latency_internal">Internal</string>
+    <string name="cd_selected_output_device">Perangkat output terpilih</string>
+
+    <!-- Tahap 5: VoiceRecordSheet -->
+    <string name="voice_rec_title">Perekam Trek Suara</string>
+    <string name="voice_rec_subtitle">Simpan WAV otomatis sebagai pad baru</string>
+    <string name="cd_close_voice_recorder">Tutup perekam suara</string>
+    <string name="voice_rec_delay_instant">Instan</string>
+    <string name="voice_rec_delay_3s">Jeda 3dtk</string>
+    <string name="voice_rec_delay_5s">Jeda 5dtk</string>
+    <string name="voice_rec_starting_in">MULAI DALAM %1$d</string>
+    <string name="voice_rec_idle_timer">00:00.0</string>
+    <string name="cd_stop_save_voice_pad">Hentikan dan simpan pad suara</string>
+    <string name="cd_start_voice_recording">Mulai rekam suara</string>
+    <string name="voice_rec_recording_mic">Merekam input mikrofon…</string>
+
+    <!-- Tahap 5: AudioEditorSheet -->
+    <string name="audio_editor_title">Waveform &amp; Potong Non-Destruktif</string>
+    <string name="cd_close_audio_editor">Tutup editor audio</string>
+    <string name="cd_save_trim_metadata">Simpan metadata potongan non-destruktif</string>
+    <string name="audio_editor_zoom_hint">Cubit waveform untuk zoom · Tarik garis IN / OUT</string>
+    <string name="cd_zoom_out_waveform">Perkecil tampilan waveform</string>
+    <string name="cd_zoom_in_waveform">Perbesar tampilan waveform</string>
+    <string name="cd_reset_waveform_zoom">Reset zoom waveform</string>
+    <string name="audio_editor_in_label">IN: %1$s</string>
+    <string name="audio_editor_len_label">LEN: %1$s</string>
+    <string name="audio_editor_out_label">OUT: %1$s</string>
+    <string name="cd_stop_preview">Hentikan preview</string>
+    <string name="cd_preview_trimmed">Dengarkan bagian terpotong</string>
+    <string name="cd_reset_cut_range">Reset rentang potongan</string>
+    <string name="cd_export_cut_new_pad">Ekspor potongan sebagai pad baru</string>
+    <string name="cd_export_cut_wav">Ekspor potongan audio ke file WAV baru</string>
+
+    <!-- Tahap 5: BackupDialogsAndTab -->
+    <string name="backup_never_synced">Belum pernah sinkron</string>
+    <string name="backup_folder_unselected_placeholder">Documents/SoundPadPro (belum dipilih)</string>
+    <string name="backup_last_sync_summary">Terakhir sinkron: %1$s · %2$d snapshot</string>
+    <string name="backup_mirror_active">Mirror otomatis aktif di: %1$s/.soundpadpro/</string>
+    <string name="backup_fallback_snapshot_warning">File utama korup/tidak lengkap. Memakai snapshot sehat: %1$s</string>
+    <string name="backup_date_schema_summary">Tanggal backup: %1$s · Skema v%2$d</string>
+    <string name="backup_metric_profile">Profil</string>
+    <string name="backup_metric_bank">Bank</string>
+    <string name="backup_metric_pad">Pad</string>
+    <string name="backup_metric_sched_seq">Jadwal/Seq</string>
+    <string name="backup_relink_title">Pencocokan File Audio</string>
+    <string name="backup_relink_detected_folder">Cocokkan langsung ke folder musik ini</string>
+    <string name="backup_relink_current_folder">Akan dicocokkan ke: %1$s</string>
+    <string name="backup_relink_pick_hint">Pilih folder musik jika ingin menautkan ulang pad yang file-nya ada di HP</string>
+    <string name="backup_relink_pick_btn">Folder Musik</string>
+    <string name="backup_restore_components_header">Pilih komponen yang akan dipulihkan:</string>
+    <string name="backup_opt_settings">Pengaturan Global, Grid, Tema, Fokus Mode &amp; Output</string>
+    <string name="backup_opt_profiles">Profil, Bank, Slot Pad, Efek, EQ, &amp; Layout</string>
+    <string name="backup_opt_profile_item">%1$s (%2$d pad · %3$d bank)</string>
+    <string name="backup_opt_midi">MIDI Mapping (CC, Program Change, Note Pad, Fokus)</string>
+    <string name="backup_opt_scheduler_seq">Scheduler Alarm &amp; Sequencer/Playlist</string>
+    <string name="backup_restore_apply_selected">Pulihkan Pilihan Tercentang</string>
+    <string name="backup_restore_processing">Memproses…</string>
+    <string name="backup_snapshot_no_folder_hint">Pilih folder backup config terlebih dahulu atau ketuk tombol di bawah untuk memulihkan langsung dari folder backup / .soundpadpro.</string>
+    <string name="backup_snapshot_fallback_label">Snapshot</string>
+
+    <!-- Tahap 5: ErrorLogSheet -->
+    <string name="error_log_title">Log Error &amp; Diagnostik</string>
+    <string name="error_log_count">%1$d catatan error / crash</string>
+    <string name="cd_export_error_logs">Ekspor log ke .txt</string>
+    <string name="cd_clear_error_logs">Bersihkan semua log</string>
+    <string name="error_log_filter_all">Semua (%1$d)</string>
+    <string name="error_log_empty_title">Tidak ada error tercatat</string>
+    <string name="error_log_empty_desc">File audio rusak, file DRM, izin SAF hilang, dan crash tak terduga akan otomatis muncul di sini.</string>
+    <string name="error_log_suggestion">Saran: %1$s</string>
+    <string name="error_log_hide_stacktrace">Sembunyikan Detail Stacktrace</string>
+    <string name="error_log_show_stacktrace">Lihat Detail Stacktrace</string>
+    <string name="error_log_copied">Disalin</string>
+
+    <!-- Tahap 5: SchedulerSheet -->
+    <string name="scheduler_subtitle">AlarmManager Exact + Boot Restore</string>
+    <string name="scheduler_default_task_title">Jadwal %1$d</string>
+    <string name="scheduler_missing_pad">Pad tidak ditemukan</string>
+    <string name="scheduler_meta_summary">Vol %1$d%% · Fade %2$dms</string>
+    <string name="scheduler_meta_autostop"> · Auto-Stop %1$dm</string>
+    <string name="scheduler_meta_loop"> · Loop</string>
+    <string name="scheduler_action_test">Uji</string>
+    <string name="scheduler_action_edit">Edit</string>
+    <string name="scheduler_editor_title">Atur Jadwal Pemutaran</string>
+    <string name="scheduler_name_label">Nama Jadwal</string>
+    <string name="scheduler_target_label">Target Pemutaran</string>
+    <string name="scheduler_time_label">Waktu (%1$02d:%2$02d)</string>
+    <string name="scheduler_hour_label">Jam: %1$d</string>
+    <string name="scheduler_minute_label">Menit: %1$d</string>
+    <string name="scheduler_repeat_label">Pengulangan</string>
+    <string name="scheduler_day_mon">Sen</string>
+    <string name="scheduler_day_tue">Sel</string>
+    <string name="scheduler_day_wed">Rab</string>
+    <string name="scheduler_day_thu">Kam</string>
+    <string name="scheduler_day_fri">Jum</string>
+    <string name="scheduler_day_sat">Sab</string>
+    <string name="scheduler_day_sun">Min</string>
+    <string name="scheduler_volume_label">Volume: %1$d%%</string>
+    <string name="scheduler_fade_in_label">Fade In: %1$d ms</string>
+    <string name="scheduler_autostop_off">Auto Stop: Mati</string>
+    <string name="scheduler_autostop_minutes">Auto Stop: %1$d menit</string>
+    <string name="scheduler_loop_label">Ulangi (Loop) saat berjalan</string>
+    <string name="scheduler_fallback_title">Jadwal Otomatis</string>
+    <string name="action_save">Simpan</string>
+
+    <!-- Tahap 5: SequencerSheet -->
+    <string name="sequencer_subtitle">Urutan Pad · Jeda · Crossfade · Trigger Pad/MIDI</string>
+    <string name="sequencer_running_header">Sedang Berjalan: %1$s (#%2$d/%3$d)</string>
+    <string name="sequencer_ready_header">Siap Diputar: %1$s</string>
+    <string name="sequencer_gap_countdown">Jeda antar pad: %1$.1f dtk…</string>
+    <string name="sequencer_idle_prompt">Pilih Play untuk memulai urutan pad</string>
+    <string name="cd_sequencer_prev">Item sebelumnya</string>
+    <string name="sequencer_action_pause">Pause</string>
+    <string name="sequencer_action_play">Play</string>
+    <string name="cd_sequencer_next">Item berikutnya</string>
+    <string name="cd_sequencer_stop">Hentikan sequencer</string>
+    <string name="sequencer_play_mode_label">Mode Pemutaran</string>
+    <string name="sequencer_delete_playlist">Hapus Playlist</string>
+    <string name="sequencer_gap_label">Jeda Antar Pad: %1$.1f detik</string>
+    <string name="sequencer_crossfade_label">Crossfade Antar Item (%1$dms)</string>
+    <string name="sequencer_trigger_pad_selected">Pad Pemicu: %1$s</string>
+    <string name="sequencer_trigger_pad_pick">Pilih Pad Pemicu</string>
+    <string name="sequencer_midi_trigger_label">MIDI Trigger</string>
+    <string name="sequencer_queue_header">Urutan Pad (%1$d) · Drag tahan / Panah</string>
+    <string name="sequencer_add_pad">Tambah Pad</string>
+    <string name="sequencer_missing_pad">Pad Hilang</string>
+    <string name="cd_sequencer_drag_handle">Seret untuk ubah urutan item</string>
+    <string name="cd_sequencer_play_here">Putar mulai dari item ini</string>
+    <string name="cd_sequencer_move_up">Geser ke atas</string>
+    <string name="cd_sequencer_move_down">Geser ke bawah</string>
+    <string name="cd_sequencer_remove">Hapus item dari playlist</string>
+    <string name="sequencer_default_setlist_name">Setlist %1$d</string>
+    <string name="sequencer_create_dialog_title">Buat Playlist Sequencer</string>
+    <string name="sequencer_playlist_name_label">Nama Playlist</string>
+    <string name="sequencer_fallback_setlist_name">Setlist Baru</string>
+    <string name="action_create">Buat</string>
+    <string name="sequencer_add_pad_dialog_title">Tambahkan Pad ke Playlist</string>
+    <string name="sequencer_trigger_pad_dialog_title">Pilih Pad Khusus Pemicu</string>
+    <string name="sequencer_trigger_pad_none">Tidak ada (Matikan Pad Pemicu)</string>
+
+    <!-- Tahap 5: Aksesibilitas & Banner SoundPadScreen / Panels -->
+    <string name="cd_dismiss">Tutup pemberitahuan</string>
+    <string name="cd_exit_midi_learn">Keluar dari mode MIDI Learn</string>
+    <string name="cd_grant_folder_permission">Berikan izin akses folder</string>
+    <string name="cd_dismiss_error">Tutup pesan error</string>
+    <string name="cd_sequencer_resume">Lanjutkan Sequencer</string>
+    <string name="cd_sequencer_pause">Jeda Sequencer</string>
+    <string name="cd_move_bank_up">Geser bank ke atas</string>
+    <string name="cd_move_bank_down">Geser bank ke bawah</string>
+    <string name="cd_reset_default_color">Reset warna default</string>
+    <string name="cd_select_preset_color">Pilih warna %1$s</string>
 </resources>

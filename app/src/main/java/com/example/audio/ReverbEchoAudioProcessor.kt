@@ -118,7 +118,7 @@ class ReverbEchoAudioProcessor : BaseAudioProcessor() {
     buffersAllocated = true
   }
 
-  override fun onFlush() {
+  override fun onFlush(streamMetadata: AudioProcessor.StreamMetadata) {
     clearBuffers()
   }
 

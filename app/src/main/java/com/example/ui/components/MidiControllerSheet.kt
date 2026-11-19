@@ -18,9 +18,9 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.BluetoothSearching
 import androidx.compose.material.icons.filled.Bluetooth
 import androidx.compose.material.icons.filled.BluetoothConnected
-import androidx.compose.material.icons.filled.BluetoothSearching
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.Layers
@@ -253,7 +253,7 @@ fun MidiControllerSheet(
                   IconButton(
                     onClick = onCancelLearn,
                     modifier = Modifier
-                      .size(36.dp)
+                      .minimumInteractiveComponentSize()
                       .testTag("midi_cancel_learn_button")
                   ) {
                     Icon(
@@ -365,7 +365,7 @@ fun MidiControllerSheet(
                       .minimumInteractiveComponentSize()
                       .testTag("midi_ble_scan_button")
                   ) {
-                    Icon(Icons.Filled.BluetoothSearching, contentDescription = "Scan Bluetooth MIDI devices")
+                    Icon(Icons.AutoMirrored.Filled.BluetoothSearching, contentDescription = "Scan Bluetooth MIDI devices")
                   }
                 }
               }

@@ -18,7 +18,6 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
@@ -42,12 +41,12 @@ import androidx.compose.material3.OutlinedIconButton
 import androidx.compose.material3.RangeSlider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -58,10 +57,13 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.example.R
 import com.example.domain.model.SoundPad
 import com.example.domain.model.WaveformData
+import com.example.ui.theme.SoundPadTheme
 import java.util.Locale
 import kotlin.math.abs
 
@@ -81,6 +83,7 @@ fun AudioEditorSheet(
   onDismiss: () -> Unit
 ) {
   val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+  val spacing = SoundPadTheme.spacing
   val totalMs = (waveform?.durationMs?.takeIf { it > 0L } ?: pad.durationMs).coerceAtLeast(500L)
 
   val initialStart = (pad.settings.trimStartMs.coerceIn(0L, totalMs - 100L)).toFloat() / totalMs.toFloat()
@@ -125,8 +128,8 @@ fun AudioEditorSheet(
         .fillMaxWidth()
         .verticalScroll(rememberScrollState())
         .navigationBarsPadding()
-        .padding(horizontal = 20.dp, vertical = 10.dp),
-      verticalArrangement = Arrangement.spacedBy(12.dp)
+        .padding(horizontal = spacing.lg + spacing.xs, vertical = spacing.sm + spacing.xxs),
+      verticalArrangement = Arrangement.spacedBy(spacing.md)
     ) {
       Row(
         modifier = Modifier.fillMaxWidth(),
@@ -135,7 +138,7 @@ fun AudioEditorSheet(
       ) {
         Column(modifier = Modifier.weight(1f)) {
           Text(
-            text = "Waveform & Non-Destructive Cut",
+            text = stringResource(R.string.audio_editor_title),
             style = MaterialTheme.typography.headlineSmall,
             color = MaterialTheme.colorScheme.onSurface
           )
@@ -145,15 +148,15 @@ fun AudioEditorSheet(
             color = MaterialTheme.colorScheme.onSurfaceVariant
           )
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        Row(horizontalArrangement = Arrangement.spacedBy(spacing.xs + spacing.xxs)) {
           IconButton(
             onClick = {
               onStopPreview()
               onDismiss()
             },
-            modifier = Modifier.size(48.dp)
+            modifier = Modifier.minimumInteractiveComponentSize()
           ) {
-            Icon(Icons.Filled.Close, contentDescription = "Close audio editor")
+            Icon(Icons.Filled.Close, contentDescription = stringResource(R.string.cd_close_audio_editor))
           }
           FilledIconButton(
             onClick = {
@@ -166,10 +169,10 @@ fun AudioEditorSheet(
               onDismiss()
             },
             modifier = Modifier
-              .size(48.dp)
+              .minimumInteractiveComponentSize()
               .testTag("save_trim_metadata_button")
           ) {
-            Icon(Icons.Filled.Check, contentDescription = "Save non-destructive cut metadata")
+            Icon(Icons.Filled.Check, contentDescription = stringResource(R.string.cd_save_trim_metadata))
           }
         }
       }
@@ -181,14 +184,14 @@ fun AudioEditorSheet(
         verticalAlignment = Alignment.CenterVertically
       ) {
         Text(
-          text = "Pinch waveform untuk zoom · Tarik garis IN / OUT",
+          text = stringResource(R.string.audio_editor_zoom_hint),
           style = MaterialTheme.typography.labelSmall,
           color = MaterialTheme.colorScheme.onSurfaceVariant,
           modifier = Modifier.weight(1f)
         )
         Row(
           verticalAlignment = Alignment.CenterVertically,
-          horizontalArrangement = Arrangement.spacedBy(4.dp)
+          horizontalArrangement = Arrangement.spacedBy(spacing.xs)
         ) {
           IconButton(
             enabled = zoomFactor > 1.05f,
@@ -199,13 +202,17 @@ fun AudioEditorSheet(
               panOffsetFraction = panOffsetFraction.coerceIn(0f, (1f - nextSpan).coerceAtLeast(0f))
             },
             modifier = Modifier
-              .size(36.dp)
+              .minimumInteractiveComponentSize()
               .testTag("waveform_zoom_out_button")
           ) {
-            Icon(Icons.Filled.ZoomOut, contentDescription = "Zoom out waveform", modifier = Modifier.size(18.dp))
+            Icon(
+              Icons.Filled.ZoomOut,
+              contentDescription = stringResource(R.string.cd_zoom_out_waveform),
+              modifier = Modifier.size(18.dp)
+            )
           }
           Surface(
-            shape = RoundedCornerShape(6.dp),
+            shape = MaterialTheme.shapes.extraSmall,
             color = MaterialTheme.colorScheme.surfaceContainer,
             border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
           ) {
@@ -213,7 +220,7 @@ fun AudioEditorSheet(
               text = String.format(Locale.US, "%.1fx", zoomFactor),
               style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
               color = MaterialTheme.colorScheme.primary,
-              modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+              modifier = Modifier.padding(horizontal = spacing.sm, vertical = spacing.xs)
             )
           }
           IconButton(
@@ -226,10 +233,14 @@ fun AudioEditorSheet(
               panOffsetFraction = (mid - nextSpan * 0.5f).coerceIn(0f, (1f - nextSpan).coerceAtLeast(0f))
             },
             modifier = Modifier
-              .size(36.dp)
+              .minimumInteractiveComponentSize()
               .testTag("waveform_zoom_in_button")
           ) {
-            Icon(Icons.Filled.ZoomIn, contentDescription = "Zoom in waveform", modifier = Modifier.size(18.dp))
+            Icon(
+              Icons.Filled.ZoomIn,
+              contentDescription = stringResource(R.string.cd_zoom_in_waveform),
+              modifier = Modifier.size(18.dp)
+            )
           }
           if (zoomFactor > 1.05f) {
             IconButton(
@@ -238,10 +249,14 @@ fun AudioEditorSheet(
                 panOffsetFraction = 0f
               },
               modifier = Modifier
-                .size(36.dp)
+                .minimumInteractiveComponentSize()
                 .testTag("waveform_zoom_reset_button")
             ) {
-              Icon(Icons.Filled.RestartAlt, contentDescription = "Reset waveform zoom", modifier = Modifier.size(18.dp))
+              Icon(
+                Icons.Filled.RestartAlt,
+                contentDescription = stringResource(R.string.cd_reset_waveform_zoom),
+                modifier = Modifier.size(18.dp)
+              )
             }
           }
         }
@@ -250,7 +265,7 @@ fun AudioEditorSheet(
       // Waveform Canvas Surface with Pinch-to-Zoom + Pan + Handle Drag
       Surface(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(14.dp),
+        shape = MaterialTheme.shapes.medium,
         color = MaterialTheme.colorScheme.surfaceContainer,
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
       ) {
@@ -258,7 +273,7 @@ fun AudioEditorSheet(
           modifier = Modifier
             .fillMaxWidth()
             .height(164.dp)
-            .padding(12.dp),
+            .padding(spacing.md),
           contentAlignment = Alignment.Center
         ) {
           if (isLoadingWaveform || waveform == null) {
@@ -274,7 +289,7 @@ fun AudioEditorSheet(
               modifier = Modifier
                 .fillMaxWidth()
                 .height(140.dp)
-                .clip(RoundedCornerShape(8.dp))
+                .clip(MaterialTheme.shapes.small)
                 .background(MaterialTheme.colorScheme.background.copy(alpha = 0.65f))
                 .pointerInput(totalMs) {
                   awaitEachGesture {
@@ -409,17 +424,17 @@ fun AudioEditorSheet(
         horizontalArrangement = Arrangement.SpaceBetween
       ) {
         Text(
-          text = "IN: ${formatMillis(startMs)}",
+          text = stringResource(R.string.audio_editor_in_label, formatMillis(startMs)),
           style = MaterialTheme.typography.labelMedium,
           color = MaterialTheme.colorScheme.secondary
         )
         Text(
-          text = "LEN: ${formatMillis(endMs - startMs)}",
+          text = stringResource(R.string.audio_editor_len_label, formatMillis(endMs - startMs)),
           style = MaterialTheme.typography.labelMedium,
           color = MaterialTheme.colorScheme.primary
         )
         Text(
-          text = "OUT: ${formatMillis(endMs)}",
+          text = stringResource(R.string.audio_editor_out_label, formatMillis(endMs)),
           style = MaterialTheme.typography.labelMedium,
           color = MaterialTheme.colorScheme.error
         )
@@ -460,7 +475,9 @@ fun AudioEditorSheet(
         ) {
           Icon(
             imageVector = if (isPreviewPlaying) Icons.Filled.Stop else Icons.Filled.PlayArrow,
-            contentDescription = if (isPreviewPlaying) "Stop preview" else "Preview trimmed section"
+            contentDescription = stringResource(
+              if (isPreviewPlaying) R.string.cd_stop_preview else R.string.cd_preview_trimmed
+            )
           )
         }
 
@@ -476,7 +493,7 @@ fun AudioEditorSheet(
             .size(52.dp)
             .testTag("editor_reset_trim_button")
         ) {
-          Icon(Icons.Filled.RestartAlt, contentDescription = "Reset cut range")
+          Icon(Icons.Filled.RestartAlt, contentDescription = stringResource(R.string.cd_reset_cut_range))
         }
 
         OutlinedIconButton(
@@ -494,7 +511,7 @@ fun AudioEditorSheet(
           } else {
             Icon(
               Icons.Filled.LibraryAdd,
-              contentDescription = "Export cut as new pad",
+              contentDescription = stringResource(R.string.cd_export_cut_new_pad),
               tint = MaterialTheme.colorScheme.primary
             )
           }
@@ -512,13 +529,13 @@ fun AudioEditorSheet(
         ) {
           Icon(
             Icons.Filled.Download,
-            contentDescription = "Export cut audio to new WAV file",
+            contentDescription = stringResource(R.string.cd_export_cut_wav),
             tint = MaterialTheme.colorScheme.secondary
           )
         }
       }
 
-      Spacer(modifier = Modifier.height(8.dp))
+      Spacer(modifier = Modifier.height(spacing.sm))
     }
   }
 }

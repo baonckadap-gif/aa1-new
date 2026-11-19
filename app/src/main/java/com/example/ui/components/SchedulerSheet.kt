@@ -20,7 +20,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Alarm
@@ -47,6 +46,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -71,6 +71,7 @@ import com.example.domain.model.SequencerPlaylist
 import com.example.domain.model.SoundPad
 import com.example.scheduler.PadSchedulerManager
 import com.example.ui.BankPageUi
+import com.example.ui.theme.SoundPadTheme
 import java.util.UUID
 import kotlin.math.roundToInt
 
@@ -90,6 +91,7 @@ fun SchedulerSheet(
   onDismiss: () -> Unit
 ) {
   val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+  val spacing = SoundPadTheme.spacing
   var editingTask by remember { mutableStateOf<ScheduledPadTask?>(null) }
 
   ModalBottomSheet(
@@ -99,8 +101,8 @@ fun SchedulerSheet(
   ) {
     LazyColumn(
       modifier = Modifier.fillMaxWidth(),
-      contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-      verticalArrangement = Arrangement.spacedBy(10.dp)
+      contentPadding = PaddingValues(horizontal = spacing.lg, vertical = spacing.sm),
+      verticalArrangement = Arrangement.spacedBy(spacing.sm + spacing.xxs)
     ) {
       item {
         Row(
@@ -110,13 +112,13 @@ fun SchedulerSheet(
         ) {
           Row(
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            horizontalArrangement = Arrangement.spacedBy(spacing.sm + spacing.xxs),
             modifier = Modifier.weight(1f)
           ) {
             Box(
               modifier = Modifier
                 .size(40.dp)
-                .clip(RoundedCornerShape(10.dp))
+                .clip(MaterialTheme.shapes.small)
                 .background(MaterialTheme.colorScheme.primaryContainer),
               contentAlignment = Alignment.Center
             ) {
@@ -125,13 +127,18 @@ fun SchedulerSheet(
             Column {
               Text(stringResource(R.string.scheduler_title), style = MaterialTheme.typography.titleMedium)
               Text(
-                text = "AlarmManager Exact + Boot Restore",
+                text = stringResource(R.string.scheduler_subtitle),
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
               )
             }
           }
-          IconButton(onClick = onDismiss, modifier = Modifier.testTag("close_scheduler_sheet")) {
+          IconButton(
+            onClick = onDismiss,
+            modifier = Modifier
+              .minimumInteractiveComponentSize()
+              .testTag("close_scheduler_sheet")
+          ) {
             Icon(Icons.Filled.Close, contentDescription = stringResource(R.string.action_close))
           }
         }
@@ -140,16 +147,16 @@ fun SchedulerSheet(
       if (!canScheduleExactAlarms) {
         item {
           Surface(
-            shape = RoundedCornerShape(12.dp),
+            shape = MaterialTheme.shapes.medium,
             color = MaterialTheme.colorScheme.errorContainer,
             border = BorderStroke(1.dp, MaterialTheme.colorScheme.error)
           ) {
             Row(
               modifier = Modifier
                 .fillMaxWidth()
-                .padding(12.dp),
+                .padding(spacing.md),
               verticalAlignment = Alignment.CenterVertically,
-              horizontalArrangement = Arrangement.spacedBy(8.dp)
+              horizontalArrangement = Arrangement.spacedBy(spacing.sm)
             ) {
               Icon(Icons.Filled.Warning, contentDescription = null, tint = MaterialTheme.colorScheme.error)
               Text(
@@ -167,12 +174,13 @@ fun SchedulerSheet(
       }
 
       item {
+        val defaultTaskTitle = stringResource(R.string.scheduler_default_task_title, tasks.size + 1)
         Button(
           onClick = {
             val defaultTargetId = pads.firstOrNull()?.id ?: ""
             editingTask = ScheduledPadTask(
               id = "sched_${UUID.randomUUID()}",
-              title = "Jadwal ${tasks.size + 1}",
+              title = defaultTaskTitle,
               targetType = ScheduleTargetType.PAD,
               targetId = defaultTargetId,
               hour = 9,
@@ -182,10 +190,11 @@ fun SchedulerSheet(
           enabled = pads.isNotEmpty() || bankPages.isNotEmpty() || playlists.isNotEmpty(),
           modifier = Modifier
             .fillMaxWidth()
+            .height(spacing.minTouchTarget)
             .testTag("scheduler_add_button")
         ) {
           Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(18.dp))
-          Spacer(modifier = Modifier.width(6.dp))
+          Spacer(modifier = Modifier.width(spacing.xs + spacing.xxs))
           Text(stringResource(R.string.scheduler_add))
         }
       }
@@ -193,7 +202,7 @@ fun SchedulerSheet(
       if (tasks.isEmpty()) {
         item {
           Surface(
-            shape = RoundedCornerShape(12.dp),
+            shape = MaterialTheme.shapes.medium,
             color = MaterialTheme.colorScheme.surfaceContainer
           ) {
             Text(
@@ -202,19 +211,33 @@ fun SchedulerSheet(
               color = MaterialTheme.colorScheme.onSurfaceVariant,
               modifier = Modifier
                 .fillMaxWidth()
-                .padding(16.dp)
+                .padding(spacing.lg)
             )
           }
         }
       } else {
         items(tasks, key = { it.id }) { task ->
           val targetLabel = when (task.targetType) {
-            ScheduleTargetType.PAD -> pads.firstOrNull { it.id == task.targetId }?.displayName ?: "Pad tidak ditemukan"
-            ScheduleTargetType.BANK -> "Bank ${(task.targetId.toIntOrNull() ?: 0) + 1}"
-            ScheduleTargetType.SEQUENCER -> playlists.firstOrNull { it.id == task.targetId }?.name ?: "Playlist"
+            ScheduleTargetType.PAD -> pads.firstOrNull { it.id == task.targetId }?.displayName
+              ?: stringResource(R.string.scheduler_missing_pad)
+            ScheduleTargetType.BANK -> stringResource(
+              R.string.scheduler_bank_fallback,
+              (task.targetId.toIntOrNull() ?: 0) + 1
+            )
+            ScheduleTargetType.SEQUENCER -> playlists.firstOrNull { it.id == task.targetId }?.name
+              ?: ScheduleTargetType.SEQUENCER.label
+          }
+          val metaSummary = buildString {
+            append(stringResource(R.string.scheduler_meta_summary, (task.volume * 100).roundToInt(), task.fadeInMs.toInt()))
+            if (task.autoStopMinutes > 0) {
+              append(stringResource(R.string.scheduler_meta_autostop, task.autoStopMinutes))
+            }
+            if (task.loopPlayback) {
+              append(stringResource(R.string.scheduler_meta_loop))
+            }
           }
           Surface(
-            shape = RoundedCornerShape(12.dp),
+            shape = MaterialTheme.shapes.medium,
             color = MaterialTheme.colorScheme.surfaceContainer,
             border = BorderStroke(
               1.dp,
@@ -224,8 +247,8 @@ fun SchedulerSheet(
             Column(
               modifier = Modifier
                 .fillMaxWidth()
-                .padding(12.dp),
-              verticalArrangement = Arrangement.spacedBy(6.dp)
+                .padding(spacing.md),
+              verticalArrangement = Arrangement.spacedBy(spacing.xs + spacing.xxs)
             ) {
               Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -247,9 +270,7 @@ fun SchedulerSheet(
                     overflow = TextOverflow.Ellipsis
                   )
                   Text(
-                    text = "Vol ${(task.volume * 100).roundToInt()}% · Fade ${task.fadeInMs}ms" +
-                      (if (task.autoStopMinutes > 0) " · Auto-Stop ${task.autoStopMinutes}m" else "") +
-                      (if (task.loopPlayback) " · Loop" else ""),
+                    text = metaSummary,
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                   )
@@ -266,18 +287,18 @@ fun SchedulerSheet(
               ) {
                 TextButton(onClick = { onTestTriggerTask(task) }) {
                   Icon(Icons.Filled.PlayArrow, contentDescription = null, modifier = Modifier.size(16.dp))
-                  Spacer(modifier = Modifier.width(4.dp))
-                  Text("Uji")
+                  Spacer(modifier = Modifier.width(spacing.xs))
+                  Text(stringResource(R.string.scheduler_action_test))
                 }
                 TextButton(onClick = { editingTask = task }) {
                   Icon(Icons.Filled.Edit, contentDescription = null, modifier = Modifier.size(16.dp))
-                  Spacer(modifier = Modifier.width(4.dp))
-                  Text("Edit")
+                  Spacer(modifier = Modifier.width(spacing.xs))
+                  Text(stringResource(R.string.scheduler_action_edit))
                 }
                 TextButton(onClick = { onDeleteTask(task.id) }) {
                   Icon(Icons.Filled.Delete, contentDescription = null, tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(16.dp))
-                  Spacer(modifier = Modifier.width(4.dp))
-                  Text("Hapus", color = MaterialTheme.colorScheme.error)
+                  Spacer(modifier = Modifier.width(spacing.xs))
+                  Text(stringResource(R.string.action_delete), color = MaterialTheme.colorScheme.error)
                 }
               }
             }
@@ -285,7 +306,7 @@ fun SchedulerSheet(
         }
       }
 
-      item { Spacer(modifier = Modifier.height(20.dp)) }
+      item { Spacer(modifier = Modifier.height(spacing.lg + spacing.xs)) }
     }
   }
 
@@ -313,6 +334,7 @@ private fun ScheduleEditorDialog(
   onSave: (ScheduledPadTask) -> Unit,
   onDismiss: () -> Unit
 ) {
+  val spacing = SoundPadTheme.spacing
   var title by remember { mutableStateOf(initial.title) }
   var targetType by remember { mutableStateOf(initial.targetType) }
   var targetId by remember { mutableStateOf(initial.targetId) }
@@ -340,28 +362,29 @@ private fun ScheduleEditorDialog(
       bankFilter = activeBankFilter
     )
   }
+  val fallbackScheduleTitle = stringResource(R.string.scheduler_fallback_title)
 
   AlertDialog(
     onDismissRequest = onDismiss,
-    title = { Text("Atur Jadwal Pemutaran") },
+    title = { Text(stringResource(R.string.scheduler_editor_title)) },
     text = {
       LazyColumn(
         modifier = Modifier.height(420.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp)
+        verticalArrangement = Arrangement.spacedBy(spacing.sm + spacing.xxs)
       ) {
         item {
           OutlinedTextField(
             value = title,
             onValueChange = { title = it },
-            label = { Text("Nama Jadwal") },
+            label = { Text(stringResource(R.string.scheduler_name_label)) },
             singleLine = true,
             modifier = Modifier.fillMaxWidth()
           )
         }
 
         item {
-          Text("Target Pemutaran", style = MaterialTheme.typography.labelMedium)
-          Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+          Text(stringResource(R.string.scheduler_target_label), style = MaterialTheme.typography.labelMedium)
+          Row(horizontalArrangement = Arrangement.spacedBy(spacing.xs + spacing.xxs)) {
             ScheduleTargetType.entries.forEach { t ->
               FilterChip(
                 selected = targetType == t,
@@ -384,7 +407,7 @@ private fun ScheduleEditorDialog(
             ScheduleTargetType.PAD -> {
               Column(
                 modifier = Modifier.fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
+                verticalArrangement = Arrangement.spacedBy(spacing.sm)
               ) {
                 OutlinedTextField(
                   value = padSearchQuery,
@@ -401,7 +424,9 @@ private fun ScheduleEditorDialog(
                     if (padSearchQuery.isNotEmpty()) {
                       IconButton(
                         onClick = { padSearchQuery = "" },
-                        modifier = Modifier.testTag("scheduler_pad_search_clear")
+                        modifier = Modifier
+                          .minimumInteractiveComponentSize()
+                          .testTag("scheduler_pad_search_clear")
                       ) {
                         Icon(
                           Icons.Filled.Close,
@@ -422,7 +447,7 @@ private fun ScheduleEditorDialog(
                     modifier = Modifier
                       .fillMaxWidth()
                       .horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    horizontalArrangement = Arrangement.spacedBy(spacing.xs + spacing.xxs)
                   ) {
                     FilterChip(
                       selected = selectedBankKey == null,
@@ -450,7 +475,7 @@ private fun ScheduleEditorDialog(
                 )
 
                 Surface(
-                  shape = RoundedCornerShape(12.dp),
+                  shape = MaterialTheme.shapes.medium,
                   color = MaterialTheme.colorScheme.surfaceContainerLow,
                   border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
                 ) {
@@ -458,7 +483,7 @@ private fun ScheduleEditorDialog(
                     Box(
                       modifier = Modifier
                         .fillMaxWidth()
-                        .padding(16.dp),
+                        .padding(spacing.lg),
                       contentAlignment = Alignment.Center
                     ) {
                       Text(
@@ -473,13 +498,13 @@ private fun ScheduleEditorDialog(
                         .fillMaxWidth()
                         .heightIn(min = 100.dp, max = 180.dp)
                         .testTag("scheduler_pad_picker_list"),
-                      contentPadding = PaddingValues(6.dp),
-                      verticalArrangement = Arrangement.spacedBy(4.dp)
+                      contentPadding = PaddingValues(spacing.xs + spacing.xxs),
+                      verticalArrangement = Arrangement.spacedBy(spacing.xs)
                     ) {
                       items(filteredPads, key = { it.id }) { pad ->
                         val isSelected = targetId == pad.id
                         Surface(
-                          shape = RoundedCornerShape(8.dp),
+                          shape = MaterialTheme.shapes.small,
                           color = if (isSelected) {
                             MaterialTheme.colorScheme.primaryContainer
                           } else {
@@ -492,17 +517,17 @@ private fun ScheduleEditorDialog(
                           },
                           modifier = Modifier
                             .fillMaxWidth()
-                            .defaultMinSize(minHeight = 48.dp)
-                            .clip(RoundedCornerShape(8.dp))
+                            .defaultMinSize(minHeight = spacing.minTouchTarget)
+                            .clip(MaterialTheme.shapes.small)
                             .clickable { targetId = pad.id }
                             .testTag("scheduler_pad_option_${pad.id}")
                         ) {
                           Row(
                             modifier = Modifier
                               .fillMaxWidth()
-                              .padding(horizontal = 10.dp, vertical = 8.dp),
+                              .padding(horizontal = spacing.sm + spacing.xxs, vertical = spacing.sm),
                             verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            horizontalArrangement = Arrangement.spacedBy(spacing.sm)
                           ) {
                             Icon(
                               imageVector = if (isSelected) {
@@ -560,7 +585,7 @@ private fun ScheduleEditorDialog(
                 modifier = Modifier
                   .fillMaxWidth()
                   .horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                horizontalArrangement = Arrangement.spacedBy(spacing.xs + spacing.xxs)
               ) {
                 bankPages.distinctBy { it.bankKey }.forEach { bp ->
                   FilterChip(
@@ -576,7 +601,7 @@ private fun ScheduleEditorDialog(
                 modifier = Modifier
                   .fillMaxWidth()
                   .horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                horizontalArrangement = Arrangement.spacedBy(spacing.xs + spacing.xxs)
               ) {
                 playlists.forEach { pl ->
                   FilterChip(
@@ -591,24 +616,27 @@ private fun ScheduleEditorDialog(
         }
 
         item {
-          Text("Waktu (%02d:%02d)".format(hour, minute), style = MaterialTheme.typography.labelMedium)
-          Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+          Text(
+            text = stringResource(R.string.scheduler_time_label, hour, minute),
+            style = MaterialTheme.typography.labelMedium
+          )
+          Row(horizontalArrangement = Arrangement.spacedBy(spacing.md), verticalAlignment = Alignment.CenterVertically) {
             Column(modifier = Modifier.weight(1f)) {
-              Text("Jam: $hour", style = MaterialTheme.typography.labelSmall)
+              Text(stringResource(R.string.scheduler_hour_label, hour), style = MaterialTheme.typography.labelSmall)
               Slider(value = hour.toFloat(), onValueChange = { hour = it.roundToInt().coerceIn(0, 23) }, valueRange = 0f..23f)
             }
             Column(modifier = Modifier.weight(1f)) {
-              Text("Menit: $minute", style = MaterialTheme.typography.labelSmall)
+              Text(stringResource(R.string.scheduler_minute_label, minute), style = MaterialTheme.typography.labelSmall)
               Slider(value = minute.toFloat(), onValueChange = { minute = it.roundToInt().coerceIn(0, 59) }, valueRange = 0f..59f)
             }
           }
         }
 
         item {
-          Text("Pengulangan", style = MaterialTheme.typography.labelMedium)
+          Text(stringResource(R.string.scheduler_repeat_label), style = MaterialTheme.typography.labelMedium)
           Row(
             modifier = Modifier.horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(6.dp)
+            horizontalArrangement = Arrangement.spacedBy(spacing.xs + spacing.xxs)
           ) {
             ScheduleRepeatMode.entries.forEach { rm ->
               FilterChip(
@@ -619,10 +647,18 @@ private fun ScheduleEditorDialog(
             }
           }
           if (repeatMode == ScheduleRepeatMode.CUSTOM_DAYS) {
-            val dayNames = listOf("Sen", "Sel", "Rab", "Kam", "Jum", "Sab", "Min")
+            val dayNames = listOf(
+              stringResource(R.string.scheduler_day_mon),
+              stringResource(R.string.scheduler_day_tue),
+              stringResource(R.string.scheduler_day_wed),
+              stringResource(R.string.scheduler_day_thu),
+              stringResource(R.string.scheduler_day_fri),
+              stringResource(R.string.scheduler_day_sat),
+              stringResource(R.string.scheduler_day_sun)
+            )
             Row(
               modifier = Modifier.horizontalScroll(rememberScrollState()),
-              horizontalArrangement = Arrangement.spacedBy(4.dp)
+              horizontalArrangement = Arrangement.spacedBy(spacing.xs)
             ) {
               dayNames.forEachIndexed { idx, label ->
                 val checked = (daysMask and (1 shl idx)) != 0
@@ -639,14 +675,24 @@ private fun ScheduleEditorDialog(
         }
 
         item {
-          Text("Volume: ${(volume * 100).roundToInt()}%", style = MaterialTheme.typography.labelSmall)
+          Text(
+            text = stringResource(R.string.scheduler_volume_label, (volume * 100).roundToInt()),
+            style = MaterialTheme.typography.labelSmall
+          )
           Slider(value = volume, onValueChange = { volume = it }, valueRange = 0.05f..1f)
 
-          Text("Fade In: ${(fadeInSec * 1000).roundToInt()} ms", style = MaterialTheme.typography.labelSmall)
+          Text(
+            text = stringResource(R.string.scheduler_fade_in_label, (fadeInSec * 1000).roundToInt()),
+            style = MaterialTheme.typography.labelSmall
+          )
           Slider(value = fadeInSec, onValueChange = { fadeInSec = it }, valueRange = 0f..5f)
 
           Text(
-            text = if (autoStopMin < 0.5f) "Auto Stop: Mati" else "Auto Stop: ${autoStopMin.roundToInt()} menit",
+            text = if (autoStopMin < 0.5f) {
+              stringResource(R.string.scheduler_autostop_off)
+            } else {
+              stringResource(R.string.scheduler_autostop_minutes, autoStopMin.roundToInt())
+            },
             style = MaterialTheme.typography.labelSmall
           )
           Slider(value = autoStopMin, onValueChange = { autoStopMin = it }, valueRange = 0f..60f)
@@ -656,7 +702,7 @@ private fun ScheduleEditorDialog(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
           ) {
-            Text("Ulangi (Loop) saat berjalan", style = MaterialTheme.typography.bodySmall)
+            Text(stringResource(R.string.scheduler_loop_label), style = MaterialTheme.typography.bodySmall)
             Switch(checked = loopPlayback, onCheckedChange = { loopPlayback = it })
           }
         }
@@ -667,7 +713,7 @@ private fun ScheduleEditorDialog(
         onClick = {
           onSave(
             initial.copy(
-              title = title.ifBlank { "Jadwal Otomatis" },
+              title = title.ifBlank { fallbackScheduleTitle },
               targetType = targetType,
               targetId = targetId,
               hour = hour,
@@ -683,11 +729,11 @@ private fun ScheduleEditorDialog(
           )
         }
       ) {
-        Text("Simpan")
+        Text(stringResource(R.string.action_save))
       }
     },
     dismissButton = {
-      TextButton(onClick = onDismiss) { Text("Batal") }
+      TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) }
     }
   )
 }

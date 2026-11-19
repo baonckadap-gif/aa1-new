@@ -47,6 +47,7 @@ import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -118,47 +119,56 @@ fun LandscapeBankRail(
         .padding(8.dp),
       verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-      Row(
+      Column(
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
+        verticalArrangement = Arrangement.spacedBy(2.dp)
       ) {
         Text(
           text = "BANKS (${bankPages.size})",
           style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
           color = MaterialTheme.colorScheme.primary
         )
-        Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-          if (currentPage?.canRescanSubfolder == true && !isLocked) {
-            IconButton(
-              onClick = { onRescanBankRequest(currentPage.bankKey) },
-              modifier = Modifier.size(28.dp)
-            ) {
-              Icon(
-                imageVector = Icons.Filled.Refresh,
-                contentDescription = stringResource(R.string.cd_rescan_bank),
-                tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(16.dp)
-              )
+        if (!isLocked) {
+          Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceEvenly,
+            verticalAlignment = Alignment.CenterVertically
+          ) {
+            if (currentPage?.canRescanSubfolder == true) {
+              IconButton(
+                onClick = { onRescanBankRequest(currentPage.bankKey) },
+                modifier = Modifier
+                  .minimumInteractiveComponentSize()
+                  .testTag("landscape_rescan_bank_button")
+              ) {
+                Icon(
+                  imageVector = Icons.Filled.Refresh,
+                  contentDescription = stringResource(R.string.cd_rescan_bank),
+                  tint = MaterialTheme.colorScheme.primary,
+                  modifier = Modifier.size(16.dp)
+                )
+              }
             }
-          }
-          if (distinctBankCount > 1 && !isLocked) {
-            IconButton(
-              onClick = onReorderBanksRequest,
-              modifier = Modifier.size(28.dp)
-            ) {
-              Icon(
-                imageVector = Icons.Filled.SwapVert,
-                contentDescription = stringResource(R.string.cd_reorder_banks),
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(16.dp)
-              )
+            if (distinctBankCount > 1) {
+              IconButton(
+                onClick = onReorderBanksRequest,
+                modifier = Modifier
+                  .minimumInteractiveComponentSize()
+                  .testTag("landscape_reorder_banks_button")
+              ) {
+                Icon(
+                  imageVector = Icons.Filled.SwapVert,
+                  contentDescription = stringResource(R.string.cd_reorder_banks),
+                  tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                  modifier = Modifier.size(16.dp)
+                )
+              }
             }
-          }
-          if (!isLocked) {
             IconButton(
               onClick = { onRenameBankRequest(currentPage?.bankKey ?: currentPageIndex) },
-              modifier = Modifier.size(28.dp)
+              modifier = Modifier
+                .minimumInteractiveComponentSize()
+                .testTag("landscape_rename_bank_button")
             ) {
               Icon(
                 imageVector = Icons.Filled.DriveFileRenameOutline,
@@ -267,7 +277,7 @@ fun LandscapeBankRail(
           onClick = onToggleGlobalCue,
           modifier = Modifier
             .weight(1f)
-            .height(44.dp),
+            .height(SoundPadTheme.spacing.minTouchTarget),
           shape = RoundedCornerShape(10.dp),
           border = BorderStroke(1.dp, if (isGlobalCueEnabled) extColors.cueMonitor else MaterialTheme.colorScheme.outline)
         ) {
@@ -283,7 +293,7 @@ fun LandscapeBankRail(
           onClick = onToggleEditMode,
           modifier = Modifier
             .weight(1f)
-            .height(44.dp),
+            .height(SoundPadTheme.spacing.minTouchTarget),
           shape = RoundedCornerShape(10.dp),
           border = BorderStroke(1.dp, if (isEditMode) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.outline)
         ) {
@@ -396,7 +406,9 @@ fun LandscapeMixerSidePanel(
           )
           IconButton(
             onClick = { onMasterPanChange(0f) },
-            modifier = Modifier.size(28.dp)
+            modifier = Modifier
+              .minimumInteractiveComponentSize()
+              .testTag("landscape_pan_reset_button")
           ) {
             Icon(Icons.Filled.RestartAlt, contentDescription = stringResource(R.string.action_reset), modifier = Modifier.size(16.dp))
           }
@@ -482,7 +494,7 @@ fun LandscapeMixerSidePanel(
           onClick = onFadeOutAll,
           modifier = Modifier
             .fillMaxWidth()
-            .height(44.dp),
+            .height(SoundPadTheme.spacing.minTouchTarget),
           shape = RoundedCornerShape(10.dp),
           border = BorderStroke(1.dp, if (activeVoices > 0) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.outline)
         ) {

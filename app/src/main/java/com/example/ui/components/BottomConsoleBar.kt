@@ -49,6 +49,7 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -224,7 +225,7 @@ fun BottomConsoleBar(
         IconButton(
           onClick = { isCollapsed = !isCollapsed },
           modifier = Modifier
-            .size(bottomTokens.chevronButtonDp)
+            .minimumInteractiveComponentSize()
             .testTag("hide_bottom_bar_button")
         ) {
           Icon(

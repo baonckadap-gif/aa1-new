@@ -207,7 +207,7 @@ class MasterLimiterAudioProcessor(
     return inputAudioFormat
   }
 
-  override fun onFlush() {
+  override fun onFlush(streamMetadata: AudioProcessor.StreamMetadata) {
     resetDspState()
   }
 

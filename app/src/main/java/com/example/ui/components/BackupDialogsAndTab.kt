@@ -15,7 +15,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Archive
@@ -64,6 +63,7 @@ import com.example.data.backup.PersistentBackupUiState
 import com.example.data.backup.RestoreSelectionOptions
 import com.example.data.backup.SnapshotFileInfo
 import com.example.data.backup.SnapshotTrigger
+import com.example.ui.theme.SoundPadTheme
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -83,14 +83,16 @@ fun BackupSettingsTabContent(
   onShareZipClick: () -> Unit,
   onRequestDeleteAllConfig: () -> Unit
 ) {
+  val spacing = SoundPadTheme.spacing
   val hasFolder = !backupState.folderUri.isNullOrBlank()
   val isError = backupState.status == BackupSyncStatus.ERROR_INACCESSIBLE
-  val lastSavedLabel = remember(backupState.lastSyncAtMs) {
-    if (backupState.lastSyncAtMs <= 0L) "Belum pernah sinkron"
+  val neverSyncedLabel = stringResource(R.string.backup_never_synced)
+  val lastSavedLabel = remember(backupState.lastSyncAtMs, neverSyncedLabel) {
+    if (backupState.lastSyncAtMs <= 0L) neverSyncedLabel
     else SimpleDateFormat("dd MMM yyyy, HH:mm", Locale.getDefault()).format(Date(backupState.lastSyncAtMs))
   }
 
-  Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+  Column(verticalArrangement = Arrangement.spacedBy(spacing.md)) {
     Text(
       text = stringResource(R.string.backup_tab_section_title),
       style = MaterialTheme.typography.labelMedium,
@@ -102,7 +104,7 @@ fun BackupSettingsTabContent(
       modifier = Modifier
         .fillMaxWidth()
         .testTag("backup_tab_saf_card"),
-      shape = RoundedCornerShape(14.dp),
+      shape = MaterialTheme.shapes.medium,
       color = if (isError) MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.7f)
       else MaterialTheme.colorScheme.surfaceContainerHigh,
       border = BorderStroke(
@@ -112,12 +114,12 @@ fun BackupSettingsTabContent(
       )
     ) {
       Column(
-        modifier = Modifier.padding(14.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp)
+        modifier = Modifier.padding(spacing.md + spacing.xxs),
+        verticalArrangement = Arrangement.spacedBy(spacing.sm)
       ) {
         Row(
           verticalAlignment = Alignment.CenterVertically,
-          horizontalArrangement = Arrangement.spacedBy(10.dp)
+          horizontalArrangement = Arrangement.spacedBy(spacing.sm + spacing.xxs)
         ) {
           Icon(
             imageVector = when (backupState.status) {
@@ -132,7 +134,8 @@ fun BackupSettingsTabContent(
           )
           Column(modifier = Modifier.weight(1f)) {
             Text(
-              text = backupState.folderName?.takeIf { it.isNotBlank() } ?: "Documents/SoundPadPro (belum dipilih)",
+              text = backupState.folderName?.takeIf { it.isNotBlank() }
+                ?: stringResource(R.string.backup_folder_unselected_placeholder),
               style = MaterialTheme.typography.titleSmall,
               color = MaterialTheme.colorScheme.onSurface,
               maxLines = 1,
@@ -142,7 +145,7 @@ fun BackupSettingsTabContent(
               text = if (isError) {
                 backupState.errorMessage ?: stringResource(R.string.backup_status_inaccessible)
               } else {
-                "Terakhir sinkron: $lastSavedLabel · ${backupState.snapshotCount} snapshot"
+                stringResource(R.string.backup_last_sync_summary, lastSavedLabel, backupState.snapshotCount)
               },
               style = MaterialTheme.typography.bodySmall,
               color = if (isError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant
@@ -152,7 +155,7 @@ fun BackupSettingsTabContent(
 
         if (!currentMusicFolderName.isNullOrBlank()) {
           Text(
-            text = "Mirror otomatis aktif di: $currentMusicFolderName/.soundpadpro/",
+            text = stringResource(R.string.backup_mirror_active, currentMusicFolderName),
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.primary,
             maxLines = 1,
@@ -162,17 +165,17 @@ fun BackupSettingsTabContent(
 
         Row(
           modifier = Modifier.fillMaxWidth(),
-          horizontalArrangement = Arrangement.spacedBy(8.dp)
+          horizontalArrangement = Arrangement.spacedBy(spacing.sm)
         ) {
           OutlinedButton(
             onClick = onPickBackupFolderClick,
             modifier = Modifier
               .weight(1f)
-              .height(48.dp)
+              .height(spacing.minTouchTarget)
               .testTag("backup_tab_pick_folder_btn")
           ) {
             Icon(Icons.Filled.FolderOpen, contentDescription = null, modifier = Modifier.size(18.dp))
-            Spacer(modifier = Modifier.width(6.dp))
+            Spacer(modifier = Modifier.width(spacing.xs + spacing.xxs))
             Text(
               text = if (hasFolder) stringResource(R.string.backup_tab_folder_change)
               else stringResource(R.string.backup_tab_folder_pick),
@@ -185,11 +188,11 @@ fun BackupSettingsTabContent(
             enabled = hasFolder,
             modifier = Modifier
               .weight(1f)
-              .height(48.dp)
+              .height(spacing.minTouchTarget)
               .testTag("backup_tab_save_now_btn")
           ) {
             Icon(Icons.Filled.Save, contentDescription = null, modifier = Modifier.size(18.dp))
-            Spacer(modifier = Modifier.width(6.dp))
+            Spacer(modifier = Modifier.width(spacing.xs + spacing.xxs))
             Text(stringResource(R.string.backup_tab_save_now), maxLines = 1)
           }
         }
@@ -202,7 +205,7 @@ fun BackupSettingsTabContent(
       horizontalArrangement = Arrangement.SpaceBetween,
       verticalAlignment = Alignment.CenterVertically
     ) {
-      Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
+      Column(modifier = Modifier.weight(1f).padding(end = spacing.md)) {
         Text(
           text = stringResource(R.string.backup_tab_auto_sync_title),
           style = MaterialTheme.typography.titleSmall,
@@ -227,7 +230,7 @@ fun BackupSettingsTabContent(
       horizontalArrangement = Arrangement.SpaceBetween,
       verticalAlignment = Alignment.CenterVertically
     ) {
-      Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
+      Column(modifier = Modifier.weight(1f).padding(end = spacing.md)) {
         Text(
           text = stringResource(R.string.backup_tab_include_waveform_title),
           style = MaterialTheme.typography.titleSmall,
@@ -249,17 +252,17 @@ fun BackupSettingsTabContent(
     // Pulihkan dari Snapshot & Folder
     Row(
       modifier = Modifier.fillMaxWidth(),
-      horizontalArrangement = Arrangement.spacedBy(8.dp)
+      horizontalArrangement = Arrangement.spacedBy(spacing.sm)
     ) {
       OutlinedButton(
         onClick = onOpenSnapshotPickerClick,
         modifier = Modifier
           .weight(1f)
-          .height(48.dp)
+          .height(spacing.minTouchTarget)
           .testTag("backup_tab_restore_snapshot_btn")
       ) {
         Icon(Icons.Filled.History, contentDescription = null, modifier = Modifier.size(18.dp))
-        Spacer(modifier = Modifier.width(6.dp))
+        Spacer(modifier = Modifier.width(spacing.xs + spacing.xxs))
         Text(
           text = stringResource(R.string.backup_tab_restore_snapshot),
           maxLines = 1,
@@ -270,11 +273,11 @@ fun BackupSettingsTabContent(
         onClick = onInspectRestoreFolderClick,
         modifier = Modifier
           .weight(1f)
-          .height(48.dp)
+          .height(spacing.minTouchTarget)
           .testTag("backup_tab_restore_folder_btn")
       ) {
         Icon(Icons.Filled.Restore, contentDescription = null, modifier = Modifier.size(18.dp))
-        Spacer(modifier = Modifier.width(6.dp))
+        Spacer(modifier = Modifier.width(spacing.xs + spacing.xxs))
         Text(
           text = stringResource(R.string.backup_tab_restore_from_folder),
           maxLines = 1,
@@ -294,28 +297,28 @@ fun BackupSettingsTabContent(
 
     Row(
       modifier = Modifier.fillMaxWidth(),
-      horizontalArrangement = Arrangement.spacedBy(8.dp)
+      horizontalArrangement = Arrangement.spacedBy(spacing.sm)
     ) {
       OutlinedButton(
         onClick = onExportZipClick,
         modifier = Modifier
           .weight(1f)
-          .height(48.dp)
+          .height(spacing.minTouchTarget)
           .testTag("backup_tab_export_zip_btn")
       ) {
         Icon(Icons.Filled.Archive, contentDescription = null, modifier = Modifier.size(18.dp))
-        Spacer(modifier = Modifier.width(6.dp))
+        Spacer(modifier = Modifier.width(spacing.xs + spacing.xxs))
         Text(stringResource(R.string.backup_tab_export_zip), maxLines = 1)
       }
       OutlinedButton(
         onClick = onImportZipClick,
         modifier = Modifier
           .weight(1f)
-          .height(48.dp)
+          .height(spacing.minTouchTarget)
           .testTag("backup_tab_import_zip_btn")
       ) {
         Icon(Icons.Filled.Unarchive, contentDescription = null, modifier = Modifier.size(18.dp))
-        Spacer(modifier = Modifier.width(6.dp))
+        Spacer(modifier = Modifier.width(spacing.xs + spacing.xxs))
         Text(stringResource(R.string.backup_tab_import_zip), maxLines = 1)
       }
     }
@@ -324,11 +327,11 @@ fun BackupSettingsTabContent(
       onClick = onShareZipClick,
       modifier = Modifier
         .fillMaxWidth()
-        .height(48.dp)
+        .height(spacing.minTouchTarget)
         .testTag("backup_tab_share_zip_btn")
     ) {
       Icon(Icons.Filled.Share, contentDescription = null, modifier = Modifier.size(18.dp))
-      Spacer(modifier = Modifier.width(8.dp))
+      Spacer(modifier = Modifier.width(spacing.sm))
       Text(stringResource(R.string.backup_tab_share_zip))
     }
 
@@ -346,11 +349,11 @@ fun BackupSettingsTabContent(
       border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.65f)),
       modifier = Modifier
         .fillMaxWidth()
-        .height(48.dp)
+        .height(spacing.minTouchTarget)
         .testTag("backup_tab_delete_all_btn")
     ) {
       Icon(Icons.Filled.DeleteForever, contentDescription = null, modifier = Modifier.size(18.dp))
-      Spacer(modifier = Modifier.width(8.dp))
+      Spacer(modifier = Modifier.width(spacing.sm))
       Text(stringResource(R.string.backup_tab_delete_all))
     }
   }
@@ -364,6 +367,7 @@ fun RestorePreviewAndSelectDialog(
   onRestoreAll: (RestoreSelectionOptions) -> Unit,
   onSkipDismiss: () -> Unit
 ) {
+  val spacing = SoundPadTheme.spacing
   var isPartialMode by remember(inspection) { mutableStateOf(false) }
   var restoreSettings by remember(inspection) { mutableStateOf(true) }
   var restoreProfiles by remember(inspection) { mutableStateOf(true) }
@@ -399,17 +403,17 @@ fun RestorePreviewAndSelectDialog(
           .fillMaxWidth()
           .heightIn(max = 420.dp)
           .verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.spacedBy(10.dp)
+        verticalArrangement = Arrangement.spacedBy(spacing.sm + spacing.xxs)
       ) {
         if (!inspection.usedFallbackSnapshotName.isNullOrBlank()) {
           Surface(
-            shape = RoundedCornerShape(10.dp),
+            shape = MaterialTheme.shapes.small,
             color = MaterialTheme.colorScheme.tertiaryContainer,
             border = BorderStroke(1.dp, MaterialTheme.colorScheme.tertiary.copy(alpha = 0.5f))
           ) {
             Row(
-              modifier = Modifier.padding(10.dp),
-              horizontalArrangement = Arrangement.spacedBy(8.dp),
+              modifier = Modifier.padding(spacing.sm + spacing.xxs),
+              horizontalArrangement = Arrangement.spacedBy(spacing.sm),
               verticalAlignment = Alignment.CenterVertically
             ) {
               Icon(
@@ -419,7 +423,10 @@ fun RestorePreviewAndSelectDialog(
                 modifier = Modifier.size(18.dp)
               )
               Text(
-                text = "File utama korup/tidak lengkap. Memakai snapshot sehat: ${inspection.usedFallbackSnapshotName}",
+                text = stringResource(
+                  R.string.backup_fallback_snapshot_warning,
+                  inspection.usedFallbackSnapshotName.orEmpty()
+                ),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onTertiaryContainer
               )
@@ -429,13 +436,13 @@ fun RestorePreviewAndSelectDialog(
 
         // Ringkasan Statistik Backup
         Surface(
-          shape = RoundedCornerShape(12.dp),
+          shape = MaterialTheme.shapes.medium,
           color = MaterialTheme.colorScheme.surfaceContainerHigh,
           border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
         ) {
           Column(
-            modifier = Modifier.padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp)
+            modifier = Modifier.padding(spacing.md),
+            verticalArrangement = Arrangement.spacedBy(spacing.xs + spacing.xxs)
           ) {
             Text(
               text = "${inspection.sourceKind.label}: ${inspection.sourceLabel}",
@@ -445,7 +452,7 @@ fun RestorePreviewAndSelectDialog(
               overflow = TextOverflow.Ellipsis
             )
             Text(
-              text = "Tanggal backup: $formattedDate · Skema v${inspection.schemaVersion}",
+              text = stringResource(R.string.backup_date_schema_summary, formattedDate, inspection.schemaVersion),
               style = MaterialTheme.typography.bodySmall,
               color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -453,26 +460,29 @@ fun RestorePreviewAndSelectDialog(
               modifier = Modifier.fillMaxWidth(),
               horizontalArrangement = Arrangement.SpaceBetween
             ) {
-              SummaryMetricBadge(label = "Profil", value = "${inspection.profileCount}")
-              SummaryMetricBadge(label = "Bank", value = "${inspection.bankCount}")
-              SummaryMetricBadge(label = "Pad", value = "${inspection.padCount}")
-              SummaryMetricBadge(label = "Jadwal/Seq", value = "${inspection.schedulerCount + inspection.sequencerCount}")
+              SummaryMetricBadge(label = stringResource(R.string.backup_metric_profile), value = "${inspection.profileCount}")
+              SummaryMetricBadge(label = stringResource(R.string.backup_metric_bank), value = "${inspection.bankCount}")
+              SummaryMetricBadge(label = stringResource(R.string.backup_metric_pad), value = "${inspection.padCount}")
+              SummaryMetricBadge(
+                label = stringResource(R.string.backup_metric_sched_seq),
+                value = "${inspection.schedulerCount + inspection.sequencerCount}"
+              )
             }
           }
         }
 
         // Info folder musik untuk pencocokan ulang URI SAF setelah install ulang
         Surface(
-          shape = RoundedCornerShape(10.dp),
+          shape = MaterialTheme.shapes.small,
           color = MaterialTheme.colorScheme.surfaceContainer,
           border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
         ) {
           Row(
             modifier = Modifier
               .fillMaxWidth()
-              .padding(horizontal = 10.dp, vertical = 8.dp),
+              .padding(horizontal = spacing.sm + spacing.xxs, vertical = spacing.sm),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
+            horizontalArrangement = Arrangement.spacedBy(spacing.sm)
           ) {
             Icon(
               imageVector = Icons.Filled.LibraryMusic,
@@ -482,15 +492,17 @@ fun RestorePreviewAndSelectDialog(
             )
             Column(modifier = Modifier.weight(1f)) {
               Text(
-                text = "Pencocokan File Audio",
+                text = stringResource(R.string.backup_relink_title),
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurface
               )
               Text(
                 text = when {
-                  !inspection.detectedMusicFolderUri.isNullOrBlank() -> "Cocokkan langsung ke folder musik ini"
-                  !currentMusicFolderName.isNullOrBlank() -> "Akan dicocokkan ke: $currentMusicFolderName"
-                  else -> "Pilih folder musik jika ingin menautkan ulang pad yang file-nya ada di HP"
+                  !inspection.detectedMusicFolderUri.isNullOrBlank() ->
+                    stringResource(R.string.backup_relink_detected_folder)
+                  !currentMusicFolderName.isNullOrBlank() ->
+                    stringResource(R.string.backup_relink_current_folder, currentMusicFolderName)
+                  else -> stringResource(R.string.backup_relink_pick_hint)
                 },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -501,7 +513,7 @@ fun RestorePreviewAndSelectDialog(
                 onClick = onPickMusicFolderForRelink,
                 modifier = Modifier.testTag("restore_pick_music_folder_btn")
               ) {
-                Text("Folder Musik")
+                Text(stringResource(R.string.backup_relink_pick_btn))
               }
             }
           }
@@ -510,32 +522,32 @@ fun RestorePreviewAndSelectDialog(
         if (isPartialMode) {
           HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
           Text(
-            text = "Pilih komponen yang akan dipulihkan:",
+            text = stringResource(R.string.backup_restore_components_header),
             style = MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.primary
           )
 
           RestoreCheckRow(
-            label = "Pengaturan Global, Grid, Tema, Fokus Mode & Output",
+            label = stringResource(R.string.backup_opt_settings),
             checked = restoreSettings,
             onCheckedChange = { restoreSettings = it },
             testTag = "restore_opt_settings"
           )
           RestoreCheckRow(
-            label = "Profil, Bank, Slot Pad, Efek, EQ, & Layout",
+            label = stringResource(R.string.backup_opt_profiles),
             checked = restoreProfiles,
             onCheckedChange = { restoreProfiles = it },
             testTag = "restore_opt_profiles"
           )
           if (restoreProfiles && inspection.profilesPreview.size > 1) {
             Column(
-              modifier = Modifier.padding(start = 18.dp),
-              verticalArrangement = Arrangement.spacedBy(2.dp)
+              modifier = Modifier.padding(start = spacing.lg + spacing.xxs),
+              verticalArrangement = Arrangement.spacedBy(spacing.xxs)
             ) {
               inspection.profilesPreview.forEach { prof ->
                 val picked = prof.id in selectedProfiles
                 RestoreCheckRow(
-                  label = "${prof.name} (${prof.padCount} pad · ${prof.bankCount} bank)",
+                  label = stringResource(R.string.backup_opt_profile_item, prof.name, prof.padCount, prof.bankCount),
                   checked = picked,
                   onCheckedChange = { isChecked ->
                     selectedProfiles = if (isChecked) selectedProfiles + prof.id
@@ -547,13 +559,13 @@ fun RestorePreviewAndSelectDialog(
             }
           }
           RestoreCheckRow(
-            label = "MIDI Mapping (CC, Program Change, Note Pad, Fokus)",
+            label = stringResource(R.string.backup_opt_midi),
             checked = restoreMidi,
             onCheckedChange = { restoreMidi = it },
             testTag = "restore_opt_midi"
           )
           RestoreCheckRow(
-            label = "Scheduler Alarm & Sequencer/Playlist",
+            label = stringResource(R.string.backup_opt_scheduler_seq),
             checked = restoreSchedulerSeq,
             onCheckedChange = { restoreSchedulerSeq = it },
             testTag = "restore_opt_scheduler_seq"
@@ -564,18 +576,18 @@ fun RestorePreviewAndSelectDialog(
     confirmButton = {
       Column(
         modifier = Modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(6.dp)
+        verticalArrangement = Arrangement.spacedBy(spacing.xs + spacing.xxs)
       ) {
         if (!isPartialMode) {
           Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
+            horizontalArrangement = Arrangement.spacedBy(spacing.sm)
           ) {
             OutlinedButton(
               onClick = { isPartialMode = true },
               modifier = Modifier
                 .weight(1f)
-                .height(48.dp)
+                .height(spacing.minTouchTarget)
                 .testTag("restore_partial_toggle_button")
             ) {
               Text(stringResource(R.string.restore_action_partial), maxLines = 1)
@@ -594,7 +606,7 @@ fun RestorePreviewAndSelectDialog(
               },
               modifier = Modifier
                 .weight(1f)
-                .height(48.dp)
+                .height(spacing.minTouchTarget)
                 .testTag("restore_all_confirm_button")
             ) {
               Text(stringResource(R.string.restore_action_all), maxLines = 1)
@@ -620,10 +632,10 @@ fun RestorePreviewAndSelectDialog(
             },
             modifier = Modifier
               .fillMaxWidth()
-              .height(48.dp)
+              .height(spacing.minTouchTarget)
               .testTag("restore_apply_partial_button")
           ) {
-            Text("Pulihkan Pilihan Tercentang")
+            Text(stringResource(R.string.backup_restore_apply_selected))
           }
         }
 
@@ -663,12 +675,13 @@ private fun RestoreCheckRow(
   onCheckedChange: (Boolean) -> Unit,
   testTag: String
 ) {
+  val spacing = SoundPadTheme.spacing
   Row(
     modifier = Modifier
       .fillMaxWidth()
-      .clip(RoundedCornerShape(8.dp))
+      .clip(MaterialTheme.shapes.small)
       .clickable { onCheckedChange(!checked) }
-      .padding(vertical = 2.dp)
+      .padding(vertical = spacing.xxs)
       .testTag(testTag),
     verticalAlignment = Alignment.CenterVertically
   ) {
@@ -687,6 +700,7 @@ fun RestoreProgressDialog(
   progress: Float,
   stageText: String
 ) {
+  val spacing = SoundPadTheme.spacing
   val clamped = progress.coerceIn(0f, 1f)
   AlertDialog(
     onDismissRequest = {},
@@ -702,14 +716,14 @@ fun RestoreProgressDialog(
         modifier = Modifier
           .fillMaxWidth()
           .testTag("restore_progress_dialog"),
-        verticalArrangement = Arrangement.spacedBy(10.dp)
+        verticalArrangement = Arrangement.spacedBy(spacing.sm + spacing.xxs)
       ) {
         LinearProgressIndicator(
           progress = { clamped },
           modifier = Modifier
             .fillMaxWidth()
-            .height(8.dp)
-            .clip(RoundedCornerShape(4.dp))
+            .height(spacing.sm)
+            .clip(MaterialTheme.shapes.extraSmall)
             .testTag("restore_progress_bar")
         )
         Row(
@@ -717,7 +731,7 @@ fun RestoreProgressDialog(
           horizontalArrangement = Arrangement.SpaceBetween
         ) {
           Text(
-            text = stageText.ifBlank { "Memproses…" },
+            text = stageText.ifBlank { stringResource(R.string.backup_restore_processing) },
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.weight(1f)
@@ -742,6 +756,8 @@ fun SnapshotPickerDialog(
   onPickFolderInstead: () -> Unit,
   onDismiss: () -> Unit
 ) {
+  val spacing = SoundPadTheme.spacing
+  val fallbackLabel = stringResource(R.string.backup_snapshot_fallback_label)
   AlertDialog(
     onDismissRequest = onDismiss,
     containerColor = MaterialTheme.colorScheme.surface,
@@ -761,7 +777,7 @@ fun SnapshotPickerDialog(
     text = {
       if (!hasBackupFolder) {
         Text(
-          text = "Pilih folder backup config terlebih dahulu atau ketuk tombol di bawah untuk memulihkan langsung dari folder backup / .soundpadpro.",
+          text = stringResource(R.string.backup_snapshot_no_folder_hint),
           style = MaterialTheme.typography.bodySmall,
           color = MaterialTheme.colorScheme.onSurfaceVariant
         )
@@ -776,11 +792,11 @@ fun SnapshotPickerDialog(
           modifier = Modifier
             .fillMaxWidth()
             .heightIn(max = 320.dp),
-          verticalArrangement = Arrangement.spacedBy(8.dp)
+          verticalArrangement = Arrangement.spacedBy(spacing.sm)
         ) {
           items(snapshots, key = { it.fileName }) { snap ->
-            val triggerLabel = remember(snap.trigger) {
-              SnapshotTrigger.entries.firstOrNull { it.slug == snap.trigger }?.label ?: "Snapshot"
+            val triggerLabel = remember(snap.trigger, fallbackLabel) {
+              SnapshotTrigger.entries.firstOrNull { it.slug == snap.trigger }?.label ?: fallbackLabel
             }
             val dateText = remember(snap.lastModifiedMs) {
               SimpleDateFormat("dd MMM yyyy, HH:mm:ss", Locale.getDefault())
@@ -791,16 +807,16 @@ fun SnapshotPickerDialog(
             Surface(
               modifier = Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(10.dp))
+                .clip(MaterialTheme.shapes.small)
                 .clickable { onSelectSnapshot(snap) }
                 .testTag("snapshot_item_${snap.fileName}"),
-              shape = RoundedCornerShape(10.dp),
+              shape = MaterialTheme.shapes.small,
               color = MaterialTheme.colorScheme.surfaceContainerHigh,
               border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
             ) {
               Column(
-                modifier = Modifier.padding(12.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp)
+                modifier = Modifier.padding(spacing.md),
+                verticalArrangement = Arrangement.spacedBy(spacing.xs)
               ) {
                 Row(
                   modifier = Modifier.fillMaxWidth(),
@@ -843,7 +859,7 @@ fun SnapshotPickerDialog(
             onDismiss()
             onPickFolderInstead()
           },
-          modifier = Modifier.height(48.dp)
+          modifier = Modifier.height(spacing.minTouchTarget)
         ) {
           Text(stringResource(R.string.backup_tab_restore_from_folder))
         }
@@ -863,6 +879,7 @@ fun ResetAllConfigDialog(
   onConfirmReset: (alsoClearSafFolder: Boolean) -> Unit,
   onDismiss: () -> Unit
 ) {
+  val spacing = SoundPadTheme.spacing
   var alsoClearSaf by remember { mutableStateOf(false) }
 
   AlertDialog(
@@ -883,7 +900,7 @@ fun ResetAllConfigDialog(
       )
     },
     text = {
-      Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+      Column(verticalArrangement = Arrangement.spacedBy(spacing.sm + spacing.xxs)) {
         Text(
           text = stringResource(R.string.reset_all_config_desc),
           style = MaterialTheme.typography.bodyMedium,
@@ -907,7 +924,7 @@ fun ResetAllConfigDialog(
           contentColor = MaterialTheme.colorScheme.onError
         ),
         modifier = Modifier
-          .height(48.dp)
+          .height(spacing.minTouchTarget)
           .testTag("reset_all_config_confirm_btn")
       ) {
         Text(stringResource(R.string.reset_all_config_confirm))

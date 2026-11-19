@@ -1000,7 +1000,7 @@ class SoundPadAudioEngine(
       ): AudioSink {
         return DefaultAudioSink.Builder(context)
           .setEnableFloatOutput(enableFloatOutput)
-          .setEnableAudioTrackPlaybackParams(enableAudioTrackPlaybackParams)
+          .setEnableAudioOutputPlaybackParameters(enableAudioTrackPlaybackParams)
           .setAudioProcessors(processors)
           .build()
       }

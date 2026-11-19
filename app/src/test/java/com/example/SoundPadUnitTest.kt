@@ -143,7 +143,7 @@ class SoundPadUnitTest {
       androidx.media3.common.C.ENCODING_PCM_16BIT
     )
     processor.configure(format)
-    processor.flush()
+    processor.flush(androidx.media3.common.audio.AudioProcessor.StreamMetadata.DEFAULT)
 
     // Bypass mode check
     processor.setBandsDb(floatArrayOf(0f, 0f, 0f, 0f, 0f))
@@ -156,7 +156,7 @@ class SoundPadUnitTest {
     }
 
     // +10 dB boost at 910Hz check
-    processor.flush()
+    processor.flush(androidx.media3.common.audio.AudioProcessor.StreamMetadata.DEFAULT)
     processor.setBandsDb(floatArrayOf(0f, 0f, 10f, 0f, 0f))
     val boostInput = inputBytes.duplicate().order(java.nio.ByteOrder.LITTLE_ENDIAN)
     processor.queueInput(boostInput)
@@ -191,7 +191,7 @@ class SoundPadUnitTest {
       androidx.media3.common.C.ENCODING_PCM_16BIT
     )
     processor.configure(format)
-    processor.flush()
+    processor.flush(androidx.media3.common.audio.AudioProcessor.StreamMetadata.DEFAULT)
 
     val bypassBuf = java.nio.ByteBuffer.allocate(inputShorts.size * 2)
       .order(java.nio.ByteOrder.LITTLE_ENDIAN)
@@ -203,7 +203,7 @@ class SoundPadUnitTest {
     assertEquals(0.toShort(), bypassOut.short)
 
     // Enable reverb + short echo and feed 4410 silent frames after impulse to observe wet tail
-    processor.flush()
+    processor.flush(androidx.media3.common.audio.AudioProcessor.StreamMetadata.DEFAULT)
     processor.setParams(
       com.example.audio.ReverbEchoParams(
         echoEnabled = true,
@@ -279,7 +279,7 @@ class SoundPadUnitTest {
       androidx.media3.common.C.ENCODING_PCM_16BIT
     )
     processor.configure(format)
-    processor.flush()
+    processor.flush(androidx.media3.common.audio.AudioProcessor.StreamMetadata.DEFAULT)
 
     val silence = java.nio.ByteBuffer.allocate(64).order(java.nio.ByteOrder.LITTLE_ENDIAN)
     repeat(32) { silence.putShort(0) }

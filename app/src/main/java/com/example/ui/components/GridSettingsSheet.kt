@@ -57,6 +57,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -72,6 +73,8 @@ import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -90,6 +93,7 @@ import com.example.domain.model.HapticIntensity
 import com.example.domain.model.PadShapeStyle
 import com.example.domain.model.ThemeMode
 import com.example.ui.theme.SoundPadColorPalette
+import com.example.ui.theme.SoundPadTheme
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -301,32 +305,41 @@ fun GridSettingsSheet(
               @OptIn(ExperimentalLayoutApi::class)
               FlowRow(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
+                horizontalArrangement = Arrangement.spacedBy(2.dp),
+                verticalArrangement = Arrangement.spacedBy(2.dp)
               ) {
                 SoundPadColorPalette.PAD_PRESETS_12.forEachIndexed { idx, preset ->
                   val isSelected = settings.defaultPadColorArgb == preset.argb
+                  val selectCd = stringResource(R.string.cd_select_preset_color, preset.name)
                   Box(
                     modifier = Modifier
-                      .size(30.dp)
+                      .size(SoundPadTheme.spacing.minTouchTarget)
                       .clip(CircleShape)
-                      .background(Color(preset.argb.toInt()))
-                      .border(
-                        width = if (isSelected) 2.5.dp else 1.dp,
-                        color = if (isSelected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.outline,
-                        shape = CircleShape
-                      )
+                      .semantics { contentDescription = selectCd }
                       .testTag("default_pad_custom_color_$idx")
                       .clickable { onDefaultPadColorArgbChange(preset.argb) },
                     contentAlignment = Alignment.Center
                   ) {
-                    if (isSelected) {
-                      Icon(
-                        imageVector = Icons.Filled.Check,
-                        contentDescription = preset.name,
-                        tint = Color.Black,
-                        modifier = Modifier.size(15.dp)
-                      )
+                    Box(
+                      modifier = Modifier
+                        .size(30.dp)
+                        .clip(CircleShape)
+                        .background(Color(preset.argb.toInt()))
+                        .border(
+                          width = if (isSelected) 2.5.dp else 1.dp,
+                          color = if (isSelected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.outline,
+                          shape = CircleShape
+                        ),
+                      contentAlignment = Alignment.Center
+                    ) {
+                      if (isSelected) {
+                        Icon(
+                          imageVector = Icons.Filled.Check,
+                          contentDescription = null,
+                          tint = Color.Black,
+                          modifier = Modifier.size(15.dp)
+                        )
+                      }
                     }
                   }
                 }
@@ -445,33 +458,47 @@ fun GridSettingsSheet(
               style = MaterialTheme.typography.labelMedium,
               color = MaterialTheme.colorScheme.onSurfaceVariant
             )
-            Row(
+            @OptIn(ExperimentalLayoutApi::class)
+            FlowRow(
               modifier = Modifier.fillMaxWidth(),
-              horizontalArrangement = Arrangement.spacedBy(8.dp)
+              horizontalArrangement = Arrangement.spacedBy(2.dp),
+              verticalArrangement = Arrangement.spacedBy(2.dp)
             ) {
               SoundPadColorPalette.APP_ACCENT_PRESETS_8.forEachIndexed { idx, colorVal ->
                 val isSelected = settings.appAccentColorArgb == colorVal
+                val selectCd = stringResource(
+                  R.string.cd_select_preset_color,
+                  "#${(colorVal and 0xFFFFFFL).toString(16).uppercase().padStart(6, '0')}"
+                )
                 Box(
                   modifier = Modifier
-                    .size(32.dp)
+                    .size(SoundPadTheme.spacing.minTouchTarget)
                     .clip(CircleShape)
-                    .background(Color(colorVal.toInt()))
-                    .border(
-                      width = if (isSelected) 2.5.dp else 1.dp,
-                      color = if (isSelected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.outline,
-                      shape = CircleShape
-                    )
+                    .semantics { contentDescription = selectCd }
                     .testTag("app_color_preset_$idx")
                     .clickable { onAppAccentColorChange(colorVal) },
                   contentAlignment = Alignment.Center
                 ) {
-                  if (isSelected) {
-                    Icon(
-                      imageVector = Icons.Filled.Check,
-                      contentDescription = "Selected app accent color",
-                      tint = Color.Black,
-                      modifier = Modifier.size(16.dp)
-                    )
+                  Box(
+                    modifier = Modifier
+                      .size(32.dp)
+                      .clip(CircleShape)
+                      .background(Color(colorVal.toInt()))
+                      .border(
+                        width = if (isSelected) 2.5.dp else 1.dp,
+                        color = if (isSelected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.outline,
+                        shape = CircleShape
+                      ),
+                    contentAlignment = Alignment.Center
+                  ) {
+                    if (isSelected) {
+                      Icon(
+                        imageVector = Icons.Filled.Check,
+                        contentDescription = null,
+                        tint = Color.Black,
+                        modifier = Modifier.size(16.dp)
+                      )
+                    }
                   }
                 }
               }
@@ -547,33 +574,47 @@ fun GridSettingsSheet(
               style = MaterialTheme.typography.labelMedium,
               color = MaterialTheme.colorScheme.onSurfaceVariant
             )
-            Row(
+            @OptIn(ExperimentalLayoutApi::class)
+            FlowRow(
               modifier = Modifier.fillMaxWidth(),
-              horizontalArrangement = Arrangement.spacedBy(8.dp)
+              horizontalArrangement = Arrangement.spacedBy(2.dp),
+              verticalArrangement = Arrangement.spacedBy(2.dp)
             ) {
               SoundPadColorPalette.APP_ACCENT_PRESETS_8.forEachIndexed { idx, colorVal ->
                 val isSelected = settings.defaultCornerGlowArgb == colorVal
+                val selectCd = stringResource(
+                  R.string.cd_select_preset_color,
+                  "#${(colorVal and 0xFFFFFFL).toString(16).uppercase().padStart(6, '0')}"
+                )
                 Box(
                   modifier = Modifier
-                    .size(30.dp)
+                    .size(SoundPadTheme.spacing.minTouchTarget)
                     .clip(CircleShape)
-                    .background(Color(colorVal.toInt()))
-                    .border(
-                      width = if (isSelected) 2.5.dp else 1.dp,
-                      color = if (isSelected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.outline,
-                      shape = CircleShape
-                    )
+                    .semantics { contentDescription = selectCd }
                     .testTag("global_glow_preset_$idx")
                     .clickable { onDefaultCornerGlowChange(colorVal) },
                   contentAlignment = Alignment.Center
                 ) {
-                  if (isSelected) {
-                    Icon(
-                      imageVector = Icons.Filled.Check,
-                      contentDescription = "Selected corner glow color",
-                      tint = Color.Black,
-                      modifier = Modifier.size(15.dp)
-                    )
+                  Box(
+                    modifier = Modifier
+                      .size(30.dp)
+                      .clip(CircleShape)
+                      .background(Color(colorVal.toInt()))
+                      .border(
+                        width = if (isSelected) 2.5.dp else 1.dp,
+                        color = if (isSelected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.outline,
+                        shape = CircleShape
+                      ),
+                    contentAlignment = Alignment.Center
+                  ) {
+                    if (isSelected) {
+                      Icon(
+                        imageVector = Icons.Filled.Check,
+                        contentDescription = null,
+                        tint = Color.Black,
+                        modifier = Modifier.size(15.dp)
+                      )
+                    }
                   }
                 }
               }
@@ -725,7 +766,7 @@ fun GridSettingsSheet(
               )
               IconButton(
                 onClick = { onCrossfadeDurationChange(2000L) },
-                modifier = Modifier.size(32.dp)
+                modifier = Modifier.minimumInteractiveComponentSize()
               ) {
                 Icon(Icons.Filled.RestartAlt, contentDescription = stringResource(R.string.action_reset), modifier = Modifier.size(18.dp))
               }
@@ -774,7 +815,7 @@ fun GridSettingsSheet(
               verticalAlignment = Alignment.CenterVertically
             ) {
               Text("DEFAULT FADE IN (${settings.globalFadeInMs} ms)", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
-              IconButton(onClick = { onGlobalFadeInChange(0L) }, modifier = Modifier.size(32.dp)) {
+              IconButton(onClick = { onGlobalFadeInChange(0L) }, modifier = Modifier.minimumInteractiveComponentSize()) {
                 Icon(Icons.Filled.RestartAlt, contentDescription = stringResource(R.string.action_reset), modifier = Modifier.size(18.dp))
               }
             }
@@ -794,7 +835,7 @@ fun GridSettingsSheet(
               verticalAlignment = Alignment.CenterVertically
             ) {
               Text("DEFAULT FADE OUT (${settings.globalFadeOutMs} ms)", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.secondary)
-              IconButton(onClick = { onGlobalFadeOutChange(0L) }, modifier = Modifier.size(32.dp)) {
+              IconButton(onClick = { onGlobalFadeOutChange(0L) }, modifier = Modifier.minimumInteractiveComponentSize()) {
                 Icon(Icons.Filled.RestartAlt, contentDescription = stringResource(R.string.action_reset), modifier = Modifier.size(18.dp))
               }
             }
@@ -848,7 +889,7 @@ fun GridSettingsSheet(
               IconButton(
                 onClick = { onMasterPanChange(0f) },
                 modifier = Modifier
-                  .size(36.dp)
+                  .minimumInteractiveComponentSize()
                   .testTag("reset_master_pan_button")
               ) {
                 Icon(Icons.Filled.RestartAlt, contentDescription = "Reset master pan to center", modifier = Modifier.size(18.dp))
@@ -991,7 +1032,7 @@ fun GridSettingsSheet(
               )
               IconButton(
                 onClick = { onPadGridSpacingChange(8) },
-                modifier = Modifier.size(32.dp)
+                modifier = Modifier.minimumInteractiveComponentSize()
               ) {
                 Icon(Icons.Filled.RestartAlt, contentDescription = stringResource(R.string.action_reset), modifier = Modifier.size(18.dp))
               }

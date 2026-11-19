@@ -150,7 +150,7 @@ class FiveBandEqAudioProcessor : BaseAudioProcessor() {
     return inputAudioFormat
   }
 
-  override fun onFlush() {
+  override fun onFlush(streamMetadata: AudioProcessor.StreamMetadata) {
     clearFilterState()
   }
 

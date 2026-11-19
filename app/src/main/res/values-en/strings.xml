@@ -309,4 +309,183 @@
     <string name="master_rec_format_label">Output File Format</string>
     <string name="master_rec_samplerate_label">Output Sample Rate</string>
     <string name="master_rec_stop_format">Stop &amp; Save %1$s</string>
+
+    <!-- Stage 5: AudioOutputSheet -->
+    <string name="audio_output_title">Mixer, Limiter &amp; Audio Output</string>
+    <string name="audio_output_subtitle">Anti-clipping limiter, auto-ducking, loudness &amp; headphone cue</string>
+    <string name="cd_refresh_audio_devices">Refresh audio output devices</string>
+    <string name="cd_close_audio_output">Close audio output sheet</string>
+    <string name="audio_output_limiter_title">Master Limiter</string>
+    <string name="audio_output_limiter_subtitle">Prevents audio clipping when stacking multiple pads</string>
+    <string name="audio_output_ducking_title">Auto-Ducking</string>
+    <string name="audio_output_ducking_subtitle">Lowers background pads during Voice Recording or Duck Source pads</string>
+    <string name="audio_output_ducking_level_label">DUCKING BACKGROUND LEVEL</string>
+    <string name="audio_output_normalize_title">Loudness Normalization</string>
+    <string name="audio_output_normalize_subtitle">Balances quiet &amp; loud files automatically per pad</string>
+    <string name="cd_analyze_loudness_all">Analyze loudness for all pads</string>
+    <string name="audio_output_master_eq_title">Master 5-Band Equalizer</string>
+    <string name="audio_output_master_eq_subtitle">Applies globally across all pads (-12dB to +12dB)</string>
+    <string name="audio_output_main_device_section">MAIN OUTPUT DEVICE</string>
+    <string name="audio_output_default_label">System Default Output</string>
+    <string name="audio_output_default_subtitle">Automatic Android routing</string>
+    <string name="audio_output_default_type">Default</string>
+    <string name="audio_output_cue_device_section">CUE / HEADPHONE MONITOR DEVICE</string>
+    <string name="audio_output_cue_default_label">Follow Main / Auto Headphones</string>
+    <string name="audio_output_cue_default_subtitle">Cue previews play to default monitor output</string>
+    <string name="audio_output_cue_default_type">Headphone</string>
+    <string name="audio_output_cue_private_subtitle">Private cue monitor on %1$s</string>
+    <string name="audio_output_latency_usb">USB ~8ms</string>
+    <string name="audio_output_latency_bt">BT ~120ms</string>
+    <string name="audio_output_latency_wired">Wired Low-Lat</string>
+    <string name="audio_output_latency_auto">Auto Route</string>
+    <string name="audio_output_latency_internal">Internal</string>
+    <string name="cd_selected_output_device">Selected output device</string>
+
+    <!-- Stage 5: VoiceRecordSheet -->
+    <string name="voice_rec_title">Voice Track Recorder</string>
+    <string name="voice_rec_subtitle">Saves WAV automatically as a new pad</string>
+    <string name="cd_close_voice_recorder">Close recorder</string>
+    <string name="voice_rec_delay_instant">Instant</string>
+    <string name="voice_rec_delay_3s">3s Delay</string>
+    <string name="voice_rec_delay_5s">5s Delay</string>
+    <string name="voice_rec_starting_in">STARTING IN %1$d</string>
+    <string name="voice_rec_idle_timer">00:00.0</string>
+    <string name="cd_stop_save_voice_pad">Stop and save voice pad</string>
+    <string name="cd_start_voice_recording">Start voice recording</string>
+    <string name="voice_rec_recording_mic">Recording mic input…</string>
+
+    <!-- Stage 5: AudioEditorSheet -->
+    <string name="audio_editor_title">Waveform &amp; Non-Destructive Cut</string>
+    <string name="cd_close_audio_editor">Close audio editor</string>
+    <string name="cd_save_trim_metadata">Save non-destructive cut metadata</string>
+    <string name="audio_editor_zoom_hint">Pinch waveform to zoom · Drag IN / OUT markers</string>
+    <string name="cd_zoom_out_waveform">Zoom out waveform</string>
+    <string name="cd_zoom_in_waveform">Zoom in waveform</string>
+    <string name="cd_reset_waveform_zoom">Reset waveform zoom</string>
+    <string name="audio_editor_in_label">IN: %1$s</string>
+    <string name="audio_editor_len_label">LEN: %1$s</string>
+    <string name="audio_editor_out_label">OUT: %1$s</string>
+    <string name="cd_stop_preview">Stop preview</string>
+    <string name="cd_preview_trimmed">Preview trimmed section</string>
+    <string name="cd_reset_cut_range">Reset cut range</string>
+    <string name="cd_export_cut_new_pad">Export cut as new pad</string>
+    <string name="cd_export_cut_wav">Export cut audio to new WAV file</string>
+
+    <!-- Stage 5: BackupDialogsAndTab -->
+    <string name="backup_never_synced">Never synced</string>
+    <string name="backup_folder_unselected_placeholder">Documents/SoundPadPro (not selected)</string>
+    <string name="backup_last_sync_summary">Last sync: %1$s · %2$d snapshot(s)</string>
+    <string name="backup_mirror_active">Auto-mirror active at: %1$s/.soundpadpro/</string>
+    <string name="backup_fallback_snapshot_warning">Primary file corrupted/incomplete. Using healthy snapshot: %1$s</string>
+    <string name="backup_date_schema_summary">Backup date: %1$s · Schema v%2$d</string>
+    <string name="backup_metric_profile">Profiles</string>
+    <string name="backup_metric_bank">Banks</string>
+    <string name="backup_metric_pad">Pads</string>
+    <string name="backup_metric_sched_seq">Sched/Seq</string>
+    <string name="backup_relink_title">Audio File Matching</string>
+    <string name="backup_relink_detected_folder">Match directly to this music folder</string>
+    <string name="backup_relink_current_folder">Will match against: %1$s</string>
+    <string name="backup_relink_pick_hint">Select a music folder to relink pads with audio files on this device</string>
+    <string name="backup_relink_pick_btn">Music Folder</string>
+    <string name="backup_restore_components_header">Select components to restore:</string>
+    <string name="backup_opt_settings">Global Settings, Grid, Theme, Focus Mode &amp; Output</string>
+    <string name="backup_opt_profiles">Profiles, Banks, Pad Slots, Effects, EQ, &amp; Layout</string>
+    <string name="backup_opt_profile_item">%1$s (%2$d pads · %3$d banks)</string>
+    <string name="backup_opt_midi">MIDI Mappings (CC, Program Change, Pad Notes, Focus)</string>
+    <string name="backup_opt_scheduler_seq">Scheduler Alarms &amp; Sequencer/Playlists</string>
+    <string name="backup_restore_apply_selected">Restore Checked Items</string>
+    <string name="backup_restore_processing">Processing…</string>
+    <string name="backup_snapshot_no_folder_hint">Select a config backup folder first or tap the button below to restore directly from a backup / .soundpadpro folder.</string>
+    <string name="backup_snapshot_fallback_label">Snapshot</string>
+
+    <!-- Stage 5: ErrorLogSheet -->
+    <string name="error_log_title">Error Logs &amp; Diagnostics</string>
+    <string name="error_log_count">%1$d error / crash record(s)</string>
+    <string name="cd_export_error_logs">Export logs to .txt</string>
+    <string name="cd_clear_error_logs">Clear all logs</string>
+    <string name="error_log_filter_all">All (%1$d)</string>
+    <string name="error_log_empty_title">No errors recorded</string>
+    <string name="error_log_empty_desc">Corrupt audio, DRM-protected files, lost SAF permissions, and unexpected crashes will appear here automatically.</string>
+    <string name="error_log_suggestion">Suggestion: %1$s</string>
+    <string name="error_log_hide_stacktrace">Hide Stacktrace Details</string>
+    <string name="error_log_show_stacktrace">View Stacktrace Details</string>
+    <string name="error_log_copied">Copied</string>
+
+    <!-- Stage 5: SchedulerSheet -->
+    <string name="scheduler_subtitle">Exact AlarmManager + Boot Restore</string>
+    <string name="scheduler_default_task_title">Schedule %1$d</string>
+    <string name="scheduler_missing_pad">Pad not found</string>
+    <string name="scheduler_meta_summary">Vol %1$d%% · Fade %2$dms</string>
+    <string name="scheduler_meta_autostop"> · Auto-Stop %1$dm</string>
+    <string name="scheduler_meta_loop"> · Loop</string>
+    <string name="scheduler_action_test">Test</string>
+    <string name="scheduler_action_edit">Edit</string>
+    <string name="scheduler_editor_title">Configure Playback Schedule</string>
+    <string name="scheduler_name_label">Schedule Name</string>
+    <string name="scheduler_target_label">Playback Target</string>
+    <string name="scheduler_time_label">Time (%1$02d:%2$02d)</string>
+    <string name="scheduler_hour_label">Hour: %1$d</string>
+    <string name="scheduler_minute_label">Minute: %1$d</string>
+    <string name="scheduler_repeat_label">Repeat</string>
+    <string name="scheduler_day_mon">Mon</string>
+    <string name="scheduler_day_tue">Tue</string>
+    <string name="scheduler_day_wed">Wed</string>
+    <string name="scheduler_day_thu">Thu</string>
+    <string name="scheduler_day_fri">Fri</string>
+    <string name="scheduler_day_sat">Sat</string>
+    <string name="scheduler_day_sun">Sun</string>
+    <string name="scheduler_volume_label">Volume: %1$d%%</string>
+    <string name="scheduler_fade_in_label">Fade In: %1$d ms</string>
+    <string name="scheduler_autostop_off">Auto Stop: Off</string>
+    <string name="scheduler_autostop_minutes">Auto Stop: %1$d min</string>
+    <string name="scheduler_loop_label">Loop playback when triggered</string>
+    <string name="scheduler_fallback_title">Auto Schedule</string>
+    <string name="action_save">Save</string>
+
+    <!-- Stage 5: SequencerSheet -->
+    <string name="sequencer_subtitle">Pad Order · Delay · Crossfade · Pad/MIDI Trigger</string>
+    <string name="sequencer_running_header">Now Playing: %1$s (#%2$d/%3$d)</string>
+    <string name="sequencer_ready_header">Ready to Play: %1$s</string>
+    <string name="sequencer_gap_countdown">Delay between pads: %1$.1f s…</string>
+    <string name="sequencer_idle_prompt">Tap Play to start the pad sequence</string>
+    <string name="cd_sequencer_prev">Previous item</string>
+    <string name="sequencer_action_pause">Pause</string>
+    <string name="sequencer_action_play">Play</string>
+    <string name="cd_sequencer_next">Next item</string>
+    <string name="cd_sequencer_stop">Stop sequencer</string>
+    <string name="sequencer_play_mode_label">Playback Mode</string>
+    <string name="sequencer_delete_playlist">Delete Playlist</string>
+    <string name="sequencer_gap_label">Gap Between Pads: %1$.1f sec</string>
+    <string name="sequencer_crossfade_label">Crossfade Between Items (%1$dms)</string>
+    <string name="sequencer_trigger_pad_selected">Trigger Pad: %1$s</string>
+    <string name="sequencer_trigger_pad_pick">Pick Trigger Pad</string>
+    <string name="sequencer_midi_trigger_label">MIDI Trigger</string>
+    <string name="sequencer_queue_header">Pad Queue (%1$d) · Long-drag / Arrows</string>
+    <string name="sequencer_add_pad">Add Pad</string>
+    <string name="sequencer_missing_pad">Missing Pad</string>
+    <string name="cd_sequencer_drag_handle">Drag to reorder item</string>
+    <string name="cd_sequencer_play_here">Play from here</string>
+    <string name="cd_sequencer_move_up">Move up</string>
+    <string name="cd_sequencer_move_down">Move down</string>
+    <string name="cd_sequencer_remove">Remove item from playlist</string>
+    <string name="sequencer_default_setlist_name">Setlist %1$d</string>
+    <string name="sequencer_create_dialog_title">Create Sequencer Playlist</string>
+    <string name="sequencer_playlist_name_label">Playlist Name</string>
+    <string name="sequencer_fallback_setlist_name">New Setlist</string>
+    <string name="action_create">Create</string>
+    <string name="sequencer_add_pad_dialog_title">Add Pad to Playlist</string>
+    <string name="sequencer_trigger_pad_dialog_title">Select Dedicated Trigger Pad</string>
+    <string name="sequencer_trigger_pad_none">None (Disable Trigger Pad)</string>
+
+    <!-- Stage 5: Accessibility & SoundPadScreen / Panels -->
+    <string name="cd_dismiss">Dismiss notice</string>
+    <string name="cd_exit_midi_learn">Exit MIDI Learn mode</string>
+    <string name="cd_grant_folder_permission">Grant folder permission</string>
+    <string name="cd_dismiss_error">Dismiss error</string>
+    <string name="cd_sequencer_resume">Resume Sequencer</string>
+    <string name="cd_sequencer_pause">Pause Sequencer</string>
+    <string name="cd_move_bank_up">Move bank up</string>
+    <string name="cd_move_bank_down">Move bank down</string>
+    <string name="cd_reset_default_color">Reset default color</string>
+    <string name="cd_select_preset_color">Select color %1$s</string>
 </resources>

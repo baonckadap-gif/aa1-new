@@ -36,6 +36,7 @@ import androidx.compose.material3.OutlinedIconButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -251,7 +252,7 @@ fun ProfileManagerSheet(
               Row(verticalAlignment = Alignment.CenterVertically) {
                 IconButton(
                   onClick = { onDuplicateProfile(profile.id) },
-                  modifier = Modifier.size(44.dp)
+                  modifier = Modifier.minimumInteractiveComponentSize()
                 ) {
                   Icon(
                     imageVector = Icons.Filled.ContentCopy,
@@ -262,7 +263,7 @@ fun ProfileManagerSheet(
                 }
                 IconButton(
                   onClick = { onExportProfileJson(profile) },
-                  modifier = Modifier.size(44.dp)
+                  modifier = Modifier.minimumInteractiveComponentSize()
                 ) {
                   Icon(
                     imageVector = Icons.Filled.Download,
@@ -274,7 +275,7 @@ fun ProfileManagerSheet(
                 if (profiles.size > 1) {
                   IconButton(
                     onClick = { onDeleteProfile(profile.id) },
-                    modifier = Modifier.size(44.dp)
+                    modifier = Modifier.minimumInteractiveComponentSize()
                   ) {
                     Icon(
                       imageVector = Icons.Filled.Delete,

@@ -5,6 +5,7 @@ import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import androidx.room.Transaction
+import androidx.room.Upsert
 import kotlinx.coroutines.flow.Flow
 
 @Dao
@@ -18,7 +19,7 @@ interface SoundPadDao {
   @Query("SELECT * FROM pad_profiles WHERE id = :profileId LIMIT 1")
   suspend fun getProfileById(profileId: String): PadProfileEntity?
 
-  @Insert(onConflict = OnConflictStrategy.REPLACE)
+  @Upsert
   suspend fun upsertProfile(profile: PadProfileEntity)
 
   @Query("UPDATE pad_profiles SET isActive = 0")
@@ -52,10 +53,16 @@ interface SoundPadDao {
   @Query("SELECT COUNT(*) FROM sound_pads WHERE profileId = :profileId")
   suspend fun getPadCountForProfile(profileId: String): Int
 
-  @Insert(onConflict = OnConflictStrategy.REPLACE)
+  @Query("SELECT EXISTS(SELECT 1 FROM sound_pads WHERE id = :padId)")
+  suspend fun padExists(padId: String): Boolean
+
+  @Query("SELECT id FROM sound_pads WHERE id IN (:padIds)")
+  suspend fun findExistingPadIds(padIds: List<String>): List<String>
+
+  @Upsert
   suspend fun upsertPad(pad: SoundPadEntity)
 
-  @Insert(onConflict = OnConflictStrategy.REPLACE)
+  @Upsert
   suspend fun upsertPads(pads: List<SoundPadEntity>)
 
   @Query("DELETE FROM sound_pads WHERE profileId = :profileId AND id NOT IN (:keepIds)")
@@ -145,11 +152,33 @@ interface SoundPadDao {
     }
   }
 
-  @Insert(onConflict = OnConflictStrategy.REPLACE)
+  @Upsert
   suspend fun upsertPadSetting(setting: PadSettingEntity)
 
-  @Insert(onConflict = OnConflictStrategy.REPLACE)
+  @Upsert
   suspend fun upsertPadSettings(settings: List<PadSettingEntity>)
+
+  @Transaction
+  suspend fun upsertPadSettingSafely(setting: PadSettingEntity): Boolean {
+    if (!padExists(setting.padId)) return false
+    upsertPadSetting(setting)
+    return true
+  }
+
+  @Transaction
+  suspend fun upsertPadSettingsSafely(settings: List<PadSettingEntity>) {
+    if (settings.isEmpty()) return
+    val existingIds = settings
+      .map { it.padId }
+      .distinct()
+      .chunked(500)
+      .flatMap { batch -> findExistingPadIds(batch) }
+      .toHashSet()
+    val validSettings = settings.filter { it.padId in existingIds }
+    if (validSettings.isNotEmpty()) {
+      upsertPadSettings(validSettings)
+    }
+  }
 
   @Query("SELECT * FROM pad_settings WHERE padId = :padId LIMIT 1")
   suspend fun getPadSetting(padId: String): PadSettingEntity?
@@ -185,12 +214,16 @@ interface SoundPadDao {
   ) {
     clearActiveFlags()
     upsertProfile(profile.copy(isActive = true))
-    deletePadsForProfile(profile.id)
-    if (pads.isNotEmpty()) {
+    if (pads.isEmpty()) {
+      deletePadsForProfile(profile.id)
+    } else {
       upsertPads(pads)
-    }
-    if (settings.isNotEmpty()) {
-      upsertPadSettings(settings)
+      deletePadsNotIn(profile.id, pads.map { it.id })
+      val padIdSet = pads.mapTo(HashSet(pads.size)) { it.id }
+      val validSettings = settings.filter { it.padId in padIdSet }
+      if (validSettings.isNotEmpty()) {
+        upsertPadSettings(validSettings)
+      }
     }
   }
 
@@ -214,10 +247,10 @@ interface SoundPadDao {
   @Query("SELECT * FROM midi_cc_mappings WHERE profileId = :profileId")
   suspend fun getMidiCcMappingsOnce(profileId: String): List<MidiCcMappingEntity>
 
-  @Insert(onConflict = OnConflictStrategy.REPLACE)
+  @Upsert
   suspend fun upsertMidiCcMapping(mapping: MidiCcMappingEntity)
 
-  @Insert(onConflict = OnConflictStrategy.REPLACE)
+  @Upsert
   suspend fun upsertMidiCcMappings(mappings: List<MidiCcMappingEntity>)
 
   @Query("DELETE FROM midi_cc_mappings WHERE profileId = :profileId AND target = :target")
@@ -369,7 +402,7 @@ interface SoundPadDao {
   @Query("SELECT * FROM midi_pc_bank_mappings WHERE profileId = :profileId ORDER BY bankIndex ASC")
   suspend fun getMidiPcMappingsOnce(profileId: String): List<MidiPcBankMappingEntity>
 
-  @Insert(onConflict = OnConflictStrategy.REPLACE)
+  @Upsert
   suspend fun upsertMidiPcMapping(mapping: MidiPcBankMappingEntity)
 
   @Query("DELETE FROM midi_pc_bank_mappings WHERE profileId = :profileId AND bankIndex = :bankIndex")

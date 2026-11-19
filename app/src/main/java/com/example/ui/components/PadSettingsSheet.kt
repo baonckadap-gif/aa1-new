@@ -26,6 +26,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.DriveFileMove
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.AutoFixHigh
@@ -35,7 +36,6 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.ContentCut
 import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.DriveFileMove
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Headphones
 import androidx.compose.material.icons.filled.Palette
@@ -61,6 +61,7 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -77,6 +78,8 @@ import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -240,7 +243,7 @@ fun PadSettingsSheet(
               onSelectPad(allPads[currentIdx - 1].id)
             },
             modifier = Modifier
-              .size(40.dp)
+              .minimumInteractiveComponentSize()
               .testTag("customizer_prev_track_button")
           ) {
             Icon(
@@ -303,7 +306,7 @@ fun PadSettingsSheet(
               onSelectPad(allPads[currentIdx + 1].id)
             },
             modifier = Modifier
-              .size(40.dp)
+              .minimumInteractiveComponentSize()
               .testTag("customizer_next_track_button")
           ) {
             Icon(
@@ -388,7 +391,7 @@ fun PadSettingsSheet(
             modifier = Modifier.testTag("duplicate_pad_to_bank_button")
           ) {
             Icon(
-              Icons.Filled.DriveFileMove,
+              Icons.AutoMirrored.Filled.DriveFileMove,
               contentDescription = "Duplicate pad to another bank",
               tint = MaterialTheme.colorScheme.tertiary
             )
@@ -495,7 +498,7 @@ fun PadSettingsSheet(
                 commitVisual(reset)
               },
               modifier = Modifier
-                .size(40.dp)
+                .minimumInteractiveComponentSize()
                 .testTag("reset_pad_visual_button")
             ) {
               Icon(
@@ -717,7 +720,7 @@ fun PadSettingsSheet(
             Text("CORNER ROUNDNESS (${visualConfig.cornerRadiusDp.roundToInt()} dp)", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
             IconButton(
               onClick = { commitVisual(visualConfig.copy(cornerRadiusDp = 14f)) },
-              modifier = Modifier.size(32.dp).testTag("reset_pad_corner_button")
+              modifier = Modifier.minimumInteractiveComponentSize().testTag("reset_pad_corner_button")
             ) {
               Icon(Icons.Filled.RestartAlt, contentDescription = stringResource(R.string.action_reset), modifier = Modifier.size(18.dp))
             }
@@ -811,33 +814,49 @@ fun PadSettingsSheet(
           @OptIn(ExperimentalLayoutApi::class)
           FlowRow(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+            horizontalArrangement = Arrangement.spacedBy(2.dp),
+            verticalArrangement = Arrangement.spacedBy(2.dp)
           ) {
+            val resetColorCd = stringResource(R.string.cd_reset_default_color)
             PRESET_PAD_COLORS.forEachIndexed { index, colorVal ->
               val isSelected = visualConfig.colorArgb == colorVal
               val displayColor = colorVal?.let { Color(it.toInt()) } ?: MaterialTheme.colorScheme.surfaceVariant
+              val swatchCd = if (colorVal == null) {
+                resetColorCd
+              } else {
+                val presetName = SoundPadColorPalette.PAD_PRESETS_12.getOrNull(index - 1)?.name
+                  ?: "#${(colorVal and 0xFFFFFFL).toString(16).uppercase().padStart(6, '0')}"
+                stringResource(R.string.cd_select_preset_color, presetName)
+              }
               Box(
                 modifier = Modifier
-                  .size(32.dp)
+                  .size(SoundPadTheme.spacing.minTouchTarget)
                   .clip(CircleShape)
-                  .background(displayColor)
-                  .border(
-                    width = if (isSelected) 2.5.dp else 1.dp,
-                    color = if (isSelected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.outline,
-                    shape = CircleShape
-                  )
+                  .semantics { contentDescription = swatchCd }
                   .testTag("color_preset_$index")
                   .clickable { commitVisual(visualConfig.copy(colorArgb = colorVal)) },
                 contentAlignment = Alignment.Center
               ) {
-                if (isSelected) {
-                  Icon(
-                    imageVector = Icons.Filled.Check,
-                    contentDescription = "Selected pad color",
-                    tint = if (colorVal == null) MaterialTheme.colorScheme.onSurface else Color.Black,
-                    modifier = Modifier.size(16.dp)
-                  )
+                Box(
+                  modifier = Modifier
+                    .size(32.dp)
+                    .clip(CircleShape)
+                    .background(displayColor)
+                    .border(
+                      width = if (isSelected) 2.5.dp else 1.dp,
+                      color = if (isSelected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.outline,
+                      shape = CircleShape
+                    ),
+                  contentAlignment = Alignment.Center
+                ) {
+                  if (isSelected) {
+                    Icon(
+                      imageVector = Icons.Filled.Check,
+                      contentDescription = null,
+                      tint = if (colorVal == null) MaterialTheme.colorScheme.onSurface else Color.Black,
+                      modifier = Modifier.size(16.dp)
+                    )
+                  }
                 }
               }
             }
@@ -886,34 +905,53 @@ fun PadSettingsSheet(
             Text("CORNER GLOW COLOR & POWER", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Text("${(visualConfig.glowIntensity * 100).roundToInt()}%", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
           }
-          Row(
+          @OptIn(ExperimentalLayoutApi::class)
+          FlowRow(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
+            horizontalArrangement = Arrangement.spacedBy(2.dp),
+            verticalArrangement = Arrangement.spacedBy(2.dp)
           ) {
+            val resetGlowCd = stringResource(R.string.cd_reset_default_color)
             PRESET_GLOW_COLORS.forEachIndexed { index, colorVal ->
               val isSelected = visualConfig.glowColorArgb == colorVal
               val displayColor = colorVal?.let { Color(it.toInt()) } ?: MaterialTheme.colorScheme.surfaceVariant
+              val swatchCd = if (colorVal == null) {
+                resetGlowCd
+              } else {
+                stringResource(
+                  R.string.cd_select_preset_color,
+                  "#${(colorVal and 0xFFFFFFL).toString(16).uppercase().padStart(6, '0')}"
+                )
+              }
               Box(
                 modifier = Modifier
-                  .size(30.dp)
+                  .size(SoundPadTheme.spacing.minTouchTarget)
                   .clip(CircleShape)
-                  .background(displayColor)
-                  .border(
-                    width = if (isSelected) 2.5.dp else 1.dp,
-                    color = if (isSelected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.outline,
-                    shape = CircleShape
-                  )
+                  .semantics { contentDescription = swatchCd }
                   .testTag("glow_preset_$index")
                   .clickable { commitVisual(visualConfig.copy(glowColorArgb = colorVal)) },
                 contentAlignment = Alignment.Center
               ) {
-                if (isSelected) {
-                  Icon(
-                    imageVector = Icons.Filled.Check,
-                    contentDescription = "Selected corner glow color",
-                    tint = if (colorVal == null) MaterialTheme.colorScheme.onSurface else Color.Black,
-                    modifier = Modifier.size(15.dp)
-                  )
+                Box(
+                  modifier = Modifier
+                    .size(30.dp)
+                    .clip(CircleShape)
+                    .background(displayColor)
+                    .border(
+                      width = if (isSelected) 2.5.dp else 1.dp,
+                      color = if (isSelected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.outline,
+                      shape = CircleShape
+                    ),
+                  contentAlignment = Alignment.Center
+                ) {
+                  if (isSelected) {
+                    Icon(
+                      imageVector = Icons.Filled.Check,
+                      contentDescription = null,
+                      tint = if (colorVal == null) MaterialTheme.colorScheme.onSurface else Color.Black,
+                      modifier = Modifier.size(15.dp)
+                    )
+                  }
                 }
               }
             }
@@ -956,7 +994,7 @@ fun PadSettingsSheet(
             )
             IconButton(
               onClick = { commitVisual(visualConfig.copy(glowIntensity = 1.0f)) },
-              modifier = Modifier.size(32.dp).testTag("reset_pad_glow_button")
+              modifier = Modifier.minimumInteractiveComponentSize().testTag("reset_pad_glow_button")
             ) {
               Icon(Icons.Filled.RestartAlt, contentDescription = stringResource(R.string.action_reset), modifier = Modifier.size(18.dp))
             }
@@ -973,34 +1011,53 @@ fun PadSettingsSheet(
               color = MaterialTheme.colorScheme.secondary
             )
           }
-          Row(
+          @OptIn(ExperimentalLayoutApi::class)
+          FlowRow(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
+            horizontalArrangement = Arrangement.spacedBy(2.dp),
+            verticalArrangement = Arrangement.spacedBy(2.dp)
           ) {
+            val resetBorderCd = stringResource(R.string.cd_reset_default_color)
             PRESET_BORDER_COLORS.forEachIndexed { idx, colorVal ->
               val isSelected = visualConfig.borderColorArgb == colorVal
               val displayColor = colorVal?.let { Color(it.toInt()) } ?: MaterialTheme.colorScheme.surfaceVariant
+              val swatchCd = if (colorVal == null) {
+                resetBorderCd
+              } else {
+                stringResource(
+                  R.string.cd_select_preset_color,
+                  "#${(colorVal and 0xFFFFFFL).toString(16).uppercase().padStart(6, '0')}"
+                )
+              }
               Box(
                 modifier = Modifier
-                  .size(28.dp)
+                  .size(SoundPadTheme.spacing.minTouchTarget)
                   .clip(CircleShape)
-                  .background(displayColor)
-                  .border(
-                    width = if (isSelected) 2.5.dp else 1.dp,
-                    color = if (isSelected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.outline,
-                    shape = CircleShape
-                  )
+                  .semantics { contentDescription = swatchCd }
                   .testTag("border_preset_$idx")
                   .clickable { commitVisual(visualConfig.copy(borderColorArgb = colorVal)) },
                 contentAlignment = Alignment.Center
               ) {
-                if (isSelected) {
-                  Icon(
-                    imageVector = Icons.Filled.Check,
-                    contentDescription = "Selected border color",
-                    tint = if (colorVal == null) MaterialTheme.colorScheme.onSurface else Color.Black,
-                    modifier = Modifier.size(14.dp)
-                  )
+                Box(
+                  modifier = Modifier
+                    .size(28.dp)
+                    .clip(CircleShape)
+                    .background(displayColor)
+                    .border(
+                      width = if (isSelected) 2.5.dp else 1.dp,
+                      color = if (isSelected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.outline,
+                      shape = CircleShape
+                    ),
+                  contentAlignment = Alignment.Center
+                ) {
+                  if (isSelected) {
+                    Icon(
+                      imageVector = Icons.Filled.Check,
+                      contentDescription = null,
+                      tint = if (colorVal == null) MaterialTheme.colorScheme.onSurface else Color.Black,
+                      modifier = Modifier.size(14.dp)
+                    )
+                  }
                 }
               }
             }
@@ -1049,34 +1106,53 @@ fun PadSettingsSheet(
             style = MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant
           )
-          Row(
+          @OptIn(ExperimentalLayoutApi::class)
+          FlowRow(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
+            horizontalArrangement = Arrangement.spacedBy(2.dp),
+            verticalArrangement = Arrangement.spacedBy(2.dp)
           ) {
+            val resetTextCd = stringResource(R.string.cd_reset_default_color)
             PRESET_TEXT_COLORS.forEachIndexed { idx, colorVal ->
               val isSelected = visualConfig.textColorArgb == colorVal
               val displayColor = colorVal?.let { Color(it.toInt()) } ?: MaterialTheme.colorScheme.surfaceVariant
+              val swatchCd = if (colorVal == null) {
+                resetTextCd
+              } else {
+                stringResource(
+                  R.string.cd_select_preset_color,
+                  "#${(colorVal and 0xFFFFFFL).toString(16).uppercase().padStart(6, '0')}"
+                )
+              }
               Box(
                 modifier = Modifier
-                  .size(28.dp)
+                  .size(SoundPadTheme.spacing.minTouchTarget)
                   .clip(CircleShape)
-                  .background(displayColor)
-                  .border(
-                    width = if (isSelected) 2.5.dp else 1.dp,
-                    color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
-                    shape = CircleShape
-                  )
+                  .semantics { contentDescription = swatchCd }
                   .testTag("text_color_preset_$idx")
                   .clickable { commitVisual(visualConfig.copy(textColorArgb = colorVal)) },
                 contentAlignment = Alignment.Center
               ) {
-                if (isSelected) {
-                  Icon(
-                    imageVector = Icons.Filled.Check,
-                    contentDescription = "Selected text color",
-                    tint = if (colorVal == 0xFF0B1120L) Color.White else if (colorVal == null) MaterialTheme.colorScheme.onSurface else Color.Black,
-                    modifier = Modifier.size(14.dp)
-                  )
+                Box(
+                  modifier = Modifier
+                    .size(28.dp)
+                    .clip(CircleShape)
+                    .background(displayColor)
+                    .border(
+                      width = if (isSelected) 2.5.dp else 1.dp,
+                      color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
+                      shape = CircleShape
+                    ),
+                  contentAlignment = Alignment.Center
+                ) {
+                  if (isSelected) {
+                    Icon(
+                      imageVector = Icons.Filled.Check,
+                      contentDescription = null,
+                      tint = if (colorVal == 0xFF0B1120L) Color.White else if (colorVal == null) MaterialTheme.colorScheme.onSurface else Color.Black,
+                      modifier = Modifier.size(14.dp)
+                    )
+                  }
                 }
               }
             }
@@ -1186,7 +1262,7 @@ fun PadSettingsSheet(
                 settings = updated
                 onSettingsChange(updated)
               },
-              modifier = Modifier.size(32.dp).testTag("reset_pad_volume_button")
+              modifier = Modifier.minimumInteractiveComponentSize().testTag("reset_pad_volume_button")
             ) {
               Icon(Icons.Filled.RestartAlt, contentDescription = stringResource(R.string.action_reset), modifier = Modifier.size(18.dp))
             }
@@ -1231,7 +1307,7 @@ fun PadSettingsSheet(
                 onSettingsChange(updated)
               },
               modifier = Modifier
-                .size(32.dp)
+                .minimumInteractiveComponentSize()
                 .testTag("reset_pad_pan_button")
             ) {
               Icon(Icons.Filled.RestartAlt, contentDescription = "Reset pan to center", modifier = Modifier.size(18.dp))
@@ -1287,7 +1363,7 @@ fun PadSettingsSheet(
                 settings = updated
                 onSettingsChange(updated)
               },
-              modifier = Modifier.size(32.dp)
+              modifier = Modifier.minimumInteractiveComponentSize()
             ) {
               Icon(Icons.Filled.RestartAlt, contentDescription = "Reset speed to 1.0x", modifier = Modifier.size(18.dp))
             }
@@ -1322,7 +1398,7 @@ fun PadSettingsSheet(
                 settings = updated
                 onSettingsChange(updated)
               },
-              modifier = Modifier.size(32.dp)
+              modifier = Modifier.minimumInteractiveComponentSize()
             ) {
               Icon(Icons.Filled.RestartAlt, contentDescription = "Reset pitch to 1.0x", modifier = Modifier.size(18.dp))
             }
@@ -1795,7 +1871,7 @@ fun PadSettingsSheet(
                 settings = updated
                 onSettingsChange(updated)
               },
-              modifier = Modifier.size(32.dp).testTag("reset_pad_fade_in_button")
+              modifier = Modifier.minimumInteractiveComponentSize().testTag("reset_pad_fade_in_button")
             ) {
               Icon(Icons.Filled.RestartAlt, contentDescription = stringResource(R.string.action_reset), modifier = Modifier.size(18.dp))
             }
@@ -1830,7 +1906,7 @@ fun PadSettingsSheet(
                 settings = updated
                 onSettingsChange(updated)
               },
-              modifier = Modifier.size(32.dp).testTag("reset_pad_fade_out_button")
+              modifier = Modifier.minimumInteractiveComponentSize().testTag("reset_pad_fade_out_button")
             ) {
               Icon(Icons.Filled.RestartAlt, contentDescription = stringResource(R.string.action_reset), modifier = Modifier.size(18.dp))
             }
@@ -1979,7 +2055,7 @@ fun PadSettingsSheet(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
               ) {
-                Icon(Icons.Filled.DriveFileMove, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
+                Icon(Icons.AutoMirrored.Filled.DriveFileMove, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
                 Text("Ke Bank Lain", style = MaterialTheme.typography.labelLarge, maxLines = 1)
               }
             }
@@ -2003,7 +2079,7 @@ fun PadSettingsSheet(
               verticalAlignment = Alignment.CenterVertically,
               horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-              Icon(Icons.Filled.DriveFileMove, contentDescription = null, tint = MaterialTheme.colorScheme.secondary)
+              Icon(Icons.AutoMirrored.Filled.DriveFileMove, contentDescription = null, tint = MaterialTheme.colorScheme.secondary)
               Column(modifier = Modifier.weight(1f)) {
                 Text(stringResource(R.string.action_move_to_slot), style = MaterialTheme.typography.titleSmall)
                 Text(

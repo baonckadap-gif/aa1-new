@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -16,7 +17,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.VolumeDown
 import androidx.compose.material.icons.filled.AutoFixHigh
@@ -29,7 +29,6 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Speaker
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Usb
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
@@ -92,6 +91,7 @@ fun AudioOutputSheet(
   onDismiss: () -> Unit
 ) {
   val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+  val spacing = SoundPadTheme.spacing
 
   ModalBottomSheet(
     onDismissRequest = onDismiss,
@@ -100,8 +100,8 @@ fun AudioOutputSheet(
   ) {
     LazyColumn(
       modifier = Modifier.fillMaxWidth(),
-      contentPadding = PaddingValues(horizontal = 18.dp, vertical = 8.dp),
-      verticalArrangement = Arrangement.spacedBy(12.dp)
+      contentPadding = PaddingValues(horizontal = spacing.lg + spacing.xxs, vertical = spacing.sm),
+      verticalArrangement = Arrangement.spacedBy(spacing.md)
     ) {
       item {
         Row(
@@ -111,30 +111,36 @@ fun AudioOutputSheet(
         ) {
           Column(modifier = Modifier.weight(1f)) {
             Text(
-              text = "Mixer, Limiter & Audio Output",
+              text = stringResource(R.string.audio_output_title),
               style = MaterialTheme.typography.titleMedium,
               color = MaterialTheme.colorScheme.onSurface
             )
             Text(
-              text = "Anti-clipping limiter, auto-ducking, loudness & headphone cue",
+              text = stringResource(R.string.audio_output_subtitle),
               style = MaterialTheme.typography.labelSmall,
               color = MaterialTheme.colorScheme.onSurfaceVariant
             )
           }
-          Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+          Row(horizontalArrangement = Arrangement.spacedBy(spacing.xs)) {
             OutlinedIconButton(
               onClick = onRefreshDevices,
               modifier = Modifier
                 .minimumInteractiveComponentSize()
                 .testTag("refresh_audio_devices_button")
             ) {
-              Icon(Icons.Filled.Refresh, contentDescription = "Refresh audio output devices")
+              Icon(
+                Icons.Filled.Refresh,
+                contentDescription = stringResource(R.string.cd_refresh_audio_devices)
+              )
             }
             IconButton(
               onClick = onDismiss,
               modifier = Modifier.minimumInteractiveComponentSize()
             ) {
-              Icon(Icons.Filled.Close, contentDescription = "Close audio output sheet")
+              Icon(
+                Icons.Filled.Close,
+                contentDescription = stringResource(R.string.cd_close_audio_output)
+              )
             }
           }
         }
@@ -143,15 +149,15 @@ fun AudioOutputSheet(
       // Master Limiter + Auto-Ducking + Loudness Normalization
       item {
         Surface(
-          shape = RoundedCornerShape(12.dp),
+          shape = MaterialTheme.shapes.medium,
           color = MaterialTheme.colorScheme.surfaceContainer,
           border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
         ) {
           Column(
             modifier = Modifier
               .fillMaxWidth()
-              .padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
+              .padding(spacing.md),
+            verticalArrangement = Arrangement.spacedBy(spacing.sm + spacing.xxs)
           ) {
             Row(
               modifier = Modifier.fillMaxWidth(),
@@ -159,9 +165,11 @@ fun AudioOutputSheet(
               verticalAlignment = Alignment.CenterVertically
             ) {
               Row(
-                modifier = Modifier.weight(1f).padding(end = 8.dp),
+                modifier = Modifier
+                  .weight(1f)
+                  .padding(end = spacing.sm),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                horizontalArrangement = Arrangement.spacedBy(spacing.sm)
               ) {
                 Icon(Icons.Filled.AutoFixHigh, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
                 Column {
@@ -188,15 +196,17 @@ fun AudioOutputSheet(
               verticalAlignment = Alignment.CenterVertically
             ) {
               Row(
-                modifier = Modifier.weight(1f).padding(end = 8.dp),
+                modifier = Modifier
+                  .weight(1f)
+                  .padding(end = spacing.sm),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                horizontalArrangement = Arrangement.spacedBy(spacing.sm)
               ) {
                 Icon(Icons.Filled.GraphicEq, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
                 Column {
-                  Text("Master Limiter", style = MaterialTheme.typography.titleSmall)
+                  Text(stringResource(R.string.audio_output_limiter_title), style = MaterialTheme.typography.titleSmall)
                   Text(
-                    "Prevents audio clipping when stacking multiple pads",
+                    stringResource(R.string.audio_output_limiter_subtitle),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                   )
@@ -217,15 +227,17 @@ fun AudioOutputSheet(
               verticalAlignment = Alignment.CenterVertically
             ) {
               Row(
-                modifier = Modifier.weight(1f).padding(end = 8.dp),
+                modifier = Modifier
+                  .weight(1f)
+                  .padding(end = spacing.sm),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                horizontalArrangement = Arrangement.spacedBy(spacing.sm)
               ) {
                 Icon(Icons.AutoMirrored.Filled.VolumeDown, contentDescription = null, tint = MaterialTheme.colorScheme.secondary)
                 Column {
-                  Text("Auto-Ducking", style = MaterialTheme.typography.titleSmall)
+                  Text(stringResource(R.string.audio_output_ducking_title), style = MaterialTheme.typography.titleSmall)
                   Text(
-                    "Lowers background pads during Voice Recording or Duck Source pads",
+                    stringResource(R.string.audio_output_ducking_subtitle),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                   )
@@ -242,7 +254,7 @@ fun AudioOutputSheet(
               Column {
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                   Text(
-                    "DUCKING BACKGROUND LEVEL",
+                    stringResource(R.string.audio_output_ducking_level_label),
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                   )
@@ -269,15 +281,17 @@ fun AudioOutputSheet(
               verticalAlignment = Alignment.CenterVertically
             ) {
               Row(
-                modifier = Modifier.weight(1f).padding(end = 8.dp),
+                modifier = Modifier
+                  .weight(1f)
+                  .padding(end = spacing.sm),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                horizontalArrangement = Arrangement.spacedBy(spacing.sm)
               ) {
                 Icon(Icons.Filled.AutoFixHigh, contentDescription = null, tint = MaterialTheme.colorScheme.tertiary)
                 Column {
-                  Text("Loudness Normalization", style = MaterialTheme.typography.titleSmall)
+                  Text(stringResource(R.string.audio_output_normalize_title), style = MaterialTheme.typography.titleSmall)
                   Text(
-                    "Balances quiet & loud files automatically per pad",
+                    stringResource(R.string.audio_output_normalize_subtitle),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                   )
@@ -285,13 +299,13 @@ fun AudioOutputSheet(
               }
               Row(
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                horizontalArrangement = Arrangement.spacedBy(spacing.xs + spacing.xxs)
               ) {
                 FilledTonalIconButton(
                   enabled = !isNormalizingAll,
                   onClick = onAnalyzeLoudnessAll,
                   modifier = Modifier
-                    .size(40.dp)
+                    .minimumInteractiveComponentSize()
                     .testTag("analyze_loudness_all_button")
                 ) {
                   if (isNormalizingAll) {
@@ -299,7 +313,7 @@ fun AudioOutputSheet(
                   } else {
                     Icon(
                       Icons.Filled.AutoFixHigh,
-                      contentDescription = "Analyze loudness for all pads",
+                      contentDescription = stringResource(R.string.cd_analyze_loudness_all),
                       modifier = Modifier.size(18.dp)
                     )
                   }
@@ -318,8 +332,8 @@ fun AudioOutputSheet(
       // Master 5-Band Equalizer
       item {
         EqFiveBandPanel(
-          title = "Master 5-Band Equalizer",
-          subtitle = "Applies globally across all pads (-12dB to +12dB)",
+          title = stringResource(R.string.audio_output_master_eq_title),
+          subtitle = stringResource(R.string.audio_output_master_eq_subtitle),
           enabled = settings.masterEqEnabled,
           preset = settings.masterEqPreset,
           bandsDb = settings.masterEqBandsDb,
@@ -334,15 +348,15 @@ fun AudioOutputSheet(
       // Audio Buffer Size & Latency Test
       item {
         Surface(
-          shape = RoundedCornerShape(12.dp),
+          shape = MaterialTheme.shapes.medium,
           color = MaterialTheme.colorScheme.surfaceContainer,
           border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
         ) {
           Column(
             modifier = Modifier
               .fillMaxWidth()
-              .padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+              .padding(spacing.md),
+            verticalArrangement = Arrangement.spacedBy(spacing.sm)
           ) {
             Row(
               modifier = Modifier.fillMaxWidth(),
@@ -351,7 +365,7 @@ fun AudioOutputSheet(
             ) {
               Row(
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                horizontalArrangement = Arrangement.spacedBy(spacing.sm)
               ) {
                 Icon(Icons.Filled.Speed, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
                 Text(
@@ -401,14 +415,14 @@ fun AudioOutputSheet(
 
             if (hasPendingBufferRebuild) {
               Surface(
-                shape = RoundedCornerShape(8.dp),
+                shape = MaterialTheme.shapes.small,
                 color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.65f)
               ) {
                 Text(
                   text = stringResource(R.string.audio_buffer_pending_rebuild_warning),
                   style = MaterialTheme.typography.labelSmall,
                   color = MaterialTheme.colorScheme.onSecondaryContainer,
-                  modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                  modifier = Modifier.padding(horizontal = spacing.sm + spacing.xxs, vertical = spacing.xs + spacing.xxs)
                 )
               }
             }
@@ -421,7 +435,7 @@ fun AudioOutputSheet(
               FilledTonalButton(
                 enabled = !isRunningLatencyTest,
                 onClick = onRunLatencyTest,
-                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp),
+                contentPadding = PaddingValues(horizontal = spacing.md + spacing.xxs, vertical = spacing.sm),
                 modifier = Modifier
                   .minimumInteractiveComponentSize()
                   .testTag("latency_test_button")
@@ -431,7 +445,7 @@ fun AudioOutputSheet(
                     modifier = Modifier.size(16.dp),
                     strokeWidth = 2.dp
                   )
-                  Spacer(modifier = Modifier.size(8.dp))
+                  Spacer(modifier = Modifier.size(spacing.sm))
                   Text(stringResource(R.string.latency_test_running))
                 } else {
                   Icon(
@@ -439,14 +453,14 @@ fun AudioOutputSheet(
                     contentDescription = null,
                     modifier = Modifier.size(18.dp)
                   )
-                  Spacer(modifier = Modifier.size(6.dp))
+                  Spacer(modifier = Modifier.size(spacing.xs + spacing.xxs))
                   Text(stringResource(R.string.latency_test_button))
                 }
               }
 
               if (latencyTestReport != null) {
                 Surface(
-                  shape = RoundedCornerShape(8.dp),
+                  shape = MaterialTheme.shapes.small,
                   color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.65f)
                 ) {
                   Text(
@@ -458,7 +472,7 @@ fun AudioOutputSheet(
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onPrimaryContainer,
                     modifier = Modifier
-                      .padding(horizontal = 10.dp, vertical = 6.dp)
+                      .padding(horizontal = spacing.sm + spacing.xxs, vertical = spacing.xs + spacing.xxs)
                       .testTag("latency_test_result_label")
                   )
                 }
@@ -471,7 +485,7 @@ fun AudioOutputSheet(
       // Main PA Output Device
       item {
         Text(
-          text = "MAIN OUTPUT DEVICE",
+          text = stringResource(R.string.audio_output_main_device_section),
           style = MaterialTheme.typography.labelMedium,
           color = MaterialTheme.colorScheme.primary
         )
@@ -479,10 +493,11 @@ fun AudioOutputSheet(
 
       item {
         OutputDeviceOptionRow(
-          label = "System Default Output",
-          subtitle = "Automatic Android routing",
+          label = stringResource(R.string.audio_output_default_label),
+          subtitle = stringResource(R.string.audio_output_default_subtitle),
           isHeadphone = false,
-          typeLabel = "Default",
+          typeLabel = stringResource(R.string.audio_output_default_type),
+          isDefaultRoute = true,
           isSelected = selectedMainDeviceId == null,
           onClick = { onSelectMainDevice(null) }
         )
@@ -494,6 +509,7 @@ fun AudioOutputSheet(
           subtitle = device.typeLabel,
           isHeadphone = device.isHeadphoneLike,
           typeLabel = device.typeLabel,
+          isDefaultRoute = false,
           isSelected = selectedMainDeviceId == device.id,
           onClick = { onSelectMainDevice(device.id) }
         )
@@ -501,9 +517,9 @@ fun AudioOutputSheet(
 
       // Cue / Headphone Preview Device & Separate Cue Volume
       item {
-        Spacer(modifier = Modifier.height(4.dp))
+        Spacer(modifier = Modifier.height(spacing.xs))
         Text(
-          text = "CUE / HEADPHONE MONITOR DEVICE",
+          text = stringResource(R.string.audio_output_cue_device_section),
           style = MaterialTheme.typography.labelMedium,
           color = MaterialTheme.colorScheme.secondary
         )
@@ -511,15 +527,15 @@ fun AudioOutputSheet(
 
       item {
         Surface(
-          shape = RoundedCornerShape(12.dp),
+          shape = MaterialTheme.shapes.medium,
           color = MaterialTheme.colorScheme.surfaceContainer,
           border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
         ) {
           Column(
             modifier = Modifier
               .fillMaxWidth()
-              .padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp)
+              .padding(spacing.md),
+            verticalArrangement = Arrangement.spacedBy(spacing.xs)
           ) {
             Row(
               modifier = Modifier.fillMaxWidth(),
@@ -554,10 +570,11 @@ fun AudioOutputSheet(
 
       item {
         OutputDeviceOptionRow(
-          label = "Follow Main / Auto Headphones",
-          subtitle = "Cue previews play to default monitor output",
+          label = stringResource(R.string.audio_output_cue_default_label),
+          subtitle = stringResource(R.string.audio_output_cue_default_subtitle),
           isHeadphone = true,
-          typeLabel = "Headphone",
+          typeLabel = stringResource(R.string.audio_output_cue_default_type),
+          isDefaultRoute = true,
           isSelected = selectedCueDeviceId == null,
           onClick = { onSelectCueDevice(null) }
         )
@@ -566,16 +583,17 @@ fun AudioOutputSheet(
       items(outputDevices, key = { "cue_${it.id}" }) { device ->
         OutputDeviceOptionRow(
           label = device.name,
-          subtitle = "Private cue monitor on ${device.typeLabel}",
+          subtitle = stringResource(R.string.audio_output_cue_private_subtitle, device.typeLabel),
           isHeadphone = device.isHeadphoneLike,
           typeLabel = device.typeLabel,
+          isDefaultRoute = false,
           isSelected = selectedCueDeviceId == device.id,
           onClick = { onSelectCueDevice(device.id) }
         )
       }
 
       item {
-        Spacer(modifier = Modifier.height(16.dp))
+        Spacer(modifier = Modifier.height(spacing.lg))
       }
     }
   }
@@ -587,9 +605,11 @@ private fun OutputDeviceOptionRow(
   subtitle: String,
   isHeadphone: Boolean,
   typeLabel: String,
+  isDefaultRoute: Boolean,
   isSelected: Boolean,
   onClick: () -> Unit
 ) {
+  val spacing = SoundPadTheme.spacing
   val icon = when {
     typeLabel.contains("Bluetooth", ignoreCase = true) || typeLabel.contains("BLE", ignoreCase = true) ->
       Icons.Filled.BluetoothAudio
@@ -598,11 +618,11 @@ private fun OutputDeviceOptionRow(
     else -> Icons.Filled.Speaker
   }
   val latencyTag = when {
-    typeLabel.contains("USB", ignoreCase = true) -> "USB ~8ms"
-    typeLabel.contains("Bluetooth", ignoreCase = true) -> "BT ~120ms"
-    isHeadphone -> "Wired Low-Lat"
-    typeLabel.equals("Default", ignoreCase = true) -> "Auto Route"
-    else -> "Internal"
+    typeLabel.contains("USB", ignoreCase = true) -> stringResource(R.string.audio_output_latency_usb)
+    typeLabel.contains("Bluetooth", ignoreCase = true) -> stringResource(R.string.audio_output_latency_bt)
+    isHeadphone -> stringResource(R.string.audio_output_latency_wired)
+    isDefaultRoute || typeLabel.equals("Default", ignoreCase = true) -> stringResource(R.string.audio_output_latency_auto)
+    else -> stringResource(R.string.audio_output_latency_internal)
   }
   val statusDotColor = if (isSelected) {
     SoundPadTheme.colors.ramEmerald
@@ -612,9 +632,10 @@ private fun OutputDeviceOptionRow(
   Surface(
     modifier = Modifier
       .fillMaxWidth()
-      .clip(RoundedCornerShape(10.dp))
+      .defaultMinSize(minHeight = spacing.minTouchTarget)
+      .clip(MaterialTheme.shapes.small)
       .clickable(onClick = onClick),
-    shape = RoundedCornerShape(10.dp),
+    shape = MaterialTheme.shapes.small,
     color = if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainer,
     border = BorderStroke(
       width = if (isSelected) 1.5.dp else 1.dp,
@@ -624,13 +645,13 @@ private fun OutputDeviceOptionRow(
     Row(
       modifier = Modifier
         .fillMaxWidth()
-        .padding(horizontal = 12.dp, vertical = 10.dp),
+        .padding(horizontal = spacing.md, vertical = spacing.sm + spacing.xxs),
       verticalAlignment = Alignment.CenterVertically,
-      horizontalArrangement = Arrangement.spacedBy(10.dp)
+      horizontalArrangement = Arrangement.spacedBy(spacing.sm + spacing.xxs)
     ) {
       Box(
         modifier = Modifier
-          .size(8.dp)
+          .size(spacing.sm)
           .clip(CircleShape)
           .background(statusDotColor)
       )
@@ -657,7 +678,7 @@ private fun OutputDeviceOptionRow(
         )
       }
       Surface(
-        shape = RoundedCornerShape(6.dp),
+        shape = MaterialTheme.shapes.extraSmall,
         color = MaterialTheme.colorScheme.surface,
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
       ) {
@@ -665,13 +686,13 @@ private fun OutputDeviceOptionRow(
           text = latencyTag,
           style = MaterialTheme.typography.labelSmall,
           color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-          modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+          modifier = Modifier.padding(horizontal = spacing.xs + spacing.xxs, vertical = spacing.xxs)
         )
       }
       if (isSelected) {
         Icon(
           imageVector = Icons.Filled.CheckCircle,
-          contentDescription = "Selected output device",
+          contentDescription = stringResource(R.string.cd_selected_output_device),
           tint = SoundPadTheme.colors.ramEmerald,
           modifier = Modifier.size(20.dp)
         )

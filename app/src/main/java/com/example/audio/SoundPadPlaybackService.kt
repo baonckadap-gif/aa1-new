@@ -61,61 +61,76 @@ class SoundPadPlaybackService : Service() {
     @Volatile
     private var isForegroundPlaybackActive = false
 
+    private val stateLock = Any()
+
     fun updateForegroundState(context: Context, activeCount: Int, activeLabel: String?) {
       val normalizedLabel = activeLabel ?: ""
-      if (activeCount <= 0 && !lastRecordingActive) {
-        val wasActive = isForegroundPlaybackActive || lastActiveCount > 0
-        lastActiveCount = 0
-        lastActiveLabel = ""
-        isForegroundPlaybackActive = false
-        if (wasActive) {
-          val stopIntent = Intent(context, SoundPadPlaybackService::class.java).apply {
-            action = ACTION_STOP_SERVICE
+      synchronized(stateLock) {
+        if (activeCount <= 0 && !lastRecordingActive) {
+          val wasActive = isForegroundPlaybackActive || lastActiveCount > 0
+          lastActiveCount = 0
+          lastActiveLabel = ""
+          isForegroundPlaybackActive = false
+          if (wasActive) {
+            val stopIntent = Intent(context, SoundPadPlaybackService::class.java).apply {
+              action = ACTION_STOP_SERVICE
+            }
+            runCatching { context.startService(stopIntent) }
           }
-          runCatching { context.startService(stopIntent) }
+          return
         }
-        return
-      }
-      if (activeCount <= 0 && lastRecordingActive) {
-        lastActiveCount = 0
-        lastActiveLabel = ""
-        return
-      }
-      if (isForegroundPlaybackActive && lastActiveCount == activeCount && lastActiveLabel == normalizedLabel) {
-        return
-      }
-      lastActiveCount = activeCount
-      lastActiveLabel = normalizedLabel
-      isForegroundPlaybackActive = true
-      val intent = Intent(context, SoundPadPlaybackService::class.java).apply {
-        action = ACTION_START_OR_UPDATE
-        putExtra(EXTRA_ACTIVE_COUNT, activeCount)
-        putExtra(EXTRA_ACTIVE_LABEL, normalizedLabel)
-      }
-      runCatching {
-        context.startForegroundService(intent)
+        if (activeCount <= 0 && lastRecordingActive) {
+          lastActiveCount = 0
+          lastActiveLabel = ""
+          return
+        }
+        if (isForegroundPlaybackActive && lastActiveCount == activeCount && lastActiveLabel == normalizedLabel) {
+          return
+        }
+        val intent = Intent(context, SoundPadPlaybackService::class.java).apply {
+          action = ACTION_START_OR_UPDATE
+          putExtra(EXTRA_ACTIVE_COUNT, activeCount)
+          putExtra(EXTRA_ACTIVE_LABEL, normalizedLabel)
+        }
+        val started = runCatching {
+          context.startForegroundService(intent)
+        }.isSuccess
+        if (started) {
+          lastActiveCount = activeCount
+          lastActiveLabel = normalizedLabel
+          isForegroundPlaybackActive = true
+        } else {
+          lastActiveCount = 0
+          lastActiveLabel = ""
+          isForegroundPlaybackActive = false
+        }
       }
     }
 
     fun updateMasterRecordingNotification(context: Context, isRecording: Boolean, elapsedLabel: String?) {
-      lastRecordingActive = isRecording
-      if (!isRecording) {
-        val mgr = context.getSystemService(NotificationManager::class.java)
-        mgr?.cancel(RECORD_NOTIFICATION_ID)
-        if (lastActiveCount <= 0) {
-          val stopIntent = Intent(context, SoundPadPlaybackService::class.java).apply {
-            action = ACTION_STOP_SERVICE
+      synchronized(stateLock) {
+        if (!isRecording) {
+          val wasRecording = lastRecordingActive
+          lastRecordingActive = false
+          val mgr = context.getSystemService(NotificationManager::class.java)
+          mgr?.cancel(RECORD_NOTIFICATION_ID)
+          if (wasRecording && lastActiveCount <= 0) {
+            isForegroundPlaybackActive = false
+            val stopIntent = Intent(context, SoundPadPlaybackService::class.java).apply {
+              action = ACTION_STOP_SERVICE
+            }
+            runCatching { context.startService(stopIntent) }
           }
-          runCatching { context.startService(stopIntent) }
+          return
         }
-        return
+        val intent = Intent(context, SoundPadPlaybackService::class.java).apply {
+          action = ACTION_UPDATE_MASTER_RECORDING
+          putExtra(EXTRA_IS_RECORDING, true)
+          putExtra(EXTRA_RECORD_ELAPSED, elapsedLabel ?: "00:00")
+        }
+        val started = runCatching { context.startForegroundService(intent) }.isSuccess
+        lastRecordingActive = started
       }
-      val intent = Intent(context, SoundPadPlaybackService::class.java).apply {
-        action = ACTION_UPDATE_MASTER_RECORDING
-        putExtra(EXTRA_IS_RECORDING, true)
-        putExtra(EXTRA_RECORD_ELAPSED, elapsedLabel ?: "00:00")
-      }
-      runCatching { context.startForegroundService(intent) }
     }
 
     fun startScheduledExecution(context: Context, taskId: String) {
@@ -142,101 +157,119 @@ class SoundPadPlaybackService : Service() {
     }
   }
 
+  @Volatile
+  private var foregroundPostedInInstance = false
+
   override fun onCreate() {
     super.onCreate()
     createNotificationChannels()
   }
 
+  override fun onDestroy() {
+    foregroundPostedInInstance = false
+    super.onDestroy()
+  }
+
+  private fun postForegroundSafely(notificationId: Int, notification: Notification) {
+    val result = runCatching {
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        startForeground(
+          notificationId,
+          notification,
+          ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
+        )
+      } else {
+        startForeground(notificationId, notification)
+      }
+    }
+    if (result.isSuccess) {
+      foregroundPostedInInstance = true
+    }
+  }
+
+  private fun ensureForegroundPostedIfNeeded() {
+    if (!foregroundPostedInInstance) {
+      postForegroundSafely(
+        NOTIFICATION_ID,
+        buildNotification(
+          activeCount = lastActiveCount.coerceAtLeast(1),
+          activeLabel = lastActiveLabel
+        )
+      )
+    }
+  }
+
   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
     when (intent?.action) {
       ACTION_STOP_ALL -> {
+        ensureForegroundPostedIfNeeded()
         onStopAllRequested?.invoke()
         if (!lastRecordingActive) {
           isForegroundPlaybackActive = false
-          stopForeground(STOP_FOREGROUND_REMOVE)
-          stopSelf()
+          foregroundPostedInInstance = false
+          runCatching { stopForeground(STOP_FOREGROUND_REMOVE) }
+          stopSelfResult(startId)
         }
       }
       ACTION_STOP_MASTER_RECORDING -> {
+        ensureForegroundPostedIfNeeded()
         onStopMasterRecordingRequested?.invoke()
         lastRecordingActive = false
         getSystemService(NotificationManager::class.java)?.cancel(RECORD_NOTIFICATION_ID)
         if (lastActiveCount <= 0) {
           isForegroundPlaybackActive = false
-          stopForeground(STOP_FOREGROUND_REMOVE)
-          stopSelf()
+          foregroundPostedInInstance = false
+          runCatching { stopForeground(STOP_FOREGROUND_REMOVE) }
+          stopSelfResult(startId)
         }
       }
       ACTION_STOP_SERVICE -> {
-        if (!lastRecordingActive) {
+        ensureForegroundPostedIfNeeded()
+        if (!lastRecordingActive && lastActiveCount <= 0) {
           isForegroundPlaybackActive = false
-          stopForeground(STOP_FOREGROUND_REMOVE)
-          stopSelf()
+          foregroundPostedInInstance = false
+          runCatching { stopForeground(STOP_FOREGROUND_REMOVE) }
+          stopSelfResult(startId)
         }
       }
       ACTION_UPDATE_MASTER_RECORDING -> {
         val elapsed = intent.getStringExtra(EXTRA_RECORD_ELAPSED) ?: "00:00"
         val recNotification = buildRecordingNotification(elapsed)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-          startForeground(
-            RECORD_NOTIFICATION_ID,
-            recNotification,
-            ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
-          )
-        } else {
-          startForeground(RECORD_NOTIFICATION_ID, recNotification)
-        }
+        postForegroundSafely(RECORD_NOTIFICATION_ID, recNotification)
       }
       ACTION_TRIGGER_SCHEDULED_TASK -> {
-        val notification = buildNotification(activeCount = lastActiveCount.coerceAtLeast(1), activeLabel = "Jadwal Terpicu")
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-          startForeground(
-            NOTIFICATION_ID,
-            notification,
-            ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
-          )
-        } else {
-          startForeground(NOTIFICATION_ID, notification)
-        }
+        val notification = buildNotification(
+          activeCount = lastActiveCount.coerceAtLeast(1),
+          activeLabel = getString(R.string.notification_playback_title)
+        )
+        postForegroundSafely(NOTIFICATION_ID, notification)
         val taskId = intent.getStringExtra(EXTRA_SCHEDULE_TASK_ID)
         if (!taskId.isNullOrBlank()) {
           onScheduledTaskRequested?.invoke(taskId)
         }
       }
       ACTION_STOP_SCHEDULED_TASK -> {
-        val notification = buildNotification(activeCount = lastActiveCount.coerceAtLeast(1), activeLabel = lastActiveLabel)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-          startForeground(
-            NOTIFICATION_ID,
-            notification,
-            ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
-          )
-        } else {
-          startForeground(NOTIFICATION_ID, notification)
-        }
+        val notification = buildNotification(
+          activeCount = lastActiveCount.coerceAtLeast(1),
+          activeLabel = lastActiveLabel
+        )
+        postForegroundSafely(NOTIFICATION_ID, notification)
         val taskId = intent.getStringExtra(EXTRA_SCHEDULE_TASK_ID).orEmpty()
         val targetType = intent.getStringExtra(EXTRA_SCHEDULE_TARGET_TYPE).orEmpty()
         val targetId = intent.getStringExtra(EXTRA_SCHEDULE_TARGET_ID).orEmpty()
         onStopScheduledTaskRequested?.invoke(taskId, targetType, targetId)
         if (!lastRecordingActive && lastActiveCount <= 0) {
           isForegroundPlaybackActive = false
-          stopForeground(STOP_FOREGROUND_REMOVE)
-          stopSelf()
+          foregroundPostedInInstance = false
+          runCatching { stopForeground(STOP_FOREGROUND_REMOVE) }
+          stopSelfResult(startId)
         }
       }
       ACTION_START_OR_UPDATE, null -> {
         val activeCount = intent?.getIntExtra(EXTRA_ACTIVE_COUNT, 1) ?: 1
         val activeLabel = intent?.getStringExtra(EXTRA_ACTIVE_LABEL).orEmpty()
         val notification = buildNotification(activeCount, activeLabel)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-          startForeground(
-            NOTIFICATION_ID,
-            notification,
-            ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
-          )
-        } else {
-          startForeground(NOTIFICATION_ID, notification)
-        }
+        postForegroundSafely(NOTIFICATION_ID, notification)
       }
     }
     return START_NOT_STICKY

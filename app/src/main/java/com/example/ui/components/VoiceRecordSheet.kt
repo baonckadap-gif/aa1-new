@@ -14,7 +14,6 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.FiberManualRecord
@@ -30,6 +29,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -44,10 +44,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.example.R
+import com.example.ui.theme.SoundPadTheme
 import kotlinx.coroutines.delay
 import java.util.Locale
 
@@ -63,6 +65,7 @@ fun VoiceRecordSheet(
   onDismiss: () -> Unit
 ) {
   val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+  val spacing = SoundPadTheme.spacing
   var countdownSec by remember { mutableIntStateOf(3) }
   var activeCountdown by remember { mutableStateOf<Int?>(null) }
 
@@ -103,23 +106,23 @@ fun VoiceRecordSheet(
       modifier = Modifier
         .fillMaxWidth()
         .navigationBarsPadding()
-        .padding(horizontal = 20.dp, vertical = 12.dp),
+        .padding(horizontal = spacing.lg + spacing.xs, vertical = spacing.md),
       horizontalAlignment = Alignment.CenterHorizontally,
-      verticalArrangement = Arrangement.spacedBy(16.dp)
+      verticalArrangement = Arrangement.spacedBy(spacing.lg)
     ) {
       Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
       ) {
-        Column {
+        Column(modifier = Modifier.weight(1f)) {
           Text(
-            text = "Voice Track Recorder",
+            text = stringResource(R.string.voice_rec_title),
             style = MaterialTheme.typography.headlineSmall,
             color = MaterialTheme.colorScheme.onSurface
           )
           Text(
-            text = "Saves WAV automatically as a new pad",
+            text = stringResource(R.string.voice_rec_subtitle),
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
           )
@@ -130,24 +133,34 @@ fun VoiceRecordSheet(
             if (isRecording) onCancelRecording()
             onDismiss()
           },
-          modifier = Modifier.size(48.dp)
+          modifier = Modifier.minimumInteractiveComponentSize()
         ) {
-          Icon(Icons.Filled.Close, contentDescription = "Close recorder")
+          Icon(
+            Icons.Filled.Close,
+            contentDescription = stringResource(R.string.cd_close_voice_recorder)
+          )
         }
       }
 
       // Countdown selector (when idle)
       if (!isRecording && activeCountdown == null) {
+        val delayOptions = listOf(
+          0 to stringResource(R.string.voice_rec_delay_instant),
+          3 to stringResource(R.string.voice_rec_delay_3s),
+          5 to stringResource(R.string.voice_rec_delay_5s)
+        )
         Row(
           modifier = Modifier.fillMaxWidth(),
-          horizontalArrangement = Arrangement.spacedBy(8.dp)
+          horizontalArrangement = Arrangement.spacedBy(spacing.sm)
         ) {
-          listOf(0 to "Instant", 3 to "3s Delay", 5 to "5s Delay").forEach { (sec, label) ->
+          delayOptions.forEach { (sec, label) ->
             FilterChip(
               selected = countdownSec == sec,
               onClick = { countdownSec = sec },
               label = { Text(label, style = MaterialTheme.typography.labelSmall) },
-              modifier = Modifier.weight(1f)
+              modifier = Modifier
+                .weight(1f)
+                .minimumInteractiveComponentSize()
             )
           }
         }
@@ -156,7 +169,7 @@ fun VoiceRecordSheet(
       // Live VU Level Meter + Timer Display
       Surface(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(14.dp),
+        shape = MaterialTheme.shapes.medium,
         color = MaterialTheme.colorScheme.surfaceContainer,
         border = BorderStroke(
           1.dp,
@@ -164,14 +177,14 @@ fun VoiceRecordSheet(
         )
       ) {
         Column(
-          modifier = Modifier.padding(16.dp),
+          modifier = Modifier.padding(spacing.lg),
           horizontalAlignment = Alignment.CenterHorizontally,
-          verticalArrangement = Arrangement.spacedBy(12.dp)
+          verticalArrangement = Arrangement.spacedBy(spacing.md)
         ) {
           val statusTitle = when {
-            activeCountdown != null -> "STARTING IN ${activeCountdown}"
+            activeCountdown != null -> stringResource(R.string.voice_rec_starting_in, activeCountdown ?: 0)
             isRecording -> formatRecTime(elapsedMs)
-            else -> "00:00.0"
+            else -> stringResource(R.string.voice_rec_idle_timer)
           }
           Text(
             text = statusTitle,
@@ -194,7 +207,7 @@ fun VoiceRecordSheet(
               .height(26.dp)
           ) {
             val segments = 24
-            val gap = 4.dp.toPx()
+            val gap = spacing.xs.toPx()
             val segW = (size.width - gap * (segments - 1)) / segments.toFloat()
             val litCount = (animatedLevel * segments).toInt().coerceIn(0, segments)
             for (i in 0 until segments) {
@@ -216,6 +229,7 @@ fun VoiceRecordSheet(
       }
 
       // Primary Record / Stop Button (icon-only)
+      val isAlertActive = isRecording || activeCountdown != null
       Box(contentAlignment = Alignment.Center) {
         FilledIconButton(
           onClick = {
@@ -231,12 +245,16 @@ fun VoiceRecordSheet(
             .testTag("record_action_button"),
           shape = CircleShape,
           colors = IconButtonDefaults.filledIconButtonColors(
-            containerColor = if (isRecording || activeCountdown != null) {
+            containerColor = if (isAlertActive) {
               MaterialTheme.colorScheme.error
             } else {
               MaterialTheme.colorScheme.primary
             },
-            contentColor = Color.White
+            contentColor = if (isAlertActive) {
+              MaterialTheme.colorScheme.onError
+            } else {
+              MaterialTheme.colorScheme.onPrimary
+            }
           )
         ) {
           Icon(
@@ -245,7 +263,13 @@ fun VoiceRecordSheet(
               activeCountdown != null -> Icons.Filled.Close
               else -> Icons.Filled.Mic
             },
-            contentDescription = if (isRecording) "Stop and save voice pad" else "Start voice recording",
+            contentDescription = stringResource(
+              when {
+                isRecording -> R.string.cd_stop_save_voice_pad
+                activeCountdown != null -> R.string.cd_close_voice_recorder
+                else -> R.string.cd_start_voice_recording
+              }
+            ),
             modifier = Modifier.size(34.dp)
           )
         }
@@ -254,7 +278,7 @@ fun VoiceRecordSheet(
       if (isRecording) {
         Row(
           verticalAlignment = Alignment.CenterVertically,
-          horizontalArrangement = Arrangement.spacedBy(6.dp)
+          horizontalArrangement = Arrangement.spacedBy(spacing.xs + spacing.xxs)
         ) {
           Icon(
             imageVector = Icons.Filled.FiberManualRecord,
@@ -263,14 +287,14 @@ fun VoiceRecordSheet(
             modifier = Modifier.size(12.dp)
           )
           Text(
-            text = "Recording mic input...",
+            text = stringResource(R.string.voice_rec_recording_mic),
             style = MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.error
           )
         }
       }
 
-      Spacer(modifier = Modifier.height(6.dp))
+      Spacer(modifier = Modifier.height(spacing.xs + spacing.xxs))
     }
   }
 }

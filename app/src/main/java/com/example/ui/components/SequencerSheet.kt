@@ -18,7 +18,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.filled.Add
@@ -49,6 +48,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -72,8 +72,8 @@ import com.example.domain.model.SequencerPlaybackState
 import com.example.domain.model.SequencerPlaylist
 import com.example.domain.model.SoundPad
 import com.example.midi.MidiMessageParser
+import com.example.ui.theme.SoundPadTheme
 import java.util.UUID
-import kotlin.math.roundToInt
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -93,6 +93,7 @@ fun SequencerSheet(
   onDismiss: () -> Unit
 ) {
   val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+  val spacing = SoundPadTheme.spacing
   var selectedId by remember(playlists) {
     mutableStateOf(playbackState.activePlaylistId ?: playlists.firstOrNull()?.id)
   }
@@ -114,8 +115,8 @@ fun SequencerSheet(
   ) {
     LazyColumn(
       modifier = Modifier.fillMaxWidth(),
-      contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-      verticalArrangement = Arrangement.spacedBy(10.dp)
+      contentPadding = PaddingValues(horizontal = spacing.lg, vertical = spacing.sm),
+      verticalArrangement = Arrangement.spacedBy(spacing.sm + spacing.xxs)
     ) {
       item {
         Row(
@@ -125,13 +126,13 @@ fun SequencerSheet(
         ) {
           Row(
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            horizontalArrangement = Arrangement.spacedBy(spacing.sm + spacing.xxs),
             modifier = Modifier.weight(1f)
           ) {
             Box(
               modifier = Modifier
                 .size(40.dp)
-                .clip(RoundedCornerShape(10.dp))
+                .clip(MaterialTheme.shapes.small)
                 .background(MaterialTheme.colorScheme.tertiaryContainer),
               contentAlignment = Alignment.Center
             ) {
@@ -140,13 +141,18 @@ fun SequencerSheet(
             Column {
               Text(stringResource(R.string.sequencer_title), style = MaterialTheme.typography.titleMedium)
               Text(
-                text = "Urutan Pad · Jeda · Crossfade · Trigger Pad/MIDI",
+                text = stringResource(R.string.sequencer_subtitle),
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
               )
             }
           }
-          IconButton(onClick = onDismiss, modifier = Modifier.testTag("close_sequencer_sheet")) {
+          IconButton(
+            onClick = onDismiss,
+            modifier = Modifier
+              .minimumInteractiveComponentSize()
+              .testTag("close_sequencer_sheet")
+          ) {
             Icon(Icons.Filled.Close, contentDescription = stringResource(R.string.action_close))
           }
         }
@@ -156,7 +162,7 @@ fun SequencerSheet(
       if (playbackState.isPlaying || activeDraft != null) {
         item {
           Surface(
-            shape = RoundedCornerShape(14.dp),
+            shape = MaterialTheme.shapes.medium,
             color = MaterialTheme.colorScheme.surfaceContainerHigh,
             border = BorderStroke(
               1.dp,
@@ -166,23 +172,28 @@ fun SequencerSheet(
             Column(
               modifier = Modifier
                 .fillMaxWidth()
-                .padding(12.dp),
-              verticalArrangement = Arrangement.spacedBy(8.dp)
+                .padding(spacing.md),
+              verticalArrangement = Arrangement.spacedBy(spacing.sm)
             ) {
               Text(
                 text = if (playbackState.isPlaying) {
-                  "Sedang Berjalan: ${playbackState.activePlaylistName} (#${playbackState.currentIndex + 1}/${playbackState.queueSize})"
+                  stringResource(
+                    R.string.sequencer_running_header,
+                    playbackState.activePlaylistName.orEmpty(),
+                    playbackState.currentIndex + 1,
+                    playbackState.queueSize
+                  )
                 } else {
-                  "Siap Diputar: ${activeDraft?.name ?: "-"}"
+                  stringResource(R.string.sequencer_ready_header, activeDraft?.name ?: "-")
                 },
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.tertiary
               )
               Text(
                 text = when {
-                  playbackState.isInGap -> "Jeda antar pad: %.1f dtk...".format(playbackState.remainingGapSec)
+                  playbackState.isInGap -> stringResource(R.string.sequencer_gap_countdown, playbackState.remainingGapSec)
                   playbackState.currentPadName != null -> playbackState.currentPadName
-                  else -> "Pilih Play untuk memulai urutan pad"
+                  else -> stringResource(R.string.sequencer_idle_prompt)
                 },
                 style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
                 maxLines = 1,
@@ -190,29 +201,55 @@ fun SequencerSheet(
               )
               Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                horizontalArrangement = Arrangement.spacedBy(spacing.sm),
                 verticalAlignment = Alignment.CenterVertically
               ) {
-                IconButton(onClick = onPrev, enabled = playbackState.isPlaying) {
-                  Icon(Icons.Filled.SkipPrevious, contentDescription = "Prev")
+                IconButton(
+                  onClick = onPrev,
+                  enabled = playbackState.isPlaying,
+                  modifier = Modifier.minimumInteractiveComponentSize()
+                ) {
+                  Icon(Icons.Filled.SkipPrevious, contentDescription = stringResource(R.string.cd_sequencer_prev))
                 }
                 Button(
                   onClick = { onTogglePlayPause(activeDraft) },
                   enabled = activeDraft != null && activeDraft.padIds.isNotEmpty(),
-                  modifier = Modifier.weight(1f)
+                  modifier = Modifier
+                    .weight(1f)
+                    .height(spacing.minTouchTarget)
                 ) {
                   Icon(
                     if (playbackState.isPlaying && !playbackState.isPaused) Icons.Filled.Pause else Icons.Filled.PlayArrow,
                     contentDescription = null
                   )
-                  Spacer(modifier = Modifier.width(4.dp))
-                  Text(if (playbackState.isPlaying && !playbackState.isPaused) "Pause" else "Play")
+                  Spacer(modifier = Modifier.width(spacing.xs))
+                  Text(
+                    stringResource(
+                      if (playbackState.isPlaying && !playbackState.isPaused) {
+                        R.string.sequencer_action_pause
+                      } else {
+                        R.string.sequencer_action_play
+                      }
+                    )
+                  )
                 }
-                IconButton(onClick = onNext, enabled = playbackState.isPlaying) {
-                  Icon(Icons.Filled.SkipNext, contentDescription = "Next")
+                IconButton(
+                  onClick = onNext,
+                  enabled = playbackState.isPlaying,
+                  modifier = Modifier.minimumInteractiveComponentSize()
+                ) {
+                  Icon(Icons.Filled.SkipNext, contentDescription = stringResource(R.string.cd_sequencer_next))
                 }
-                IconButton(onClick = onStop, enabled = playbackState.isPlaying) {
-                  Icon(Icons.Filled.Stop, contentDescription = "Stop", tint = MaterialTheme.colorScheme.error)
+                IconButton(
+                  onClick = onStop,
+                  enabled = playbackState.isPlaying,
+                  modifier = Modifier.minimumInteractiveComponentSize()
+                ) {
+                  Icon(
+                    Icons.Filled.Stop,
+                    contentDescription = stringResource(R.string.cd_sequencer_stop),
+                    tint = MaterialTheme.colorScheme.error
+                  )
                 }
               }
             }
@@ -226,7 +263,7 @@ fun SequencerSheet(
           modifier = Modifier
             .fillMaxWidth()
             .horizontalScroll(rememberScrollState()),
-          horizontalArrangement = Arrangement.spacedBy(8.dp),
+          horizontalArrangement = Arrangement.spacedBy(spacing.sm),
           verticalAlignment = Alignment.CenterVertically
         ) {
           playlists.forEach { pl ->
@@ -238,7 +275,7 @@ fun SequencerSheet(
           }
           FilledTonalButton(onClick = { showCreateDialog = true }) {
             Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(16.dp))
-            Spacer(modifier = Modifier.width(4.dp))
+            Spacer(modifier = Modifier.width(spacing.xs))
             Text(stringResource(R.string.sequencer_new_playlist))
           }
         }
@@ -246,14 +283,14 @@ fun SequencerSheet(
 
       if (activeDraft == null) {
         item {
-          Surface(shape = RoundedCornerShape(12.dp), color = MaterialTheme.colorScheme.surfaceContainer) {
+          Surface(shape = MaterialTheme.shapes.medium, color = MaterialTheme.colorScheme.surfaceContainer) {
             Text(
               text = stringResource(R.string.sequencer_empty),
               style = MaterialTheme.typography.bodySmall,
               color = MaterialTheme.colorScheme.onSurfaceVariant,
               modifier = Modifier
                 .fillMaxWidth()
-                .padding(16.dp)
+                .padding(spacing.lg)
             )
           }
         }
@@ -261,31 +298,31 @@ fun SequencerSheet(
         // Playlist Modes, Gap & Crossfade
         item {
           Surface(
-            shape = RoundedCornerShape(12.dp),
+            shape = MaterialTheme.shapes.medium,
             color = MaterialTheme.colorScheme.surfaceContainer,
             border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
           ) {
             Column(
               modifier = Modifier
                 .fillMaxWidth()
-                .padding(12.dp),
-              verticalArrangement = Arrangement.spacedBy(8.dp)
+                .padding(spacing.md),
+              verticalArrangement = Arrangement.spacedBy(spacing.sm)
             ) {
               Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
               ) {
-                Text("Mode Pemutaran", style = MaterialTheme.typography.labelMedium)
+                Text(stringResource(R.string.sequencer_play_mode_label), style = MaterialTheme.typography.labelMedium)
                 TextButton(onClick = { onDeletePlaylist(activeDraft.id) }) {
                   Icon(Icons.Filled.Delete, contentDescription = null, tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(16.dp))
-                  Spacer(modifier = Modifier.width(4.dp))
-                  Text("Hapus Playlist", color = MaterialTheme.colorScheme.error)
+                  Spacer(modifier = Modifier.width(spacing.xs))
+                  Text(stringResource(R.string.sequencer_delete_playlist), color = MaterialTheme.colorScheme.error)
                 }
               }
               Row(
                 modifier = Modifier.horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                horizontalArrangement = Arrangement.spacedBy(spacing.xs + spacing.xxs)
               ) {
                 SequencerPlayMode.entries.forEach { m ->
                   FilterChip(
@@ -297,7 +334,7 @@ fun SequencerSheet(
               }
 
               Text(
-                text = "Jeda Antar Pad: %.1f detik".format(activeDraft.gapSeconds),
+                text = stringResource(R.string.sequencer_gap_label, activeDraft.gapSeconds),
                 style = MaterialTheme.typography.labelSmall
               )
               Slider(
@@ -311,7 +348,10 @@ fun SequencerSheet(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
               ) {
-                Text("Crossfade Antar Item (${activeDraft.crossfadeDurationMs}ms)", style = MaterialTheme.typography.bodySmall)
+                Text(
+                  text = stringResource(R.string.sequencer_crossfade_label, activeDraft.crossfadeDurationMs),
+                  style = MaterialTheme.typography.bodySmall
+                )
                 Switch(
                   checked = activeDraft.crossfadeEnabled,
                   onCheckedChange = { onSavePlaylist(activeDraft.copy(crossfadeEnabled = it)) }
@@ -320,14 +360,21 @@ fun SequencerSheet(
 
               Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                horizontalArrangement = Arrangement.spacedBy(spacing.sm)
               ) {
                 OutlinedButton(
                   onClick = { showTriggerPadDialog = true },
-                  modifier = Modifier.weight(1f)
+                  modifier = Modifier
+                    .weight(1f)
+                    .height(spacing.minTouchTarget)
                 ) {
                   val tName = pads.firstOrNull { it.id == activeDraft.triggerPadId }?.displayName
-                  Text(tName?.let { "Pad Pemicu: $it" } ?: "Pilih Pad Pemicu", maxLines = 1, overflow = TextOverflow.Ellipsis)
+                  Text(
+                    text = tName?.let { stringResource(R.string.sequencer_trigger_pad_selected, it) }
+                      ?: stringResource(R.string.sequencer_trigger_pad_pick),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                  )
                 }
                 OutlinedButton(
                   onClick = {
@@ -337,14 +384,16 @@ fun SequencerSheet(
                       onArmMidiLearn(activeDraft)
                     }
                   },
-                  modifier = Modifier.weight(1f)
+                  modifier = Modifier
+                    .weight(1f)
+                    .height(spacing.minTouchTarget)
                 ) {
                   Icon(Icons.Filled.Piano, contentDescription = null, modifier = Modifier.size(16.dp))
-                  Spacer(modifier = Modifier.width(4.dp))
+                  Spacer(modifier = Modifier.width(spacing.xs))
                   Text(
                     activeDraft.triggerMidiNote?.let {
                       "MIDI ${MidiMessageParser.formatNoteName(it)} ×"
-                    } ?: "MIDI Trigger",
+                    } ?: stringResource(R.string.sequencer_midi_trigger_label),
                     maxLines = 1
                   )
                 }
@@ -361,13 +410,13 @@ fun SequencerSheet(
             verticalAlignment = Alignment.CenterVertically
           ) {
             Text(
-              text = "Urutan Pad (${activeDraft.padIds.size}) · Drag tahan / Panah",
+              text = stringResource(R.string.sequencer_queue_header, activeDraft.padIds.size),
               style = MaterialTheme.typography.labelMedium
             )
             FilledTonalButton(onClick = { showAddPadDialog = true }, enabled = pads.isNotEmpty()) {
               Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(16.dp))
-              Spacer(modifier = Modifier.width(4.dp))
-              Text("Tambah Pad")
+              Spacer(modifier = Modifier.width(spacing.xs))
+              Text(stringResource(R.string.sequencer_add_pad))
             }
           }
         }
@@ -402,22 +451,27 @@ fun SequencerSheet(
                 }
               )
             },
-            shape = RoundedCornerShape(10.dp),
+            shape = MaterialTheme.shapes.small,
             color = if (isCurrent) MaterialTheme.colorScheme.tertiaryContainer else MaterialTheme.colorScheme.surfaceContainer,
             border = BorderStroke(1.dp, if (isCurrent) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.outlineVariant)
           ) {
             Row(
               modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 10.dp, vertical = 6.dp),
+                .padding(horizontal = spacing.sm + spacing.xxs, vertical = spacing.xs),
               verticalAlignment = Alignment.CenterVertically,
-              horizontalArrangement = Arrangement.spacedBy(6.dp)
+              horizontalArrangement = Arrangement.spacedBy(spacing.xs)
             ) {
-              Icon(Icons.Filled.DragHandle, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(18.dp))
+              Icon(
+                Icons.Filled.DragHandle,
+                contentDescription = stringResource(R.string.cd_sequencer_drag_handle),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(18.dp)
+              )
               Text("${index + 1}.", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
               Column(modifier = Modifier.weight(1f)) {
                 Text(
-                  text = pad?.displayName ?: "Pad Hilang",
+                  text = pad?.displayName ?: stringResource(R.string.sequencer_missing_pad),
                   style = MaterialTheme.typography.bodyMedium,
                   maxLines = 1,
                   overflow = TextOverflow.Ellipsis
@@ -426,9 +480,15 @@ fun SequencerSheet(
               IconButton(
                 onClick = { onPlayPlaylist(activeDraft, index) },
                 enabled = pad != null,
-                modifier = Modifier.size(36.dp)
+                modifier = Modifier
+                  .minimumInteractiveComponentSize()
+                  .testTag("sequencer_play_item_$index")
               ) {
-                Icon(Icons.Filled.PlayArrow, contentDescription = "Play from here", modifier = Modifier.size(18.dp))
+                Icon(
+                  Icons.Filled.PlayArrow,
+                  contentDescription = stringResource(R.string.cd_sequencer_play_here),
+                  modifier = Modifier.size(18.dp)
+                )
               }
               IconButton(
                 enabled = index > 0,
@@ -438,9 +498,15 @@ fun SequencerSheet(
                   mutable.add(index - 1, moved)
                   onSavePlaylist(activeDraft.copy(padIds = mutable))
                 },
-                modifier = Modifier.size(32.dp)
+                modifier = Modifier
+                  .minimumInteractiveComponentSize()
+                  .testTag("sequencer_move_up_$index")
               ) {
-                Icon(Icons.Filled.ArrowUpward, contentDescription = "Move Up", modifier = Modifier.size(16.dp))
+                Icon(
+                  Icons.Filled.ArrowUpward,
+                  contentDescription = stringResource(R.string.cd_sequencer_move_up),
+                  modifier = Modifier.size(16.dp)
+                )
               }
               IconButton(
                 enabled = index < activeDraft.padIds.lastIndex,
@@ -450,9 +516,15 @@ fun SequencerSheet(
                   mutable.add(index + 1, moved)
                   onSavePlaylist(activeDraft.copy(padIds = mutable))
                 },
-                modifier = Modifier.size(32.dp)
+                modifier = Modifier
+                  .minimumInteractiveComponentSize()
+                  .testTag("sequencer_move_down_$index")
               ) {
-                Icon(Icons.Filled.ArrowDownward, contentDescription = "Move Down", modifier = Modifier.size(16.dp))
+                Icon(
+                  Icons.Filled.ArrowDownward,
+                  contentDescription = stringResource(R.string.cd_sequencer_move_down),
+                  modifier = Modifier.size(16.dp)
+                )
               }
               IconButton(
                 onClick = {
@@ -460,29 +532,38 @@ fun SequencerSheet(
                   mutable.removeAt(index)
                   onSavePlaylist(activeDraft.copy(padIds = mutable))
                 },
-                modifier = Modifier.size(32.dp)
+                modifier = Modifier
+                  .minimumInteractiveComponentSize()
+                  .testTag("sequencer_remove_item_$index")
               ) {
-                Icon(Icons.Filled.Delete, contentDescription = "Remove item", tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(16.dp))
+                Icon(
+                  Icons.Filled.Delete,
+                  contentDescription = stringResource(R.string.cd_sequencer_remove),
+                  tint = MaterialTheme.colorScheme.error,
+                  modifier = Modifier.size(16.dp)
+                )
               }
             }
           }
         }
       }
 
-      item { Spacer(modifier = Modifier.height(20.dp)) }
+      item { Spacer(modifier = Modifier.height(spacing.lg + spacing.xs)) }
     }
   }
 
   if (showCreateDialog) {
-    var name by remember { mutableStateOf("Setlist ${playlists.size + 1}") }
+    val defaultSetlistName = stringResource(R.string.sequencer_default_setlist_name, playlists.size + 1)
+    val fallbackSetlistName = stringResource(R.string.sequencer_fallback_setlist_name)
+    var name by remember(defaultSetlistName) { mutableStateOf(defaultSetlistName) }
     AlertDialog(
       onDismissRequest = { showCreateDialog = false },
-      title = { Text("Buat Playlist Sequencer") },
+      title = { Text(stringResource(R.string.sequencer_create_dialog_title)) },
       text = {
         OutlinedTextField(
           value = name,
           onValueChange = { name = it },
-          label = { Text("Nama Playlist") },
+          label = { Text(stringResource(R.string.sequencer_playlist_name_label)) },
           singleLine = true,
           modifier = Modifier.fillMaxWidth()
         )
@@ -492,16 +573,16 @@ fun SequencerSheet(
           onClick = {
             val newPl = SequencerPlaylist(
               id = "seq_${UUID.randomUUID()}",
-              name = name.ifBlank { "Setlist Baru" }
+              name = name.ifBlank { fallbackSetlistName }
             )
             onSavePlaylist(newPl)
             selectedId = newPl.id
             showCreateDialog = false
           }
-        ) { Text("Buat") }
+        ) { Text(stringResource(R.string.action_create)) }
       },
       dismissButton = {
-        TextButton(onClick = { showCreateDialog = false }) { Text("Batal") }
+        TextButton(onClick = { showCreateDialog = false }) { Text(stringResource(R.string.action_cancel)) }
       }
     )
   }
@@ -509,22 +590,22 @@ fun SequencerSheet(
   if (showAddPadDialog && activeDraft != null) {
     AlertDialog(
       onDismissRequest = { showAddPadDialog = false },
-      title = { Text("Tambahkan Pad ke Playlist") },
+      title = { Text(stringResource(R.string.sequencer_add_pad_dialog_title)) },
       text = {
-        LazyColumn(modifier = Modifier.height(260.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        LazyColumn(modifier = Modifier.height(260.dp), verticalArrangement = Arrangement.spacedBy(spacing.xs + spacing.xxs)) {
           itemsIndexed(pads) { _, pad ->
             Surface(
               onClick = {
                 onSavePlaylist(activeDraft.copy(padIds = activeDraft.padIds + pad.id))
                 showAddPadDialog = false
               },
-              shape = RoundedCornerShape(8.dp),
+              shape = MaterialTheme.shapes.small,
               color = MaterialTheme.colorScheme.surfaceContainer
             ) {
               Row(
                 modifier = Modifier
                   .fillMaxWidth()
-                  .padding(horizontal = 12.dp, vertical = 10.dp),
+                  .padding(horizontal = spacing.md, vertical = spacing.sm + spacing.xxs),
                 horizontalArrangement = Arrangement.SpaceBetween
               ) {
                 Text(pad.displayName, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
@@ -536,7 +617,7 @@ fun SequencerSheet(
       },
       confirmButton = {},
       dismissButton = {
-        TextButton(onClick = { showAddPadDialog = false }) { Text("Tutup") }
+        TextButton(onClick = { showAddPadDialog = false }) { Text(stringResource(R.string.action_close)) }
       }
     )
   }
@@ -544,19 +625,24 @@ fun SequencerSheet(
   if (showTriggerPadDialog && activeDraft != null) {
     AlertDialog(
       onDismissRequest = { showTriggerPadDialog = false },
-      title = { Text("Pilih Pad Khusus Pemicu") },
+      title = { Text(stringResource(R.string.sequencer_trigger_pad_dialog_title)) },
       text = {
-        LazyColumn(modifier = Modifier.height(260.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        LazyColumn(modifier = Modifier.height(260.dp), verticalArrangement = Arrangement.spacedBy(spacing.xs + spacing.xxs)) {
           item {
             Surface(
               onClick = {
                 onSavePlaylist(activeDraft.copy(triggerPadId = null))
                 showTriggerPadDialog = false
               },
-              shape = RoundedCornerShape(8.dp),
+              shape = MaterialTheme.shapes.small,
               color = MaterialTheme.colorScheme.surfaceContainerHigh
             ) {
-              Text("Tidak ada (Matikan Pad Pemicu)", modifier = Modifier.fillMaxWidth().padding(12.dp))
+              Text(
+                text = stringResource(R.string.sequencer_trigger_pad_none),
+                modifier = Modifier
+                  .fillMaxWidth()
+                  .padding(spacing.md)
+              )
             }
           }
           itemsIndexed(pads) { _, pad ->
@@ -565,17 +651,24 @@ fun SequencerSheet(
                 onSavePlaylist(activeDraft.copy(triggerPadId = pad.id))
                 showTriggerPadDialog = false
               },
-              shape = RoundedCornerShape(8.dp),
+              shape = MaterialTheme.shapes.small,
               color = if (activeDraft.triggerPadId == pad.id) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainer
             ) {
-              Text(pad.displayName, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.fillMaxWidth().padding(12.dp))
+              Text(
+                text = pad.displayName,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier
+                  .fillMaxWidth()
+                  .padding(spacing.md)
+              )
             }
           }
         }
       },
       confirmButton = {},
       dismissButton = {
-        TextButton(onClick = { showTriggerPadDialog = false }) { Text("Tutup") }
+        TextButton(onClick = { showTriggerPadDialog = false }) { Text(stringResource(R.string.action_close)) }
       }
     )
   }
