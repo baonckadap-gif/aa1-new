@@ -132,26 +132,28 @@ class Stage4AudioMidiUnitTest {
 
     // Fallback when limiter off keeps 1.12 / sqrt(n) curve
     val gainLimiterOff = AudioMixMath.computeSlotGain(
-      padVolume = 1.0f,
       masterVolume = 1.0f,
-      activeCount = 4,
-      limiterEnabled = false,
+      padVolume = 1.0f,
+      envelopeGain = 1.0f,
       normalizedGain = 1.0f,
       autoNormalizeEnabled = false,
-      duckingAttenuation = 1.0f,
+      limiterEnabled = true,
+      activeSlotCount = 4,
+      duckingMultiplier = 1.0f,
       useRealtimeBusLimiter = false
     )
     assertEquals((1.12 / 2.0).toFloat(), gainLimiterOff, 0.001f)
 
     // With realtime mixer bus active, unity slot headroom feeds full sum into lookahead limiter
     val gainBusActive = AudioMixMath.computeSlotGain(
-      padVolume = 1.0f,
       masterVolume = 1.0f,
-      activeCount = 4,
-      limiterEnabled = true,
+      padVolume = 1.0f,
+      envelopeGain = 1.0f,
       normalizedGain = 1.0f,
       autoNormalizeEnabled = false,
-      duckingAttenuation = 1.0f,
+      limiterEnabled = true,
+      activeSlotCount = 4,
+      duckingMultiplier = 1.0f,
       useRealtimeBusLimiter = true
     )
     assertEquals(1.0f, gainBusActive, 0.0001f)
@@ -188,7 +190,10 @@ class Stage4AudioMidiUnitTest {
       name = "Live Band",
       folderUri = null,
       gridConfig = GridConfig(GridPreset.GRID_4X4, 4, 4),
-      padCount = 0
+      padCount = 0,
+      createdAtMs = 1000L,
+      updatedAtMs = 1000L,
+      isActive = true
     )
     val fullJson = FullBackupSerializer.exportBackupJson(
       settings = settings,
@@ -304,7 +309,10 @@ class Stage4AudioMidiUnitTest {
       folderUri = null,
       gridConfig = GridConfig(GridPreset.GRID_4X4, 4, 4),
       padCount = 0,
-      focusModeMidiNote = 36
+      focusModeMidiNote = 36,
+      createdAtMs = 1000L,
+      updatedAtMs = 1000L,
+      isActive = true
     )
     val profileB = PadProfile(
       id = "prof_b",
@@ -312,7 +320,10 @@ class Stage4AudioMidiUnitTest {
       folderUri = null,
       gridConfig = GridConfig(GridPreset.GRID_4X4, 4, 4),
       padCount = 0,
-      focusModeMidiNote = 64
+      focusModeMidiNote = 64,
+      createdAtMs = 2000L,
+      updatedAtMs = 2000L,
+      isActive = false
     )
 
     val singleJson = ProfileJsonSerializer.exportToJson(
@@ -352,11 +363,10 @@ class Stage4AudioMidiUnitTest {
 
     val recorded = RecordedMasterOutput(
       uriString = "file:///tmp/mix.m4a",
-      fileName = "SoundPad_Master_test.m4a",
       displayName = "SoundPad_Master_test",
+      fileName = "SoundPad_Master_test.m4a",
       durationMs = 1500L,
       sizeBytes = 24000L,
-      sampleRateHz = 44100,
       format = MasterRecordFormat.M4A
     )
     assertEquals(MasterRecordFormat.M4A, recorded.format)
