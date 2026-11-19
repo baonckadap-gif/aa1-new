@@ -189,4 +189,12 @@
     <string name="bottom_action_theme">Theme</string>
     <string name="bottom_action_edit">Edit Mode</string>
     <string name="bottom_action_done">Done</string>
+
+    <!-- Play Mode Bar Hide/Show -->
+    <string name="cd_hide_play_mode">Hide play mode buttons</string>
+    <string name="cd_show_play_mode">Show play mode buttons</string>
+    <string name="tooltip_hide_play_mode">Hide Play Mode</string>
+    <string name="tooltip_show_play_mode">Show Play Mode</string>
+    <string name="menu_hide_play_mode">Hide Play Mode</string>
+    <string name="menu_show_play_mode">Show Play Mode</string>
 </resources>

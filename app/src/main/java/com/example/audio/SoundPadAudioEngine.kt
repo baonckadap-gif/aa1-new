@@ -137,12 +137,11 @@ class SoundPadAudioEngine(
   private var cuePlayer: ExoPlayer? = null
 
   @OptIn(UnstableApi::class)
-  private val lowLatencyLoadControl: DefaultLoadControl by lazy {
+  private fun createLowLatencyLoadControl(): DefaultLoadControl =
     DefaultLoadControl.Builder()
       .setBufferDurationsMs(1000, 4000, 50, 150)
       .setPrioritizeTimeOverSizeThresholds(true)
       .build()
-  }
 
   private val wakeLock: PowerManager.WakeLock by lazy {
     val pm = context.getSystemService(Context.POWER_SERVICE) as PowerManager
@@ -544,7 +543,7 @@ class SoundPadAudioEngine(
         val mediaSourceFactory = DefaultMediaSourceFactory(ramCache.createDataSourceFactory())
         val player = ExoPlayer.Builder(context)
           .setMediaSourceFactory(mediaSourceFactory)
-          .setLoadControl(lowLatencyLoadControl)
+          .setLoadControl(createLowLatencyLoadControl())
           .build()
 
         val previewDevice = cachedCueOutputDevice ?: cachedMainOutputDevice ?: run {
@@ -771,7 +770,7 @@ class SoundPadAudioEngine(
     }
     return ExoPlayer.Builder(context, renderersFactory)
       .setMediaSourceFactory(mediaSourceFactory)
-      .setLoadControl(lowLatencyLoadControl)
+      .setLoadControl(createLowLatencyLoadControl())
       .setAudioAttributes(audioAttributes, handleAudioFocus)
       .build()
   }

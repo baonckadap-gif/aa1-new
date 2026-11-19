@@ -1,7 +1,13 @@
 package com.example.ui.components
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -12,7 +18,9 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.CompareArrows
 import androidx.compose.material.icons.automirrored.filled.PlaylistPlay
@@ -37,6 +45,8 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.SwapVert
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.CircularProgressIndicator
@@ -64,6 +74,7 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -135,6 +146,12 @@ fun TopControlBar(
   val extColors = SoundPadTheme.colors
   val spacing = SoundPadTheme.spacing
   var isOverflowExpanded by remember { mutableStateOf(false) }
+  var isPlayModeHidden by rememberSaveable { mutableStateOf(false) }
+  val activeModeShortLabel = when (playMode) {
+    PlayMode.SINGLE -> stringResource(R.string.play_mode_single_short)
+    PlayMode.MULTI -> stringResource(R.string.play_mode_multi_short)
+    PlayMode.CONTINUOUS -> stringResource(R.string.play_mode_cont_short)
+  }
 
   Surface(
     modifier = modifier.fillMaxWidth(),
@@ -222,6 +239,33 @@ fun TopControlBar(
               },
               modifier = Modifier.size(topBarTokens.iconSizeDp)
             )
+          }
+
+          AnimatedVisibility(visible = isPlayModeHidden) {
+            TopBarTooltipIconButton(
+              tooltipText = "${stringResource(R.string.tooltip_show_play_mode)} ($activeModeShortLabel)",
+              onClick = { isPlayModeHidden = false },
+              modifier = Modifier.testTag("show_play_mode_button")
+            ) {
+              BadgedBox(
+                badge = {
+                  Badge(containerColor = extColors.playModeActiveGreen) {
+                    Text(
+                      text = activeModeShortLabel.take(1),
+                      style = MaterialTheme.typography.labelSmall,
+                      color = extColors.onPlayModeActiveGreen
+                    )
+                  }
+                }
+              ) {
+                Icon(
+                  imageVector = Icons.Filled.Visibility,
+                  contentDescription = stringResource(R.string.cd_show_play_mode),
+                  tint = extColors.playModeActiveGreen,
+                  modifier = Modifier.size(topBarTokens.iconSizeDp)
+                )
+              }
+            }
           }
         }
 
@@ -569,6 +613,28 @@ fun TopControlBar(
               )
 
               DropdownMenuItem(
+                text = {
+                  Text(
+                    stringResource(
+                      if (isPlayModeHidden) R.string.menu_show_play_mode else R.string.menu_hide_play_mode
+                    )
+                  )
+                },
+                leadingIcon = {
+                  Icon(
+                    imageVector = if (isPlayModeHidden) Icons.Filled.Visibility else Icons.Filled.VisibilityOff,
+                    contentDescription = null,
+                    tint = if (isPlayModeHidden) extColors.playModeActiveGreen else MaterialTheme.colorScheme.onSurface
+                  )
+                },
+                onClick = {
+                  isOverflowExpanded = false
+                  isPlayModeHidden = !isPlayModeHidden
+                },
+                modifier = Modifier.testTag("menu_toggle_play_mode_bar")
+              )
+
+              DropdownMenuItem(
                 text = { Text(stringResource(R.string.menu_error_logs)) },
                 leadingIcon = {
                   Icon(
@@ -644,66 +710,110 @@ fun TopControlBar(
         )
       }
 
-      // 3. Play Mode Switcher (Material 3 SingleChoiceSegmentedButtonRow, 40.dp height, green active only)
-      SingleChoiceSegmentedButtonRow(
-        modifier = Modifier
-          .fillMaxWidth()
-          .height(topBarTokens.playModeHeightDp)
+      // 3. Play Mode Switcher (Material 3 SingleChoiceSegmentedButtonRow, 40.dp height, green active only + Hide button)
+      AnimatedVisibility(
+        visible = !isPlayModeHidden,
+        enter = fadeIn() + expandVertically(),
+        exit = fadeOut() + shrinkVertically()
       ) {
-        PlayMode.entries.forEachIndexed { index, mode ->
-          val selected = mode == playMode
-          val icon = when (mode) {
-            PlayMode.SINGLE -> Icons.Filled.PlayArrow
-            PlayMode.MULTI -> Icons.Filled.Layers
-            PlayMode.CONTINUOUS -> Icons.AutoMirrored.Filled.PlaylistPlay
-          }
-          val shortLabel = when (mode) {
-            PlayMode.SINGLE -> stringResource(R.string.play_mode_single_short)
-            PlayMode.MULTI -> stringResource(R.string.play_mode_multi_short)
-            PlayMode.CONTINUOUS -> stringResource(R.string.play_mode_cont_short)
+        Row(
+          modifier = Modifier.fillMaxWidth(),
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(topBarTokens.playModeHideSpacingDp)
+        ) {
+          SingleChoiceSegmentedButtonRow(
+            modifier = Modifier
+              .weight(1f)
+              .height(topBarTokens.playModeHeightDp)
+          ) {
+            PlayMode.entries.forEachIndexed { index, mode ->
+              val selected = mode == playMode
+              val icon = when (mode) {
+                PlayMode.SINGLE -> Icons.Filled.PlayArrow
+                PlayMode.MULTI -> Icons.Filled.Layers
+                PlayMode.CONTINUOUS -> Icons.AutoMirrored.Filled.PlaylistPlay
+              }
+              val shortLabel = when (mode) {
+                PlayMode.SINGLE -> stringResource(R.string.play_mode_single_short)
+                PlayMode.MULTI -> stringResource(R.string.play_mode_multi_short)
+                PlayMode.CONTINUOUS -> stringResource(R.string.play_mode_cont_short)
+              }
+
+              SegmentedButton(
+                selected = selected,
+                onClick = { onPlayModeSelected(mode) },
+                enabled = !isLocked,
+                shape = SegmentedButtonDefaults.itemShape(
+                  index = index,
+                  count = PlayMode.entries.size
+                ),
+                colors = SegmentedButtonDefaults.colors(
+                  activeContainerColor = extColors.playModeActiveGreen,
+                  activeContentColor = extColors.onPlayModeActiveGreen,
+                  activeBorderColor = extColors.playModeActiveGreen,
+                  inactiveContainerColor = MaterialTheme.colorScheme.surfaceContainer,
+                  inactiveContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                  inactiveBorderColor = MaterialTheme.colorScheme.outlineVariant,
+                  disabledActiveContainerColor = extColors.playModeActiveGreen.copy(alpha = topBarTokens.disabledAlpha),
+                  disabledActiveContentColor = extColors.onPlayModeActiveGreen.copy(alpha = topBarTokens.disabledAlpha),
+                  disabledInactiveContainerColor = MaterialTheme.colorScheme.surfaceContainer.copy(alpha = topBarTokens.disabledAlpha),
+                  disabledInactiveContentColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = topBarTokens.disabledAlpha)
+                ),
+                icon = {
+                  Icon(
+                    imageVector = icon,
+                    contentDescription = null,
+                    modifier = Modifier.size(topBarTokens.playModeIconDp)
+                  )
+                },
+                label = {
+                  Text(
+                    text = shortLabel,
+                    style = MaterialTheme.typography.labelSmall.copy(
+                      fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium
+                    ),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                  )
+                },
+                modifier = Modifier
+                  .height(topBarTokens.playModeHeightDp)
+                  .testTag("play_mode_${mode.name.lowercase()}")
+              )
+            }
           }
 
-          SegmentedButton(
-            selected = selected,
-            onClick = { onPlayModeSelected(mode) },
-            enabled = !isLocked,
-            shape = SegmentedButtonDefaults.itemShape(
-              index = index,
-              count = PlayMode.entries.size
-            ),
-            colors = SegmentedButtonDefaults.colors(
-              activeContainerColor = extColors.playModeActiveGreen,
-              activeContentColor = extColors.onPlayModeActiveGreen,
-              activeBorderColor = extColors.playModeActiveGreen,
-              inactiveContainerColor = MaterialTheme.colorScheme.surfaceContainer,
-              inactiveContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
-              inactiveBorderColor = MaterialTheme.colorScheme.outlineVariant,
-              disabledActiveContainerColor = extColors.playModeActiveGreen.copy(alpha = topBarTokens.disabledAlpha),
-              disabledActiveContentColor = extColors.onPlayModeActiveGreen.copy(alpha = topBarTokens.disabledAlpha),
-              disabledInactiveContainerColor = MaterialTheme.colorScheme.surfaceContainer.copy(alpha = topBarTokens.disabledAlpha),
-              disabledInactiveContentColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = topBarTokens.disabledAlpha)
-            ),
-            icon = {
-              Icon(
-                imageVector = icon,
-                contentDescription = null,
-                modifier = Modifier.size(topBarTokens.playModeIconDp)
-              )
-            },
-            label = {
-              Text(
-                text = shortLabel,
-                style = MaterialTheme.typography.labelSmall.copy(
-                  fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium
+          TopBarTooltipWrapper(tooltipText = stringResource(R.string.tooltip_hide_play_mode)) {
+            Box(
+              modifier = Modifier
+                .minimumInteractiveComponentSize()
+                .clip(RoundedCornerShape(topBarTokens.playModeHideCornerDp))
+                .clickable(onClick = { isPlayModeHidden = true })
+                .testTag("hide_play_mode_button"),
+              contentAlignment = Alignment.Center
+            ) {
+              Surface(
+                shape = RoundedCornerShape(topBarTokens.playModeHideCornerDp),
+                color = MaterialTheme.colorScheme.surfaceContainer,
+                border = BorderStroke(
+                  width = topBarTokens.playModeBorderThicknessDp,
+                  color = MaterialTheme.colorScheme.outlineVariant
                 ),
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-              )
-            },
-            modifier = Modifier
-              .height(topBarTokens.playModeHeightDp)
-              .testTag("play_mode_${mode.name.lowercase()}")
-          )
+                modifier = Modifier
+                  .width(topBarTokens.playModeHideWidthDp)
+                  .height(topBarTokens.playModeHeightDp)
+              ) {
+                Box(contentAlignment = Alignment.Center) {
+                  Icon(
+                    imageVector = Icons.Filled.VisibilityOff,
+                    contentDescription = stringResource(R.string.cd_hide_play_mode),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(topBarTokens.playModeHideIconDp)
+                  )
+                }
+              }
+            }
+          }
         }
       }
     }
@@ -712,11 +822,8 @@ fun TopControlBar(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun TopBarTooltipIconButton(
+private fun TopBarTooltipWrapper(
   tooltipText: String,
-  onClick: () -> Unit,
-  modifier: Modifier = Modifier,
-  enabled: Boolean = true,
   content: @Composable () -> Unit
 ) {
   val tooltipState = rememberTooltipState()
@@ -733,8 +840,20 @@ private fun TopBarTooltipIconButton(
         )
       }
     },
-    state = tooltipState
-  ) {
+    state = tooltipState,
+    content = content
+  )
+}
+
+@Composable
+private fun TopBarTooltipIconButton(
+  tooltipText: String,
+  onClick: () -> Unit,
+  modifier: Modifier = Modifier,
+  enabled: Boolean = true,
+  content: @Composable () -> Unit
+) {
+  TopBarTooltipWrapper(tooltipText = tooltipText) {
     IconButton(
       onClick = onClick,
       enabled = enabled,

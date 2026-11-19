@@ -189,4 +189,12 @@
     <string name="bottom_action_theme">Warna</string>
     <string name="bottom_action_edit">Edit Mode</string>
     <string name="bottom_action_done">Selesai</string>
+
+    <!-- Play Mode Bar Hide/Show -->
+    <string name="cd_hide_play_mode">Sembunyikan tombol mode play</string>
+    <string name="cd_show_play_mode">Tampilkan tombol mode play</string>
+    <string name="tooltip_hide_play_mode">Sembunyikan Mode Play</string>
+    <string name="tooltip_show_play_mode">Tampilkan Mode Play</string>
+    <string name="menu_hide_play_mode">Sembunyikan Mode Play</string>
+    <string name="menu_show_play_mode">Tampilkan Mode Play</string>
 </resources>

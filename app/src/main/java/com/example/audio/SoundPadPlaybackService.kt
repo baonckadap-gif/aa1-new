@@ -256,7 +256,7 @@ class SoundPadPlaybackService : Service() {
     }
 
     return NotificationCompat.Builder(this, CHANNEL_ID)
-      .setSmallIcon(R.mipmap.ic_launcher)
+      .setSmallIcon(R.drawable.ic_notification_soundpad)
       .setContentTitle(getString(R.string.notification_playback_title))
       .setContentText(contentText)
       .setOngoing(true)
@@ -292,7 +292,7 @@ class SoundPadPlaybackService : Service() {
     )
 
     return NotificationCompat.Builder(this, RECORD_CHANNEL_ID)
-      .setSmallIcon(R.mipmap.ic_launcher)
+      .setSmallIcon(R.drawable.ic_notification_soundpad)
       .setContentTitle("${getString(R.string.notification_recording_title)} ($elapsedLabel)")
       .setContentText(getString(R.string.notification_recording_text))
       .setOngoing(true)
