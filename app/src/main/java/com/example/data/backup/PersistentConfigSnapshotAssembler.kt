@@ -158,8 +158,15 @@ object PersistentConfigSnapshotAssembler {
       audioOutput = AudioOutputConfigBackup(
         mainOutputDeviceId = settings.preferredMainOutputId,
         mainOutputDeviceName = mainDeviceName,
+        mainOutputProductName = settings.preferredMainOutputProductName,
+        mainOutputDeviceType = settings.preferredMainOutputType,
+        mainOutputAddress = settings.preferredMainOutputAddress,
         cueOutputDeviceId = settings.preferredCueOutputId,
         cueOutputDeviceName = cueDeviceName,
+        cueOutputProductName = settings.preferredCueOutputProductName,
+        cueOutputDeviceType = settings.preferredCueOutputType,
+        cueOutputAddress = settings.preferredCueOutputAddress,
+        cueVolume = settings.cueVolume,
         audioBufferSizeMs = settings.audioBufferSizeMs
       ),
       syncConfig = PersistentSyncConfigBackup(
@@ -195,7 +202,9 @@ object PersistentConfigSnapshotAssembler {
       layouts = layouts,
       presets = presets,
       midiMapping = MidiMappingBackupBundle(
-        focusModeMidiNote = settings.focusModeMidiNote,
+        focusModeMidiNote = profileBundles.firstOrNull {
+          it.profile.id == settings.activeProfileId || it.profile.isActive
+        }?.profile?.focusModeMidiNote ?: settings.focusModeMidiNote,
         ccMappings = allCcMappings,
         pcMappings = allPcMappings,
         padNoteMappings = allPadNotes,
@@ -246,7 +255,8 @@ object PersistentConfigSnapshotAssembler {
       masterEqBandsDb = ProfileJsonSerializer.decodeEqBandsString(masterEqBandsJson),
       createdAtMs = createdAtMs,
       updatedAtMs = updatedAtMs,
-      isActive = isActive
+      isActive = isActive,
+      focusModeMidiNote = focusModeMidiNote
     )
   }
 

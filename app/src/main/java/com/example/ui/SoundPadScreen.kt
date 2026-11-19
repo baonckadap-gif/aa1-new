@@ -163,6 +163,7 @@ import com.example.domain.model.EqPreset
 import com.example.domain.model.FadeCurve
 import com.example.domain.model.GridConfig
 import com.example.domain.model.HapticIntensity
+import com.example.domain.model.MasterRecordFormat
 import com.example.domain.model.MasterRecordSampleRate
 import com.example.domain.model.MidiCcTarget
 import com.example.domain.model.MidiLearnTarget
@@ -298,6 +299,9 @@ fun SoundPadScreen(
   onStartBleMidiScan: () -> Unit,
   onStopBleMidiScan: () -> Unit,
   onConnectBleMidiDevice: (String) -> Unit,
+  onToggleBleAutoReconnect: (Boolean) -> Unit = {},
+  onTriggerBleReconnectNow: () -> Unit = {},
+  onForgetSavedBleDevice: () -> Unit = {},
   onStopAll: () -> Unit,
   onFadeOutAll: () -> Unit = {},
   onToggleLockMode: () -> Unit = {},
@@ -312,6 +316,9 @@ fun SoundPadScreen(
   onRefreshOutputDevices: () -> Unit = {},
   onSelectMainOutputDevice: (Int?) -> Unit = {},
   onSelectCueOutputDevice: (Int?) -> Unit = {},
+  onCueVolumeChange: (Float) -> Unit = {},
+  onAudioBufferSizeChange: (Int) -> Unit = {},
+  onRunLatencyTest: () -> Unit = {},
   onToggleCuePreview: (SoundPad) -> Unit = {},
   onMasterLimiterToggle: (Boolean) -> Unit = {},
   onDuckingToggle: (Boolean) -> Unit = {},
@@ -364,6 +371,7 @@ fun SoundPadScreen(
   onRequestExactAlarmPermission: () -> Unit = {},
   onOpenMasterRecorder: () -> Unit = {},
   onCloseMasterRecorder: () -> Unit = {},
+  onSelectMasterRecordFormat: (MasterRecordFormat) -> Unit = {},
   onSelectMasterRecordSampleRate: (MasterRecordSampleRate) -> Unit = {},
   onPickMasterRecordFolder: () -> Unit = {},
   onToggleMasterRecordAutoAddPad: (Boolean) -> Unit = {},
@@ -1615,7 +1623,12 @@ fun SoundPadScreen(
       pcMappings = uiState.midiPcMappings,
       onArmBankPcLearn = onArmMidiLearnForBankPc,
       onClearBankPcMapping = onClearMidiPcMappingForBank,
-      focusModeMidiNote = uiState.settings.focusModeMidiNote,
+      focusModeMidiNote = uiState.effectiveFocusModeMidiNote,
+      activeProfileName = uiState.activeProfile?.name,
+      bleReconnectStatus = uiState.bleReconnectStatus,
+      onToggleBleAutoReconnect = onToggleBleAutoReconnect,
+      onTriggerBleReconnectNow = onTriggerBleReconnectNow,
+      onForgetSavedBleDevice = onForgetSavedBleDevice,
       onArmFocusModeLearn = onArmMidiLearnForFocusMode,
       onClearFocusModeNote = onClearFocusModeMidiNote,
       onDismiss = { showMidiSheet = false }
@@ -1628,9 +1641,15 @@ fun SoundPadScreen(
       selectedMainDeviceId = uiState.selectedMainOutputId,
       selectedCueDeviceId = uiState.selectedCueOutputId,
       isNormalizingAll = uiState.isNormalizingAll,
+      hasPendingBufferRebuild = uiState.hasPendingBufferRebuild,
+      isRunningLatencyTest = uiState.isRunningLatencyTest,
+      latencyTestReport = uiState.latencyTestReport,
       onRefreshDevices = onRefreshOutputDevices,
       onSelectMainDevice = onSelectMainOutputDevice,
       onSelectCueDevice = onSelectCueOutputDevice,
+      onCueVolumeChange = onCueVolumeChange,
+      onAudioBufferSizeChange = onAudioBufferSizeChange,
+      onRunLatencyTest = onRunLatencyTest,
       onAudioEffectsToggle = onAudioEffectsToggle,
       onMasterLimiterToggle = onMasterLimiterToggle,
       onDuckingToggle = onDuckingToggle,
@@ -1662,6 +1681,7 @@ fun SoundPadScreen(
   if (uiState.isMasterRecordSheetOpen) {
     MasterRecordSheet(
       recordState = uiState.masterRecordState,
+      onSelectFormat = onSelectMasterRecordFormat,
       onSelectSampleRate = onSelectMasterRecordSampleRate,
       onPickOutputFolder = onPickMasterRecordFolder,
       onToggleAutoAddPad = onToggleMasterRecordAutoAddPad,

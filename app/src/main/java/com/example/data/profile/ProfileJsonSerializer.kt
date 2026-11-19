@@ -8,6 +8,7 @@ import com.example.domain.model.GridConfig
 import com.example.domain.model.GridPreset
 import com.example.domain.model.MidiCcMapping
 import com.example.domain.model.MidiCcTarget
+import com.example.domain.model.MidiProgramBankMapping
 import com.example.domain.model.PadBadgeIcon
 import com.example.domain.model.PadProfile
 import com.example.domain.model.PadSettings
@@ -24,25 +25,37 @@ import java.util.UUID
 data class ExportedProfileBundle(
   val profile: PadProfile,
   val pads: List<SoundPad>,
-  val ccMappings: List<MidiCcMapping> = emptyList()
+  val ccMappings: List<MidiCcMapping> = emptyList(),
+  val pcMappings: List<MidiProgramBankMapping> = emptyList(),
+  val focusModeMidiNote: Int? = null
 )
 
 object ProfileJsonSerializer {
 
-  private const val SCHEMA_VERSION = 6
+  private const val SCHEMA_VERSION = 7
 
   fun exportToJson(
     profile: PadProfile,
     pads: List<SoundPad>,
-    ccMappings: List<MidiCcMapping> = emptyList()
+    ccMappings: List<MidiCcMapping> = emptyList(),
+    pcMappings: List<MidiProgramBankMapping> = emptyList(),
+    focusModeMidiNote: Int? = null
   ): String {
-    return toJsonObject(profile, pads, ccMappings).toString(2)
+    return toJsonObject(
+      profile = profile,
+      pads = pads,
+      ccMappings = ccMappings,
+      pcMappings = pcMappings,
+      focusModeMidiNote = focusModeMidiNote
+    ).toString(2)
   }
 
   fun toJsonObject(
     profile: PadProfile,
     pads: List<SoundPad>,
-    ccMappings: List<MidiCcMapping> = emptyList()
+    ccMappings: List<MidiCcMapping> = emptyList(),
+    pcMappings: List<MidiProgramBankMapping> = emptyList(),
+    focusModeMidiNote: Int? = null
   ): JSONObject {
     return JSONObject().apply {
       put("schemaVersion", SCHEMA_VERSION)
@@ -158,6 +171,21 @@ object ProfileJsonSerializer {
         )
       }
       put("midiCcMappings", ccArray)
+
+      val pcArray = JSONArray()
+      pcMappings.forEach { mapping ->
+        pcArray.put(
+          JSONObject().apply {
+            put("id", mapping.id)
+            put("programNumber", mapping.programNumber)
+            put("bankIndex", mapping.bankIndex)
+            put("channel", mapping.channel)
+          }
+        )
+      }
+      put("midiPcMappings", pcArray)
+      val effectiveFocusNote = focusModeMidiNote ?: profile.focusModeMidiNote
+      put("focusModeMidiNote", effectiveFocusNote ?: JSONObject.NULL)
     }
   }
 
@@ -324,6 +352,32 @@ object ProfileJsonSerializer {
       )
     }
 
+    val pcArray = root.optJSONArray("midiPcMappings") ?: JSONArray()
+    val pcMappings = mutableListOf<MidiProgramBankMapping>()
+    for (i in 0 until pcArray.length()) {
+      val obj = pcArray.optJSONObject(i) ?: continue
+      val programNumber = obj.optInt("programNumber", -1)
+      val bankIndex = obj.optInt("bankIndex", -1)
+      if (programNumber !in 0..127 || bankIndex < 0) continue
+      val channel = obj.optInt("channel", -1).coerceIn(-1, 15)
+      val id = obj.optString("id", "").ifBlank { "pc_${profileId}_$bankIndex" }
+      pcMappings.add(
+        MidiProgramBankMapping(
+          id = if (generateFreshId) "pc_${profileId}_$bankIndex" else id,
+          profileId = profileId,
+          programNumber = programNumber,
+          bankIndex = bankIndex,
+          channel = channel
+        )
+      )
+    }
+
+    val focusModeMidiNote = if (root.has("focusModeMidiNote") && !root.isNull("focusModeMidiNote")) {
+      root.optInt("focusModeMidiNote", -1).takeIf { it in 0..127 }
+    } else {
+      null
+    }
+
     val masterEqPreset = runCatching {
       EqPreset.valueOf(root.optString("masterEqPreset", EqPreset.FLAT.name))
     }.getOrDefault(EqPreset.FLAT)
@@ -376,10 +430,17 @@ object ProfileJsonSerializer {
       defaultPadColorArgb = importedDefaultPadColorArgb,
       createdAtMs = now,
       updatedAtMs = now,
-      isActive = true
+      isActive = true,
+      focusModeMidiNote = focusModeMidiNote
     )
 
-    return ExportedProfileBundle(profile = profile, pads = resolvedPads, ccMappings = ccMappings)
+    return ExportedProfileBundle(
+      profile = profile,
+      pads = resolvedPads,
+      ccMappings = ccMappings,
+      pcMappings = pcMappings,
+      focusModeMidiNote = focusModeMidiNote
+    )
   }
 
   fun encodeBankNamesString(bankNames: Map<Int, String>): String {

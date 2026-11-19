@@ -16,15 +16,18 @@ import androidx.sqlite.db.SupportSQLiteDatabase
     ErrorLogEntity::class,
     ScheduledTaskEntity::class,
     SequencerPlaylistEntity::class,
-    MidiPcBankMappingEntity::class
+    MidiPcBankMappingEntity::class,
+    SchedulerIdCounterEntity::class
   ],
-  version = 11,
-  exportSchema = false
+  version = 13,
+  exportSchema = true
 )
 abstract class SoundPadDatabase : RoomDatabase() {
   abstract fun soundPadDao(): SoundPadDao
 
   companion object {
+    const val DATABASE_NAME = "soundpad_pro.db"
+
     @Volatile
     private var instance: SoundPadDatabase? = null
 
@@ -133,16 +136,88 @@ abstract class SoundPadDatabase : RoomDatabase() {
       }
     }
 
+    val MIGRATION_11_12 = object : Migration(11, 12) {
+      override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE scheduled_tasks ADD COLUMN requestCode INTEGER NOT NULL DEFAULT 0")
+        db.execSQL("UPDATE scheduled_tasks SET requestCode = CAST(rowid AS INTEGER) + 99 WHERE requestCode <= 0")
+        db.execSQL(
+          """
+          CREATE TABLE IF NOT EXISTS scheduler_id_counter (
+            id INTEGER NOT NULL PRIMARY KEY,
+            nextRequestCode INTEGER NOT NULL
+          )
+          """.trimIndent()
+        )
+        db.execSQL(
+          """
+          INSERT OR REPLACE INTO scheduler_id_counter (id, nextRequestCode)
+          VALUES (
+            1,
+            MAX(100, COALESCE((SELECT MAX(requestCode) + 1 FROM scheduled_tasks), 100))
+          )
+          """.trimIndent()
+        )
+      }
+    }
+
+    val MIGRATION_12_13 = object : Migration(12, 13) {
+      override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE pad_profiles ADD COLUMN focusModeMidiNote INTEGER DEFAULT NULL")
+      }
+    }
+
+    val ALL_MIGRATIONS: Array<Migration> = arrayOf(
+      MIGRATION_8_9,
+      MIGRATION_9_10,
+      MIGRATION_10_11,
+      MIGRATION_11_12,
+      MIGRATION_12_13
+    )
+
+    fun createRestoreCallback(context: Context): Callback {
+      val appCtx = context.applicationContext
+      return object : Callback() {
+        @Volatile
+        private var pendingDestructiveRestore = false
+
+        override fun onDestructiveMigration(db: SupportSQLiteDatabase) {
+          super.onDestructiveMigration(db)
+          // Room invokes onDestructiveMigration after dropping tables and BEFORE recreating them.
+          // Flag here and perform the actual INSERT restore in onOpen() once v12 tables exist.
+          pendingDestructiveRestore = true
+        }
+
+        override fun onOpen(db: SupportSQLiteDatabase) {
+          super.onOpen(db)
+          if (pendingDestructiveRestore) {
+            pendingDestructiveRestore = false
+            SoundPadPreMigrationBackupManager.restoreLatestBackupIntoDatabase(appCtx, db)
+          }
+        }
+      }
+    }
+
     fun getInstance(context: Context): SoundPadDatabase {
       return instance ?: synchronized(this) {
-        instance ?: Room.databaseBuilder(
-          context.applicationContext,
-          SoundPadDatabase::class.java,
-          "soundpad_pro.db"
-        )
-          .addMigrations(MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11)
-          .build()
-          .also { instance = it }
+        instance ?: run {
+          val appCtx = context.applicationContext
+          // Export legacy v1..v7 database content to PersistentConfig JSON before Room drops tables
+          SoundPadPreMigrationBackupManager.backupIfDestructiveMigrationNeeded(
+            context = appCtx,
+            dbName = DATABASE_NAME,
+            minIncrementalVersion = 8
+          )
+          Room.databaseBuilder(
+            appCtx,
+            SoundPadDatabase::class.java,
+            DATABASE_NAME
+          )
+            .addMigrations(*ALL_MIGRATIONS)
+            .fallbackToDestructiveMigrationFrom(true, 1, 2, 3, 4, 5, 6, 7)
+            .addCallback(createRestoreCallback(appCtx))
+            .build()
+            .also { instance = it }
+        }
       }
     }
   }

@@ -33,6 +33,13 @@ interface SoundPadDao {
     markProfileActive(profileId)
   }
 
+  @Query("UPDATE pad_profiles SET focusModeMidiNote = :midiNote, updatedAtMs = :updatedAtMs WHERE id = :profileId")
+  suspend fun updateProfileFocusModeMidiNote(
+    profileId: String,
+    midiNote: Int?,
+    updatedAtMs: Long = System.currentTimeMillis()
+  )
+
   @Query("DELETE FROM pad_profiles WHERE id = :profileId")
   suspend fun deleteProfileById(profileId: String)
 
@@ -302,6 +309,39 @@ interface SoundPadDao {
 
   @Insert(onConflict = OnConflictStrategy.REPLACE)
   suspend fun upsertScheduledTask(task: ScheduledTaskEntity)
+
+  @Query("SELECT * FROM scheduler_id_counter WHERE id = 1 LIMIT 1")
+  suspend fun getSchedulerIdCounterOnce(): SchedulerIdCounterEntity?
+
+  @Insert(onConflict = OnConflictStrategy.REPLACE)
+  suspend fun upsertSchedulerIdCounter(counter: SchedulerIdCounterEntity)
+
+  @Transaction
+  suspend fun allocateNextSchedulerRequestCode(): Int {
+    val current = (getSchedulerIdCounterOnce()?.nextRequestCode ?: 100).coerceAtLeast(100)
+    val next = current + 1
+    upsertSchedulerIdCounter(SchedulerIdCounterEntity(id = 1, nextRequestCode = next))
+    return current
+  }
+
+  @Transaction
+  suspend fun upsertScheduledTaskAssigningRequestCode(task: ScheduledTaskEntity): ScheduledTaskEntity {
+    val existing = getScheduledTaskById(task.id)
+    val assignedCode = when {
+      existing != null && existing.requestCode > 0 -> existing.requestCode
+      task.requestCode > 0 -> task.requestCode
+      else -> allocateNextSchedulerRequestCode()
+    }
+    val counter = getSchedulerIdCounterOnce()
+    if (counter == null || counter.nextRequestCode <= assignedCode) {
+      upsertSchedulerIdCounter(
+        SchedulerIdCounterEntity(id = 1, nextRequestCode = (assignedCode + 1).coerceAtLeast(100))
+      )
+    }
+    val finalized = task.copy(requestCode = assignedCode)
+    upsertScheduledTask(finalized)
+    return finalized
+  }
 
   @Query("DELETE FROM scheduled_tasks WHERE id = :id")
   suspend fun deleteScheduledTaskById(id: String)

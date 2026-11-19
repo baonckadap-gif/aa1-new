@@ -9,7 +9,10 @@ import android.bluetooth.le.ScanCallback
 import android.bluetooth.le.ScanFilter
 import android.bluetooth.le.ScanResult
 import android.bluetooth.le.ScanSettings
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.media.midi.MidiDevice
 import android.media.midi.MidiDeviceInfo
 import android.media.midi.MidiManager
@@ -48,6 +51,37 @@ data class BleMidiCandidate(
   val address: String,
   val device: BluetoothDevice
 )
+
+enum class BleReconnectPhase {
+  IDLE,
+  WAITING_BLUETOOTH,
+  SCANNING,
+  CONNECTING,
+  WAITING_BACKOFF,
+  CONNECTED,
+  EXHAUSTED
+}
+
+data class BleReconnectStatus(
+  val savedAddress: String? = null,
+  val savedName: String? = null,
+  val autoReconnectEnabled: Boolean = true,
+  val phase: BleReconnectPhase = BleReconnectPhase.IDLE,
+  val attempt: Int = 0,
+  val maxAttempts: Int = BleReconnectBackoffMath.MAX_ATTEMPTS,
+  val nextRetryDelayMs: Long = 0L,
+  val detailMessage: String? = null
+)
+
+object BleReconnectBackoffMath {
+  const val MAX_ATTEMPTS = 8
+  private val STEP_DELAYS_MS = longArrayOf(2_000L, 4_000L, 8_000L, 15_000L, 30_000L, 30_000L, 30_000L, 30_000L)
+
+  fun computeDelayMs(attemptIndex: Int): Long {
+    if (attemptIndex <= 0) return STEP_DELAYS_MS[0]
+    return STEP_DELAYS_MS[attemptIndex.coerceIn(0, STEP_DELAYS_MS.lastIndex)]
+  }
+}
 
 object MidiMessageParser {
   private val NOTE_NAMES = arrayOf("C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B")
@@ -166,6 +200,7 @@ class MidiControllerManager(private val context: Context) {
       UUID.fromString("03B80E5A-EDE8-4B33-A751-6CE34EC4C700")
     )
     private const val BLE_SCAN_TIMEOUT_MS = 12_000L
+    private const val RECONNECT_SCAN_WINDOW_MS = 5_000L
   }
 
   private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -176,6 +211,7 @@ class MidiControllerManager(private val context: Context) {
 
   private val openedDevices = ConcurrentHashMap<Int, MidiDevice>()
   private val openedPorts = ConcurrentHashMap<Int, MutableList<Pair<MidiOutputPort, MidiReceiver>>>()
+  private val openedBleDeviceAddresses = ConcurrentHashMap<Int, Pair<String, String>>()
 
   private val _connectedDevices = MutableStateFlow<List<MidiDeviceSummary>>(emptyList())
   val connectedDevices: StateFlow<List<MidiDeviceSummary>> = _connectedDevices.asStateFlow()
@@ -195,8 +231,43 @@ class MidiControllerManager(private val context: Context) {
   private val _bleStatusMessage = MutableStateFlow<String?>(null)
   val bleStatusMessage: StateFlow<String?> = _bleStatusMessage.asStateFlow()
 
+  private val _bleReconnectStatus = MutableStateFlow(BleReconnectStatus())
+  val bleReconnectStatus: StateFlow<BleReconnectStatus> = _bleReconnectStatus.asStateFlow()
+
+  var onBleDeviceConnected: ((address: String, name: String) -> Unit)? = null
+
   private var bleScanJob: Job? = null
+  private var autoReconnectJob: Job? = null
   private var activeLeScanner: BluetoothLeScanner? = null
+  private var savedBleAddress: String? = null
+  private var savedBleName: String? = null
+  private var autoReconnectEnabled: Boolean = true
+  private var reconnectScanCallback: ScanCallback? = null
+
+  private val btStateReceiver = object : BroadcastReceiver() {
+    override fun onReceive(ctx: Context?, intent: Intent?) {
+      if (intent?.action != BluetoothAdapter.ACTION_STATE_CHANGED) return
+      val state = intent.getIntExtra(BluetoothAdapter.EXTRA_STATE, BluetoothAdapter.ERROR)
+      when (state) {
+        BluetoothAdapter.STATE_ON -> {
+          if (autoReconnectEnabled && !savedBleAddress.isNullOrBlank()) {
+            scheduleAutoReconnect(resetAttempts = true)
+          }
+        }
+        BluetoothAdapter.STATE_OFF, BluetoothAdapter.STATE_TURNING_OFF -> {
+          cancelAutoReconnectScanOnly()
+          autoReconnectJob?.cancel()
+          autoReconnectJob = null
+          if (!savedBleAddress.isNullOrBlank()) {
+            _bleReconnectStatus.value = _bleReconnectStatus.value.copy(
+              phase = BleReconnectPhase.WAITING_BLUETOOTH,
+              detailMessage = "Bluetooth nonaktif — menunggu Bluetooth menyala"
+            )
+          }
+        }
+      }
+    }
+  }
 
   private val deviceCallback = object : MidiManager.DeviceCallback() {
     override fun onDeviceAdded(device: MidiDeviceInfo) {
@@ -205,8 +276,19 @@ class MidiControllerManager(private val context: Context) {
     }
 
     override fun onDeviceRemoved(device: MidiDeviceInfo) {
+      val removedBle = openedBleDeviceAddresses.remove(device.id)
       closeMidiDevice(device.id)
       publishDevices()
+      val targetAddr = savedBleAddress
+      if (removedBle != null && autoReconnectEnabled && !targetAddr.isNullOrBlank() &&
+        removedBle.first.equals(targetAddr, ignoreCase = true)
+      ) {
+        scheduleAutoReconnect(resetAttempts = true)
+      } else if (_connectedDevices.value.none { it.typeLabel == "Bluetooth" && it.isConnected } &&
+        autoReconnectEnabled && !targetAddr.isNullOrBlank() && device.type == MidiDeviceInfo.TYPE_BLUETOOTH
+      ) {
+        scheduleAutoReconnect(resetAttempts = true)
+      }
     }
   }
 
@@ -223,6 +305,12 @@ class MidiControllerManager(private val context: Context) {
       val current = _discoveredBleDevices.value
       if (current.none { it.address == address }) {
         _discoveredBleDevices.value = current + candidate
+      }
+
+      if (autoReconnectEnabled && savedBleAddress?.equals(address, ignoreCase = true) == true &&
+        !isSavedBleCurrentlyConnected()
+      ) {
+        attemptConnectBluetoothDevice(btDevice, name, address, fromAutoReconnect = true)
       }
     }
 
@@ -252,6 +340,15 @@ class MidiControllerManager(private val context: Context) {
         manager.registerDeviceCallback(deviceCallback, mainHandler)
       }
       refreshDevices()
+    }
+    runCatching {
+      val filter = IntentFilter(BluetoothAdapter.ACTION_STATE_CHANGED)
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        context.registerReceiver(btStateReceiver, filter, Context.RECEIVER_EXPORTED)
+      } else {
+        @Suppress("DEPRECATION")
+        context.registerReceiver(btStateReceiver, filter)
+      }
     }
   }
 
@@ -324,26 +421,327 @@ class MidiControllerManager(private val context: Context) {
 
   @SuppressLint("MissingPermission")
   fun connectBleDevice(address: String) {
-    val manager = midiManager ?: return
     val candidate = _discoveredBleDevices.value.firstOrNull { it.address == address } ?: return
     stopBleScan()
-    _bleStatusMessage.value = "Connecting to ${candidate.name}..."
+    attemptConnectBluetoothDevice(candidate.device, candidate.name, candidate.address, fromAutoReconnect = false)
+  }
+
+  fun configureAutoReconnect(
+    address: String?,
+    name: String?,
+    enabled: Boolean
+  ) {
+    val cleanAddress = address?.trim()?.takeIf { it.isNotEmpty() }
+    val cleanName = name?.trim()?.takeIf { it.isNotEmpty() }
+    val configChanged = cleanAddress != savedBleAddress ||
+      cleanName != savedBleName ||
+      enabled != autoReconnectEnabled
+    savedBleAddress = cleanAddress
+    savedBleName = cleanName
+    autoReconnectEnabled = enabled
+
+    if (cleanAddress == null) {
+      autoReconnectJob?.cancel()
+      autoReconnectJob = null
+      cancelAutoReconnectScanOnly()
+      _bleReconnectStatus.value = BleReconnectStatus(
+        savedAddress = null,
+        savedName = null,
+        autoReconnectEnabled = enabled,
+        phase = BleReconnectPhase.IDLE,
+        detailMessage = null
+      )
+      return
+    }
+
+    if (isSavedBleCurrentlyConnected()) {
+      _bleReconnectStatus.value = BleReconnectStatus(
+        savedAddress = cleanAddress,
+        savedName = cleanName ?: cleanAddress,
+        autoReconnectEnabled = enabled,
+        phase = BleReconnectPhase.CONNECTED,
+        detailMessage = "Terhubung ke ${cleanName ?: cleanAddress}"
+      )
+      return
+    }
+
+    if (!enabled) {
+      autoReconnectJob?.cancel()
+      autoReconnectJob = null
+      cancelAutoReconnectScanOnly()
+      _bleReconnectStatus.value = BleReconnectStatus(
+        savedAddress = cleanAddress,
+        savedName = cleanName ?: cleanAddress,
+        autoReconnectEnabled = false,
+        phase = BleReconnectPhase.IDLE,
+        detailMessage = "Auto-reconnect nonaktif untuk ${cleanName ?: cleanAddress}"
+      )
+      return
+    }
+
+    if (configChanged || autoReconnectJob?.isActive != true) {
+      scheduleAutoReconnect(resetAttempts = configChanged)
+    }
+  }
+
+  fun triggerAutoReconnectNow() {
+    if (savedBleAddress.isNullOrBlank()) return
+    autoReconnectEnabled = true
+    scheduleAutoReconnect(resetAttempts = true)
+  }
+
+  fun forgetSavedBleDevice() {
+    savedBleAddress = null
+    savedBleName = null
+    autoReconnectJob?.cancel()
+    autoReconnectJob = null
+    cancelAutoReconnectScanOnly()
+    _bleReconnectStatus.value = BleReconnectStatus(
+      savedAddress = null,
+      savedName = null,
+      autoReconnectEnabled = autoReconnectEnabled,
+      phase = BleReconnectPhase.IDLE,
+      detailMessage = null
+    )
+  }
+
+  private fun isSavedBleCurrentlyConnected(): Boolean {
+    val target = savedBleAddress ?: return false
+    if (openedBleDeviceAddresses.values.any { it.first.equals(target, ignoreCase = true) }) {
+      return true
+    }
+    return false
+  }
+
+  @SuppressLint("MissingPermission")
+  private fun scheduleAutoReconnect(resetAttempts: Boolean) {
+    val targetAddr = savedBleAddress ?: return
+    val targetLabel = savedBleName ?: targetAddr
+    if (!autoReconnectEnabled || isSavedBleCurrentlyConnected()) return
+
+    if (resetAttempts) {
+      autoReconnectJob?.cancel()
+    } else if (autoReconnectJob?.isActive == true) {
+      return
+    }
+
+    autoReconnectJob = scope.launch {
+      var attempt = 0
+      while (attempt < BleReconnectBackoffMath.MAX_ATTEMPTS &&
+        autoReconnectEnabled &&
+        savedBleAddress?.equals(targetAddr, ignoreCase = true) == true &&
+        !isSavedBleCurrentlyConnected()
+      ) {
+        val btManager = context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
+        val adapter = btManager?.adapter
+        if (adapter == null) {
+          _bleReconnectStatus.value = BleReconnectStatus(
+            savedAddress = targetAddr,
+            savedName = targetLabel,
+            autoReconnectEnabled = autoReconnectEnabled,
+            phase = BleReconnectPhase.WAITING_BLUETOOTH,
+            attempt = attempt,
+            detailMessage = "Adaptor Bluetooth tidak tersedia"
+          )
+          return@launch
+        }
+        if (!adapter.isEnabled) {
+          _bleReconnectStatus.value = BleReconnectStatus(
+            savedAddress = targetAddr,
+            savedName = targetLabel,
+            autoReconnectEnabled = autoReconnectEnabled,
+            phase = BleReconnectPhase.WAITING_BLUETOOTH,
+            attempt = attempt,
+            detailMessage = "Bluetooth mati — akan sambung ulang saat Bluetooth ON"
+          )
+          return@launch
+        }
+
+        attempt++
+        // 1) Try bonded/cached remote BluetoothDevice directly first
+        val directDevice = runCatching {
+          val bonded = adapter.bondedDevices?.firstOrNull { it.address.equals(targetAddr, ignoreCase = true) }
+          bonded ?: adapter.getRemoteDevice(targetAddr)
+        }.getOrNull()
+
+        var foundViaScan = false
+        if (directDevice != null && attempt == 1) {
+          _bleReconnectStatus.value = BleReconnectStatus(
+            savedAddress = targetAddr,
+            savedName = targetLabel,
+            autoReconnectEnabled = true,
+            phase = BleReconnectPhase.CONNECTING,
+            attempt = attempt,
+            detailMessage = "Menghubungkan ulang $targetLabel (#$attempt)..."
+          )
+          attemptConnectBluetoothDevice(directDevice, targetLabel, targetAddr, fromAutoReconnect = true)
+          delay(2_200L)
+          if (isSavedBleCurrentlyConnected()) return@launch
+        }
+
+        // 2) Scan for matching BLE MIDI device address when device powers on / advertises
+        val scanner = adapter.bluetoothLeScanner
+        if (scanner != null && !isSavedBleCurrentlyConnected()) {
+          _bleReconnectStatus.value = BleReconnectStatus(
+            savedAddress = targetAddr,
+            savedName = targetLabel,
+            autoReconnectEnabled = true,
+            phase = BleReconnectPhase.SCANNING,
+            attempt = attempt,
+            detailMessage = "Mencari $targetLabel di BLE MIDI (#$attempt/${BleReconnectBackoffMath.MAX_ATTEMPTS})..."
+          )
+          val seenDevice = scanOnceForTargetAddress(scanner, targetAddr, RECONNECT_SCAN_WINDOW_MS)
+          if (seenDevice != null) {
+            foundViaScan = true
+            _bleReconnectStatus.value = BleReconnectStatus(
+              savedAddress = targetAddr,
+              savedName = targetLabel,
+              autoReconnectEnabled = true,
+              phase = BleReconnectPhase.CONNECTING,
+              attempt = attempt,
+              detailMessage = "$targetLabel ditemukan, menghubungkan..."
+            )
+            attemptConnectBluetoothDevice(seenDevice, targetLabel, targetAddr, fromAutoReconnect = true)
+            delay(2_500L)
+            if (isSavedBleCurrentlyConnected()) return@launch
+          }
+        }
+
+        if (attempt >= BleReconnectBackoffMath.MAX_ATTEMPTS) {
+          _bleReconnectStatus.value = BleReconnectStatus(
+            savedAddress = targetAddr,
+            savedName = targetLabel,
+            autoReconnectEnabled = true,
+            phase = BleReconnectPhase.EXHAUSTED,
+            attempt = attempt,
+            detailMessage = "$targetLabel belum merespons. Ketuk Sambung Ulang saat perangkat menyala."
+          )
+          return@launch
+        }
+
+        val backoffMs = BleReconnectBackoffMath.computeDelayMs(if (foundViaScan) attempt - 1 else attempt)
+        _bleReconnectStatus.value = BleReconnectStatus(
+          savedAddress = targetAddr,
+          savedName = targetLabel,
+          autoReconnectEnabled = true,
+          phase = BleReconnectPhase.WAITING_BACKOFF,
+          attempt = attempt,
+          nextRetryDelayMs = backoffMs,
+          detailMessage = "Coba ulang $targetLabel dalam ${backoffMs / 1000L} dtk (#$attempt/${BleReconnectBackoffMath.MAX_ATTEMPTS})"
+        )
+        delay(backoffMs)
+      }
+    }
+  }
+
+  @SuppressLint("MissingPermission")
+  private suspend fun scanOnceForTargetAddress(
+    scanner: BluetoothLeScanner,
+    targetAddress: String,
+    windowMs: Long
+  ): BluetoothDevice? {
+    var matchedDevice: BluetoothDevice? = null
+    val cb = object : ScanCallback() {
+      override fun onScanResult(callbackType: Int, result: ScanResult) {
+        val dev = result.device ?: return
+        val addr = dev.address ?: return
+        val name = runCatching { dev.name }.getOrNull()?.takeIf { it.isNotBlank() }
+          ?: result.scanRecord?.deviceName?.takeIf { it.isNotBlank() }
+          ?: "BLE MIDI ($addr)"
+        val candidate = BleMidiCandidate(name = name, address = addr, device = dev)
+        val cur = _discoveredBleDevices.value
+        if (cur.none { it.address == addr }) {
+          _discoveredBleDevices.value = cur + candidate
+        }
+        if (addr.equals(targetAddress, ignoreCase = true)) {
+          matchedDevice = dev
+        }
+      }
+    }
+    reconnectScanCallback = cb
+    val started = runCatching {
+      val filters = listOf(ScanFilter.Builder().setServiceUuid(BLE_MIDI_SERVICE_UUID).build())
+      val settings = ScanSettings.Builder().setScanMode(ScanSettings.SCAN_MODE_LOW_POWER).build()
+      scanner.startScan(filters, settings, cb)
+      true
+    }.getOrDefault(false)
+
+    if (!started) {
+      reconnectScanCallback = null
+      return null
+    }
+
+    val startAt = System.currentTimeMillis()
+    while (matchedDevice == null && (System.currentTimeMillis() - startAt) < windowMs) {
+      delay(250L)
+    }
+    runCatching { scanner.stopScan(cb) }
+    if (reconnectScanCallback === cb) {
+      reconnectScanCallback = null
+    }
+    return matchedDevice
+  }
+
+  @SuppressLint("MissingPermission")
+  private fun cancelAutoReconnectScanOnly() {
+    val cb = reconnectScanCallback ?: return
+    reconnectScanCallback = null
+    val btManager = context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
+    runCatching { btManager?.adapter?.bluetoothLeScanner?.stopScan(cb) }
+  }
+
+  @SuppressLint("MissingPermission")
+  private fun attemptConnectBluetoothDevice(
+    btDevice: BluetoothDevice,
+    displayName: String,
+    address: String,
+    fromAutoReconnect: Boolean
+  ) {
+    val manager = midiManager ?: return
+    if (!fromAutoReconnect) {
+      _bleStatusMessage.value = "Connecting to $displayName..."
+      _bleReconnectStatus.value = _bleReconnectStatus.value.copy(
+        savedAddress = address,
+        savedName = displayName,
+        phase = BleReconnectPhase.CONNECTING,
+        detailMessage = "Menghubungkan ke $displayName..."
+      )
+    }
     runCatching {
       manager.openBluetoothDevice(
-        candidate.device,
+        btDevice,
         { device ->
           if (device != null) {
+            openedBleDeviceAddresses[device.info.id] = address to displayName
+            savedBleAddress = address
+            savedBleName = displayName
             handleOpenedDevice(device)
             publishDevices()
-            _bleStatusMessage.value = "Connected BLE MIDI: ${candidate.name}"
-          } else {
-            _bleStatusMessage.value = "Failed to open BLE MIDI: ${candidate.name}"
+            onBleDeviceConnected?.invoke(address, displayName)
+            _bleStatusMessage.value = "Connected BLE MIDI: $displayName"
+            _bleReconnectStatus.value = BleReconnectStatus(
+              savedAddress = address,
+              savedName = displayName,
+              autoReconnectEnabled = autoReconnectEnabled,
+              phase = BleReconnectPhase.CONNECTED,
+              attempt = 0,
+              detailMessage = "Terhubung ke $displayName"
+            )
+          } else if (!fromAutoReconnect) {
+            _bleStatusMessage.value = "Failed to open BLE MIDI: $displayName"
           }
         },
         mainHandler
       )
     }.onFailure { err ->
-      _bleStatusMessage.value = err.localizedMessage ?: "Bluetooth connect permission missing"
+      if (!fromAutoReconnect) {
+        _bleStatusMessage.value = err.localizedMessage ?: "Bluetooth connect permission missing"
+      } else {
+        _bleReconnectStatus.value = _bleReconnectStatus.value.copy(
+          phase = BleReconnectPhase.WAITING_BACKOFF,
+          detailMessage = err.localizedMessage ?: "Izin Bluetooth diperlukan untuk auto-reconnect"
+        )
+      }
     }
   }
 
@@ -401,6 +799,7 @@ class MidiControllerManager(private val context: Context) {
   }
 
   private fun closeMidiDevice(deviceId: Int) {
+    openedBleDeviceAddresses.remove(deviceId)
     openedPorts.remove(deviceId)?.forEach { (port, receiver) ->
       runCatching { port.disconnect(receiver) }
       runCatching { port.close() }
@@ -444,7 +843,11 @@ class MidiControllerManager(private val context: Context) {
   }
 
   fun release() {
+    autoReconnectJob?.cancel()
+    autoReconnectJob = null
+    cancelAutoReconnectScanOnly()
     stopBleScan()
+    runCatching { context.unregisterReceiver(btStateReceiver) }
     midiManager?.let { manager ->
       runCatching { manager.unregisterDeviceCallback(deviceCallback) }
     }

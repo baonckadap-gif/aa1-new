@@ -1,6 +1,10 @@
 package com.example.audio
 
 import android.content.Context
+import android.media.MediaCodec
+import android.media.MediaCodecInfo
+import android.media.MediaFormat
+import android.media.MediaMuxer
 import android.net.Uri
 import android.os.SystemClock
 import androidx.documentfile.provider.DocumentFile
@@ -8,6 +12,7 @@ import androidx.media3.common.C
 import androidx.media3.common.audio.AudioProcessor
 import androidx.media3.common.audio.BaseAudioProcessor
 import androidx.media3.common.util.UnstableApi
+import com.example.domain.model.MasterRecordFormat
 import com.example.domain.model.MasterRecordSampleRate
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -245,12 +250,129 @@ data class RecordedMasterOutput(
   val displayName: String,
   val fileName: String,
   val durationMs: Long,
-  val sizeBytes: Long
+  val sizeBytes: Long,
+  val format: MasterRecordFormat = MasterRecordFormat.WAV
 )
 
 /**
- * Records the internal polyphonic master output mix (from ExoPlayer AudioProcessor sinks,
- * never microphone) into a 16-bit 44.1kHz/48kHz stereo WAV file.
+ * Lightweight MediaCodec AAC-LC -> MediaMuxer (.m4a) streaming encoder with no third-party libraries.
+ */
+internal class AacM4aStreamEncoder(
+  private val outputFile: File,
+  private val sampleRateHz: Int,
+  private val channelCount: Int = 2,
+  private val bitRate: Int = 192_000
+) {
+  private val codec: MediaCodec
+  private val muxer: MediaMuxer
+  private val bufferInfo = MediaCodec.BufferInfo()
+  private var trackIndex = -1
+  private var muxerStarted = false
+  private var totalFramesWritten = 0L
+  private var finished = false
+
+  init {
+    val format = MediaFormat.createAudioFormat(MediaFormat.MIMETYPE_AUDIO_AAC, sampleRateHz, channelCount).apply {
+      setInteger(MediaFormat.KEY_AAC_PROFILE, MediaCodecInfo.CodecProfileLevel.AACObjectLC)
+      setInteger(MediaFormat.KEY_BIT_RATE, bitRate)
+      setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, 16_384)
+    }
+    codec = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_AUDIO_AAC)
+    codec.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+    codec.start()
+    muxer = MediaMuxer(outputFile.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+  }
+
+  @Synchronized
+  fun writePcm16(pcmBytes: ByteArray, length: Int = pcmBytes.size) {
+    if (finished || length <= 0) return
+    val bytesPerFrame = channelCount * 2
+    var offset = 0
+    while (offset < length) {
+      drainOutput(endOfStream = false)
+      val inputIndex = codec.dequeueInputBuffer(10_000L)
+      if (inputIndex < 0) continue
+      val inputBuf = codec.getInputBuffer(inputIndex) ?: continue
+      inputBuf.clear()
+      val chunkLen = minOf(length - offset, inputBuf.capacity())
+      inputBuf.put(pcmBytes, offset, chunkLen)
+      val ptsUs = (totalFramesWritten * 1_000_000L) / sampleRateHz.toLong()
+      codec.queueInputBuffer(inputIndex, 0, chunkLen, ptsUs, 0)
+      totalFramesWritten += (chunkLen / bytesPerFrame).toLong()
+      offset += chunkLen
+    }
+    drainOutput(endOfStream = false)
+  }
+
+  @Synchronized
+  fun finish() {
+    if (finished) return
+    finished = true
+    runCatching {
+      val inputIndex = codec.dequeueInputBuffer(10_000L)
+      if (inputIndex >= 0) {
+        val ptsUs = (totalFramesWritten * 1_000_000L) / sampleRateHz.toLong()
+        codec.queueInputBuffer(inputIndex, 0, 0, ptsUs, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+      }
+      drainOutput(endOfStream = true)
+    }
+    releaseResources()
+  }
+
+  @Synchronized
+  fun abort() {
+    if (finished) return
+    finished = true
+    releaseResources()
+  }
+
+  private fun releaseResources() {
+    runCatching { codec.stop() }
+    runCatching { codec.release() }
+    if (muxerStarted) {
+      runCatching { muxer.stop() }
+    }
+    runCatching { muxer.release() }
+  }
+
+  private fun drainOutput(endOfStream: Boolean) {
+    val timeoutUs = if (endOfStream) 10_000L else 0L
+    while (true) {
+      val outIndex = codec.dequeueOutputBuffer(bufferInfo, timeoutUs)
+      when {
+        outIndex == MediaCodec.INFO_TRY_AGAIN_LATER -> {
+          if (!endOfStream) return
+        }
+        outIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
+          if (!muxerStarted) {
+            trackIndex = muxer.addTrack(codec.outputFormat)
+            muxer.start()
+            muxerStarted = true
+          }
+        }
+        outIndex >= 0 -> {
+          val outBuf = codec.getOutputBuffer(outIndex)
+          if ((bufferInfo.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0) {
+            bufferInfo.size = 0
+          }
+          if (outBuf != null && bufferInfo.size > 0 && muxerStarted && trackIndex >= 0) {
+            outBuf.position(bufferInfo.offset)
+            outBuf.limit(bufferInfo.offset + bufferInfo.size)
+            muxer.writeSampleData(trackIndex, outBuf, bufferInfo)
+          }
+          val sawEos = (bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0
+          codec.releaseOutputBuffer(outIndex, false)
+          if (sawEos) return
+        }
+        else -> if (!endOfStream) return
+      }
+    }
+  }
+}
+
+/**
+ * Records the internal polyphonic master output mix (from MasterAudioMixerBus or ExoPlayer AudioProcessor sinks,
+ * never microphone) into a 16-bit 44.1kHz/48kHz stereo WAV or AAC (.m4a) file.
  */
 class MasterOutputRecorder(private val context: Context) {
 
@@ -272,8 +394,12 @@ class MasterOutputRecorder(private val context: Context) {
   @Volatile
   private var targetSampleRateHz = MasterRecordSampleRate.RATE_44100.hz
 
+  @Volatile
+  private var targetFormat = MasterRecordFormat.WAV
+
   private var mixJob: Job? = null
-  private var tempWavFile: File? = null
+  private var tempOutputFile: File? = null
+  private var activeAacEncoder: AacM4aStreamEncoder? = null
   private var startedElapsedMs = 0L
   private var targetSafFolderUri: String? = null
 
@@ -292,23 +418,31 @@ class MasterOutputRecorder(private val context: Context) {
 
   fun startRecording(
     sampleRateHz: Int = MasterRecordSampleRate.RATE_44100.hz,
-    safFolderUri: String? = null
+    safFolderUri: String? = null,
+    format: MasterRecordFormat = MasterRecordFormat.WAV
   ): Result<Unit> {
     if (activeFlag) return Result.success(Unit)
     return runCatching {
       slotBuffers.clear()
       val chosenRate = if (sampleRateHz == 48000) 48000 else 44100
       targetSampleRateHz = chosenRate
+      targetFormat = format
       targetSafFolderUri = safFolderUri
 
       val dir = File(context.filesDir, "master_recordings").apply { mkdirs() }
       val stamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
-      val outFile = File(dir, "MasterMix_$stamp.wav")
-      tempWavFile = outFile
+      val outFile = File(dir, "MasterMix_$stamp.${format.extension}")
+      tempOutputFile = outFile
 
-      FileOutputStream(outFile).use { fos ->
-        fos.write(MasterMixPcmMath.createWavHeader(0, chosenRate, channels = 2, bitsPerSample = 16))
+      val aacEncoder = if (format == MasterRecordFormat.M4A) {
+        AacM4aStreamEncoder(outputFile = outFile, sampleRateHz = chosenRate, channelCount = 2)
+      } else {
+        FileOutputStream(outFile).use { fos ->
+          fos.write(MasterMixPcmMath.createWavHeader(0, chosenRate, channels = 2, bitsPerSample = 16))
+        }
+        null
       }
+      activeAacEncoder = aacEncoder
 
       startedElapsedMs = SystemClock.elapsedRealtime()
       activeFlag = true
@@ -325,7 +459,8 @@ class MasterOutputRecorder(private val context: Context) {
       mixJob = scope.launch {
         val pcmChunkBytes = ByteArray(samplesPerTick * 2)
         var lastNotifSec = -1L
-        FileOutputStream(outFile, true).use { fos ->
+        val wavStream = if (aacEncoder == null) FileOutputStream(outFile, true) else null
+        try {
           while (isActive && activeFlag) {
             val slotChunks = ArrayList<FloatArray>()
             val iterator = slotBuffers.entries.iterator()
@@ -338,7 +473,11 @@ class MasterOutputRecorder(private val context: Context) {
             }
 
             val rms = MasterMixPcmMath.mixAndSoftLimitToPcm16(slotChunks, framesPerTick, pcmChunkBytes)
-            fos.write(pcmChunkBytes)
+            if (aacEncoder != null) {
+              aacEncoder.writePcm16(pcmChunkBytes, pcmChunkBytes.size)
+            } else {
+              wavStream?.write(pcmChunkBytes)
+            }
 
             val elapsed = (SystemClock.elapsedRealtime() - startedElapsedMs).coerceAtLeast(0L)
             _level.value = rms
@@ -357,7 +496,9 @@ class MasterOutputRecorder(private val context: Context) {
             }
             delay(tickMs)
           }
-          fos.flush()
+          wavStream?.flush()
+        } finally {
+          runCatching { wavStream?.close() }
         }
       }
     }
@@ -370,27 +511,34 @@ class MasterOutputRecorder(private val context: Context) {
     mixJob = null
     slotBuffers.clear()
 
+    activeAacEncoder?.finish()
+    activeAacEncoder = null
+
     val durationMs = (_elapsedMs.value).coerceAtLeast(0L)
     _isRecording.value = false
     _level.value = 0f
     _elapsedMs.value = 0L
     SoundPadPlaybackService.updateMasterRecordingNotification(context, isRecording = false, elapsedLabel = null)
 
-    val wavFile = tempWavFile ?: return@withContext null
-    tempWavFile = null
+    val outFile = tempOutputFile ?: return@withContext null
+    tempOutputFile = null
+    val recordedFormat = targetFormat
 
-    if (!wavFile.exists() || wavFile.length() <= 44L) {
-      wavFile.delete()
+    val minValidSize = if (recordedFormat == MasterRecordFormat.WAV) 44L else 64L
+    if (!outFile.exists() || outFile.length() <= minValidSize) {
+      outFile.delete()
       return@withContext null
     }
 
-    val pcmDataBytes = (wavFile.length() - 44L).toInt().coerceAtLeast(0)
-    RandomAccessFile(wavFile, "rw").use { raf ->
-      raf.seek(0L)
-      raf.write(MasterMixPcmMath.createWavHeader(pcmDataBytes, targetSampleRateHz, channels = 2, bitsPerSample = 16))
+    if (recordedFormat == MasterRecordFormat.WAV) {
+      val pcmDataBytes = (outFile.length() - 44L).toInt().coerceAtLeast(0)
+      RandomAccessFile(outFile, "rw").use { raf ->
+        raf.seek(0L)
+        raf.write(MasterMixPcmMath.createWavHeader(pcmDataBytes, targetSampleRateHz, channels = 2, bitsPerSample = 16))
+      }
     }
 
-    val fileName = wavFile.name
+    val fileName = outFile.name
     val cleanDisplay = fileName.substringBeforeLast('.')
 
     // Copy to user-selected SAF folder if granted
@@ -398,10 +546,10 @@ class MasterOutputRecorder(private val context: Context) {
     if (!folderUriStr.isNullOrBlank()) {
       val safDocUri = runCatching {
         val tree = DocumentFile.fromTreeUri(context, Uri.parse(folderUriStr))
-        val targetDoc = tree?.createFile("audio/wav", fileName)
+        val targetDoc = tree?.createFile(recordedFormat.mimeType, fileName)
         if (targetDoc != null) {
           context.contentResolver.openOutputStream(targetDoc.uri)?.use { out ->
-            wavFile.inputStream().use { input -> input.copyTo(out) }
+            outFile.inputStream().use { input -> input.copyTo(out) }
           }
           targetDoc.uri
         } else {
@@ -410,24 +558,26 @@ class MasterOutputRecorder(private val context: Context) {
       }.getOrNull()
 
       if (safDocUri != null) {
-        val size = wavFile.length()
-        wavFile.delete()
+        val size = outFile.length()
+        outFile.delete()
         return@withContext RecordedMasterOutput(
           uriString = safDocUri.toString(),
           displayName = cleanDisplay,
           fileName = fileName,
           durationMs = durationMs,
-          sizeBytes = size
+          sizeBytes = size,
+          format = recordedFormat
         )
       }
     }
 
     return@withContext RecordedMasterOutput(
-      uriString = Uri.fromFile(wavFile).toString(),
+      uriString = Uri.fromFile(outFile).toString(),
       displayName = cleanDisplay,
       fileName = fileName,
       durationMs = durationMs,
-      sizeBytes = wavFile.length()
+      sizeBytes = outFile.length(),
+      format = recordedFormat
     )
   }
 
@@ -435,12 +585,14 @@ class MasterOutputRecorder(private val context: Context) {
     activeFlag = false
     mixJob?.cancel()
     mixJob = null
+    activeAacEncoder?.abort()
+    activeAacEncoder = null
     slotBuffers.clear()
     _isRecording.value = false
     _level.value = 0f
     _elapsedMs.value = 0L
     SoundPadPlaybackService.updateMasterRecordingNotification(context, isRecording = false, elapsedLabel = null)
-    tempWavFile?.delete()
-    tempWavFile = null
+    tempOutputFile?.delete()
+    tempOutputFile = null
   }
 }

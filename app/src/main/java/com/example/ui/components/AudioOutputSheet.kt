@@ -27,9 +27,12 @@ import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Headphones
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Speaker
+import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Usb
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -55,6 +58,7 @@ import com.example.R
 import com.example.domain.model.AudioOutputDeviceUi
 import com.example.domain.model.EqPreset
 import com.example.domain.model.GlobalSettings
+import com.example.domain.model.LatencyTestReport
 import com.example.ui.theme.SoundPadTheme
 import kotlin.math.roundToInt
 
@@ -66,9 +70,15 @@ fun AudioOutputSheet(
   selectedMainDeviceId: Int?,
   selectedCueDeviceId: Int?,
   isNormalizingAll: Boolean,
+  hasPendingBufferRebuild: Boolean = false,
+  isRunningLatencyTest: Boolean = false,
+  latencyTestReport: LatencyTestReport? = null,
   onRefreshDevices: () -> Unit,
   onSelectMainDevice: (Int?) -> Unit,
   onSelectCueDevice: (Int?) -> Unit,
+  onCueVolumeChange: (Float) -> Unit = {},
+  onAudioBufferSizeChange: (Int) -> Unit = {},
+  onRunLatencyTest: () -> Unit = {},
   onAudioEffectsToggle: (Boolean) -> Unit = {},
   onMasterLimiterToggle: (Boolean) -> Unit,
   onDuckingToggle: (Boolean) -> Unit,
@@ -321,6 +331,143 @@ fun AudioOutputSheet(
         )
       }
 
+      // Audio Buffer Size & Latency Test
+      item {
+        Surface(
+          shape = RoundedCornerShape(12.dp),
+          color = MaterialTheme.colorScheme.surfaceContainer,
+          border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+        ) {
+          Column(
+            modifier = Modifier
+              .fillMaxWidth()
+              .padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+          ) {
+            Row(
+              modifier = Modifier.fillMaxWidth(),
+              horizontalArrangement = Arrangement.SpaceBetween,
+              verticalAlignment = Alignment.CenterVertically
+            ) {
+              Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+              ) {
+                Icon(Icons.Filled.Speed, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                Text(
+                  text = stringResource(R.string.audio_buffer_section_title),
+                  style = MaterialTheme.typography.labelMedium,
+                  color = MaterialTheme.colorScheme.primary
+                )
+              }
+              Text(
+                text = "${settings.audioBufferSizeMs} ms",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.secondary
+              )
+            }
+
+            Row(
+              modifier = Modifier.fillMaxWidth(),
+              horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+              Text(
+                text = stringResource(R.string.audio_buffer_slider_label),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+              )
+              Text(
+                text = "20–500 ms",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+              )
+            }
+
+            Slider(
+              value = settings.audioBufferSizeMs.toFloat().coerceIn(20f, 500f),
+              onValueChange = { value ->
+                val snapped = ((value / 10f).roundToInt() * 10).coerceIn(20, 500)
+                onAudioBufferSizeChange(snapped)
+              },
+              valueRange = 20f..500f,
+              modifier = Modifier.testTag("audio_buffer_size_slider")
+            )
+
+            Text(
+              text = stringResource(R.string.audio_buffer_hint),
+              style = MaterialTheme.typography.bodySmall,
+              color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            if (hasPendingBufferRebuild) {
+              Surface(
+                shape = RoundedCornerShape(8.dp),
+                color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.65f)
+              ) {
+                Text(
+                  text = stringResource(R.string.audio_buffer_pending_rebuild_warning),
+                  style = MaterialTheme.typography.labelSmall,
+                  color = MaterialTheme.colorScheme.onSecondaryContainer,
+                  modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                )
+              }
+            }
+
+            Row(
+              modifier = Modifier.fillMaxWidth(),
+              horizontalArrangement = Arrangement.SpaceBetween,
+              verticalAlignment = Alignment.CenterVertically
+            ) {
+              FilledTonalButton(
+                enabled = !isRunningLatencyTest,
+                onClick = onRunLatencyTest,
+                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp),
+                modifier = Modifier
+                  .minimumInteractiveComponentSize()
+                  .testTag("latency_test_button")
+              ) {
+                if (isRunningLatencyTest) {
+                  CircularProgressIndicator(
+                    modifier = Modifier.size(16.dp),
+                    strokeWidth = 2.dp
+                  )
+                  Spacer(modifier = Modifier.size(8.dp))
+                  Text(stringResource(R.string.latency_test_running))
+                } else {
+                  Icon(
+                    imageVector = Icons.Filled.Speed,
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp)
+                  )
+                  Spacer(modifier = Modifier.size(6.dp))
+                  Text(stringResource(R.string.latency_test_button))
+                }
+              }
+
+              if (latencyTestReport != null) {
+                Surface(
+                  shape = RoundedCornerShape(8.dp),
+                  color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.65f)
+                ) {
+                  Text(
+                    text = stringResource(
+                      R.string.latency_test_result,
+                      latencyTestReport.measuredReadyMs,
+                      latencyTestReport.configuredBufferMs
+                    ),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                    modifier = Modifier
+                      .padding(horizontal = 10.dp, vertical = 6.dp)
+                      .testTag("latency_test_result_label")
+                  )
+                }
+              }
+            }
+          }
+        }
+      }
+
       // Main PA Output Device
       item {
         Text(
@@ -352,7 +499,7 @@ fun AudioOutputSheet(
         )
       }
 
-      // Cue / Headphone Preview Device
+      // Cue / Headphone Preview Device & Separate Cue Volume
       item {
         Spacer(modifier = Modifier.height(4.dp))
         Text(
@@ -360,6 +507,49 @@ fun AudioOutputSheet(
           style = MaterialTheme.typography.labelMedium,
           color = MaterialTheme.colorScheme.secondary
         )
+      }
+
+      item {
+        Surface(
+          shape = RoundedCornerShape(12.dp),
+          color = MaterialTheme.colorScheme.surfaceContainer,
+          border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+        ) {
+          Column(
+            modifier = Modifier
+              .fillMaxWidth()
+              .padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
+          ) {
+            Row(
+              modifier = Modifier.fillMaxWidth(),
+              horizontalArrangement = Arrangement.SpaceBetween,
+              verticalAlignment = Alignment.CenterVertically
+            ) {
+              Text(
+                text = stringResource(R.string.cue_volume_title),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.secondary
+              )
+              Text(
+                text = "${(settings.cueVolume * 100).roundToInt()}%",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.secondary
+              )
+            }
+            Slider(
+              value = settings.cueVolume.coerceIn(0f, 1f),
+              onValueChange = onCueVolumeChange,
+              valueRange = 0f..1f,
+              modifier = Modifier.testTag("cue_volume_slider")
+            )
+            Text(
+              text = stringResource(R.string.cue_volume_subtitle),
+              style = MaterialTheme.typography.bodySmall,
+              color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+          }
+        }
       }
 
       item {

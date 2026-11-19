@@ -42,6 +42,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.R
+import com.example.domain.model.MasterRecordFormat
 import com.example.domain.model.MasterRecordSampleRate
 import com.example.domain.model.MasterRecordState
 import com.example.ui.theme.SoundPadTheme
@@ -50,6 +51,7 @@ import com.example.ui.theme.SoundPadTheme
 @Composable
 fun MasterRecordSheet(
   recordState: MasterRecordState,
+  onSelectFormat: (MasterRecordFormat) -> Unit = {},
   onSelectSampleRate: (MasterRecordSampleRate) -> Unit,
   onPickOutputFolder: () -> Unit,
   onToggleAutoAddPad: (Boolean) -> Unit,
@@ -173,17 +175,38 @@ fun MasterRecordSheet(
           )
 
           Text(
-            text = "Format: WAV 16-bit PCM Stereo · ${if (recordState.sampleRateHz == 48000) "48.0 kHz" else "44.1 kHz"}",
+            text = "Format: ${recordState.format.detailLabel} · ${if (recordState.sampleRateHz == 48000) "48.0 kHz" else "44.1 kHz"}",
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
           )
         }
       }
 
+      // Output Format Chips (WAV vs M4A AAC)
+      Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text(
+          text = stringResource(R.string.master_rec_format_label),
+          style = MaterialTheme.typography.labelMedium,
+          color = MaterialTheme.colorScheme.onSurface
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+          MasterRecordFormat.entries.forEach { fmt ->
+            val selected = recordState.format == fmt
+            FilterChip(
+              selected = selected,
+              enabled = !recordState.isRecording,
+              onClick = { onSelectFormat(fmt) },
+              label = { Text(fmt.shortLabel) },
+              modifier = Modifier.testTag("master_rec_format_${fmt.extension}")
+            )
+          }
+        }
+      }
+
       // Sample Rate Chips
       Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Text(
-          text = "Sample Rate Output (WAV 16-bit)",
+          text = stringResource(R.string.master_rec_samplerate_label),
           style = MaterialTheme.typography.labelMedium,
           color = MaterialTheme.colorScheme.onSurface
         )
@@ -246,7 +269,7 @@ fun MasterRecordSheet(
 
       recordState.lastSavedName?.let { lastName ->
         Text(
-          text = "Rekaman terakhir: $lastName.wav",
+          text = "Rekaman terakhir: $lastName.${recordState.lastSavedExtension}",
           style = MaterialTheme.typography.labelSmall,
           color = extColors.ramEmerald
         )
@@ -266,7 +289,7 @@ fun MasterRecordSheet(
         ) {
           Icon(Icons.Filled.Stop, contentDescription = null)
           Spacer(modifier = Modifier.width(8.dp))
-          Text(stringResource(R.string.master_rec_stop))
+          Text(stringResource(R.string.master_rec_stop_format, recordState.format.shortLabel))
         }
       } else {
         Button(

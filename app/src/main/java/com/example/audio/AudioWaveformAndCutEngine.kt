@@ -10,13 +10,16 @@ import android.os.ParcelFileDescriptor
 import com.example.domain.model.WaveformData
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import java.io.ByteArrayOutputStream
+import java.io.BufferedOutputStream
 import java.io.File
+import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.OutputStream
+import java.io.RandomAccessFile
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import kotlin.math.abs
+import kotlin.math.min
 
 object AudioWaveformAndCutEngine {
 
@@ -318,6 +321,9 @@ object AudioWaveformAndCutEngine {
     }
   }
 
+  private const val WAV_STREAM_BUFFER_BYTES = 64 * 1024
+  private const val WAV_HEADER_SIZE_BYTES = 44
+
   suspend fun exportTrimmedToFile(
     context: Context,
     sourceUriString: String,
@@ -326,8 +332,23 @@ object AudioWaveformAndCutEngine {
     targetFile: File
   ): Result<Long> = withContext(Dispatchers.IO) {
     runCatching {
-      FileOutputStream(targetFile).use { out ->
-        decodeTrimmedToWavStream(context, Uri.parse(sourceUriString), trimStartMs, trimEndMs, out)
+      targetFile.parentFile?.mkdirs()
+      val cacheParent = context.cacheDir?.takeIf { it.exists() || it.mkdirs() } ?: targetFile.parentFile
+      val tempWavFile = File.createTempFile("wav_cut_", ".wav", cacheParent)
+      try {
+        val durationMs = decodeTrimmedToTempWavFile(
+          context = context,
+          sourceUri = Uri.parse(sourceUriString),
+          trimStartMs = trimStartMs,
+          trimEndMs = trimEndMs,
+          tempWavFile = tempWavFile
+        )
+        FileOutputStream(targetFile).use { out ->
+          copyFileToOutputStream(tempWavFile, out)
+        }
+        durationMs
+      } finally {
+        runCatching { tempWavFile.delete() }
       }
     }
   }
@@ -338,26 +359,55 @@ object AudioWaveformAndCutEngine {
     trimStartMs: Long,
     trimEndMs: Long,
     targetUri: Uri
+  ): Result<Long> = exportCutAudioToWav(
+    context = context,
+    sourceUriString = sourceUriString,
+    trimStartMs = trimStartMs,
+    trimEndMs = trimEndMs,
+    targetUri = targetUri
+  )
+
+  suspend fun exportCutAudioToWav(
+    context: Context,
+    sourceUriString: String,
+    trimStartMs: Long,
+    trimEndMs: Long,
+    targetUri: Uri
   ): Result<Long> = withContext(Dispatchers.IO) {
     runCatching {
-      val stream = context.contentResolver.openOutputStream(targetUri)
-        ?: error("Unable to open output stream for export")
-      stream.use { out ->
-        decodeTrimmedToWavStream(context, Uri.parse(sourceUriString), trimStartMs, trimEndMs, out)
+      val cacheDir = context.cacheDir?.apply { mkdirs() }
+      val tempWavFile = File.createTempFile("wav_cut_saf_", ".wav", cacheDir)
+      try {
+        val durationMs = decodeTrimmedToTempWavFile(
+          context = context,
+          sourceUri = Uri.parse(sourceUriString),
+          trimStartMs = trimStartMs,
+          trimEndMs = trimEndMs,
+          tempWavFile = tempWavFile
+        )
+        val stream = context.contentResolver.openOutputStream(targetUri)
+          ?: error("Unable to open output stream for export")
+        stream.use { out ->
+          copyFileToOutputStream(tempWavFile, out)
+        }
+        durationMs
+      } finally {
+        runCatching { tempWavFile.delete() }
       }
     }
   }
 
-  private fun decodeTrimmedToWavStream(
+  private fun decodeTrimmedToTempWavFile(
     context: Context,
     sourceUri: Uri,
     trimStartMs: Long,
     trimEndMs: Long,
-    output: OutputStream
+    tempWavFile: File
   ): Long {
     val extractor = MediaExtractor()
     var pfd: ParcelFileDescriptor? = null
     var codec: MediaCodec? = null
+    val wavWriter = StreamingWavWriter(tempWavFile)
 
     return try {
       pfd = setExtractorDataSource(context, extractor, sourceUri)
@@ -402,7 +452,7 @@ object AudioWaveformAndCutEngine {
       codec.configure(inputFormat, null, null, 0)
       codec.start()
 
-      val pcmOut = ByteArrayOutputStream()
+      wavWriter.begin()
       val info = MediaCodec.BufferInfo()
       var inputDone = false
       var outputDone = false
@@ -445,7 +495,7 @@ object AudioWaveformAndCutEngine {
               if (pts in startUs..endUs) {
                 outBuf.position(info.offset)
                 outBuf.limit(info.offset + info.size)
-                appendAsPcm16(outBuf, pcmEncoding, pcmOut)
+                wavWriter.writePcmBuffer(outBuf, pcmEncoding)
               }
             }
             codec.releaseOutputBuffer(outIdx, false)
@@ -456,19 +506,112 @@ object AudioWaveformAndCutEngine {
         }
       }
 
-      val pcmBytes = pcmOut.toByteArray()
-      val header = buildWavHeader(pcmBytes.size, sampleRate, channels)
-      output.write(header)
-      output.write(pcmBytes)
-      output.flush()
-
-      val bytesPerSec = sampleRate * channels * 2L
-      if (bytesPerSec > 0L) (pcmBytes.size * 1000L) / bytesPerSec else 0L
+      wavWriter.finish(sampleRate = sampleRate, channels = channels)
     } finally {
+      runCatching { wavWriter.closeQuietly() }
       runCatching { codec?.stop() }
       runCatching { codec?.release() }
       runCatching { extractor.release() }
       runCatching { pfd?.close() }
+    }
+  }
+
+  internal fun exportStreamingWavWithTempFile(
+    tempWavFile: File,
+    sampleRate: Int,
+    channels: Int,
+    destinationOutput: OutputStream,
+    streamProducer: (StreamingWavWriter) -> Unit
+  ): Long {
+    val writer = StreamingWavWriter(tempWavFile)
+    return try {
+      writer.begin()
+      streamProducer(writer)
+      val durationMs = writer.finish(sampleRate = sampleRate, channels = channels)
+      copyFileToOutputStream(tempWavFile, destinationOutput)
+      durationMs
+    } finally {
+      runCatching { writer.closeQuietly() }
+      runCatching { tempWavFile.delete() }
+    }
+  }
+
+  private fun copyFileToOutputStream(sourceFile: File, targetOutput: OutputStream) {
+    val copyBuffer = ByteArray(WAV_STREAM_BUFFER_BYTES)
+    FileInputStream(sourceFile).use { input ->
+      while (true) {
+        val read = input.read(copyBuffer)
+        if (read <= 0) break
+        targetOutput.write(copyBuffer, 0, read)
+      }
+    }
+    targetOutput.flush()
+  }
+
+  internal class StreamingWavWriter(private val file: File) {
+    private val scratchBuffer = ByteArray(WAV_STREAM_BUFFER_BYTES)
+    private var outputStream: BufferedOutputStream? = null
+    private var pcmDataBytes: Long = 0L
+    private var finalized = false
+
+    fun begin() {
+      val stream = BufferedOutputStream(FileOutputStream(file), WAV_STREAM_BUFFER_BYTES)
+      outputStream = stream
+      stream.write(ByteArray(WAV_HEADER_SIZE_BYTES))
+      pcmDataBytes = 0L
+      finalized = false
+    }
+
+    fun writePcmBuffer(buf: ByteBuffer, encoding: Int) {
+      val out = outputStream ?: error("StreamingWavWriter not started")
+      val dup = buf.duplicate().order(ByteOrder.LITTLE_ENDIAN)
+      if (encoding == AudioFormat.ENCODING_PCM_FLOAT) {
+        val floats = dup.asFloatBuffer()
+        val maxSamplesPerChunk = scratchBuffer.size / 2
+        while (floats.hasRemaining()) {
+          val samplesToRead = min(floats.remaining(), maxSamplesPerChunk)
+          var outIdx = 0
+          for (i in 0 until samplesToRead) {
+            val sample = (floats.get().coerceIn(-1f, 1f) * 32767f).toInt().toShort()
+            scratchBuffer[outIdx++] = (sample.toInt() and 0xFF).toByte()
+            scratchBuffer[outIdx++] = ((sample.toInt() ushr 8) and 0xFF).toByte()
+          }
+          out.write(scratchBuffer, 0, outIdx)
+          pcmDataBytes += outIdx.toLong()
+        }
+      } else {
+        while (dup.hasRemaining()) {
+          val chunkSize = min(dup.remaining(), scratchBuffer.size)
+          dup.get(scratchBuffer, 0, chunkSize)
+          out.write(scratchBuffer, 0, chunkSize)
+          pcmDataBytes += chunkSize.toLong()
+        }
+      }
+    }
+
+    fun finish(sampleRate: Int, channels: Int): Long {
+      val out = outputStream ?: error("StreamingWavWriter not started")
+      out.flush()
+      out.close()
+      outputStream = null
+
+      val safePcmSize = pcmDataBytes.coerceIn(0L, Int.MAX_VALUE.toLong() - 36L).toInt()
+      val header = buildWavHeader(safePcmSize, sampleRate, channels)
+      RandomAccessFile(file, "rw").use { raf ->
+        raf.seek(0L)
+        raf.write(header)
+      }
+      finalized = true
+
+      val bytesPerSec = sampleRate.toLong() * channels.toLong() * 2L
+      return if (bytesPerSec > 0L) (pcmDataBytes * 1000L) / bytesPerSec else 0L
+    }
+
+    fun closeQuietly() {
+      if (!finalized) {
+        runCatching { outputStream?.close() }
+        outputStream = null
+      }
     }
   }
 
@@ -517,26 +660,10 @@ object AudioWaveformAndCutEngine {
     return maxAmp
   }
 
-  private fun appendAsPcm16(buf: ByteBuffer, encoding: Int, out: ByteArrayOutputStream) {
-    val dup = buf.duplicate().order(ByteOrder.LITTLE_ENDIAN)
-    if (encoding == AudioFormat.ENCODING_PCM_FLOAT) {
-      val floats = dup.asFloatBuffer()
-      while (floats.hasRemaining()) {
-        val sample = (floats.get().coerceIn(-1f, 1f) * 32767f).toInt().toShort()
-        out.write(sample.toInt() and 0xFF)
-        out.write((sample.toInt() ushr 8) and 0xFF)
-      }
-    } else {
-      val chunk = ByteArray(dup.remaining())
-      dup.get(chunk)
-      out.write(chunk)
-    }
-  }
-
-  private fun buildWavHeader(pcmDataSize: Int, sampleRate: Int, channels: Int): ByteArray {
+  internal fun buildWavHeader(pcmDataSize: Int, sampleRate: Int, channels: Int): ByteArray {
     val byteRate = sampleRate * channels * 2
     val blockAlign = (channels * 2).toShort()
-    return ByteBuffer.allocate(44).order(ByteOrder.LITTLE_ENDIAN).apply {
+    return ByteBuffer.allocate(WAV_HEADER_SIZE_BYTES).order(ByteOrder.LITTLE_ENDIAN).apply {
       put("RIFF".toByteArray(Charsets.US_ASCII))
       putInt(36 + pcmDataSize)
       put("WAVE".toByteArray(Charsets.US_ASCII))

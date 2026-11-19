@@ -487,5 +487,49 @@ object PadGridSlotManager {
     return resolveBankSlotCollisions(inScope)
   }
 
+  fun resolveBankNamesAfterScan(
+    hasSubfolderBanks: Boolean,
+    scannedBankNames: Map<Int, String>,
+    existingBankNames: Map<Int, String>,
+    padBankKeys: Set<Int>,
+    previousSubfolderKeys: Set<Int>
+  ): Map<Int, String> {
+    val manualBankKeys = existingBankNames.keys.filterTo(mutableSetOf()) { it !in previousSubfolderKeys }
+    val activeBankKeys = scannedBankNames.keys + padBankKeys + manualBankKeys
+    return if (hasSubfolderBanks) {
+      val merged = scannedBankNames.toMutableMap()
+      existingBankNames.forEach { (k, v) ->
+        if (v.isNotBlank() && (k in scannedBankNames || k in manualBankKeys)) {
+          merged[k] = v
+        }
+      }
+      merged
+    } else {
+      existingBankNames.filterKeys { it in activeBankKeys }
+    }
+  }
+
+  fun resolveBankOrderAfterScan(
+    existingOrder: List<Int>,
+    hasSubfolderBanks: Boolean,
+    scannedBankKeys: Set<Int>,
+    padBankKeys: Set<Int>,
+    existingBankNames: Map<Int, String>,
+    previousSubfolderKeys: Set<Int>
+  ): List<Int> {
+    val manualBankKeys = existingBankNames.keys.filterTo(mutableSetOf()) { it !in previousSubfolderKeys }
+    val activeBankKeys = scannedBankKeys + padBankKeys + manualBankKeys
+    if (!hasSubfolderBanks &&
+      existingOrder.isEmpty() &&
+      manualBankKeys.isEmpty() &&
+      activeBankKeys.all { it == 0 }
+    ) {
+      return emptyList()
+    }
+    val kept = existingOrder.filter { it in activeBankKeys }
+    val added = (activeBankKeys - kept.toSet()).sorted()
+    return (kept + added).distinct()
+  }
+
   fun distanceSquaredToSlot(a: Int, b: Int): Int = abs(a - b)
 }

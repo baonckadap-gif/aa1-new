@@ -224,8 +224,15 @@ object ConfigSchemaMigrator {
           JSONObject().apply {
             put("mainOutputDeviceId", settingsNode.opt("preferredMainOutputId") ?: JSONObject.NULL)
             put("mainOutputDeviceName", settingsNode.opt("preferredMainOutputName") ?: JSONObject.NULL)
+            put("mainOutputProductName", settingsNode.opt("preferredMainOutputProductName") ?: JSONObject.NULL)
+            put("mainOutputDeviceType", settingsNode.opt("preferredMainOutputType") ?: JSONObject.NULL)
+            put("mainOutputAddress", settingsNode.opt("preferredMainOutputAddress") ?: JSONObject.NULL)
             put("cueOutputDeviceId", settingsNode.opt("preferredCueOutputId") ?: JSONObject.NULL)
             put("cueOutputDeviceName", settingsNode.opt("preferredCueOutputName") ?: JSONObject.NULL)
+            put("cueOutputProductName", settingsNode.opt("preferredCueOutputProductName") ?: JSONObject.NULL)
+            put("cueOutputDeviceType", settingsNode.opt("preferredCueOutputType") ?: JSONObject.NULL)
+            put("cueOutputAddress", settingsNode.opt("preferredCueOutputAddress") ?: JSONObject.NULL)
+            put("cueVolume", settingsNode.optDouble("cueVolume", 0.85))
             put("audioBufferSizeMs", settingsNode.optInt("audioBufferSizeMs", 50))
           }
         )
@@ -533,14 +540,24 @@ object SettingsBackupSerializer : Backupable<SettingsBackupBundle> {
       put("startInFocusMode", s.startInFocusMode)
       put("focusCornerPanicEnabled", s.focusCornerPanicEnabled)
       put("focusModeMidiNote", s.focusModeMidiNote ?: JSONObject.NULL)
+      put("lastBleMidiAddress", s.lastBleMidiAddress ?: JSONObject.NULL)
+      put("lastBleMidiName", s.lastBleMidiName ?: JSONObject.NULL)
+      put("bleAutoReconnectEnabled", s.bleAutoReconnectEnabled)
       put("dragDropConflictMode", s.dragDropConflictMode.name)
     }
 
     val outputObj = JSONObject().apply {
       put("mainOutputDeviceId", data.audioOutput.mainOutputDeviceId ?: s.preferredMainOutputId ?: JSONObject.NULL)
       put("mainOutputDeviceName", data.audioOutput.mainOutputDeviceName ?: s.preferredMainOutputName ?: JSONObject.NULL)
+      put("mainOutputProductName", data.audioOutput.mainOutputProductName ?: s.preferredMainOutputProductName ?: JSONObject.NULL)
+      put("mainOutputDeviceType", data.audioOutput.mainOutputDeviceType ?: s.preferredMainOutputType ?: JSONObject.NULL)
+      put("mainOutputAddress", data.audioOutput.mainOutputAddress ?: s.preferredMainOutputAddress ?: JSONObject.NULL)
       put("cueOutputDeviceId", data.audioOutput.cueOutputDeviceId ?: s.preferredCueOutputId ?: JSONObject.NULL)
       put("cueOutputDeviceName", data.audioOutput.cueOutputDeviceName ?: s.preferredCueOutputName ?: JSONObject.NULL)
+      put("cueOutputProductName", data.audioOutput.cueOutputProductName ?: s.preferredCueOutputProductName ?: JSONObject.NULL)
+      put("cueOutputDeviceType", data.audioOutput.cueOutputDeviceType ?: s.preferredCueOutputType ?: JSONObject.NULL)
+      put("cueOutputAddress", data.audioOutput.cueOutputAddress ?: s.preferredCueOutputAddress ?: JSONObject.NULL)
+      put("cueVolume", data.audioOutput.cueVolume.coerceIn(0f, 1f).toDouble())
       put("audioBufferSizeMs", data.audioOutput.audioBufferSizeMs.coerceIn(20, 500))
     }
 
@@ -578,10 +595,27 @@ object SettingsBackupSerializer : Backupable<SettingsBackupBundle> {
       ?: optNullableInt(s, "preferredMainOutputId")
     val mainOutputName = optNullableString(out, "mainOutputDeviceName")
       ?: optNullableString(s, "preferredMainOutputName")
+    val mainOutputProductName = optNullableString(out, "mainOutputProductName")
+      ?: optNullableString(s, "preferredMainOutputProductName")
+    val mainOutputDeviceType = optNullableInt(out, "mainOutputDeviceType")
+      ?: optNullableInt(s, "preferredMainOutputType")
+    val mainOutputAddress = optNullableString(out, "mainOutputAddress")
+      ?: optNullableString(s, "preferredMainOutputAddress")
     val cueOutputId = optNullableInt(out, "cueOutputDeviceId")
       ?: optNullableInt(s, "preferredCueOutputId")
     val cueOutputName = optNullableString(out, "cueOutputDeviceName")
       ?: optNullableString(s, "preferredCueOutputName")
+    val cueOutputProductName = optNullableString(out, "cueOutputProductName")
+      ?: optNullableString(s, "preferredCueOutputProductName")
+    val cueOutputDeviceType = optNullableInt(out, "cueOutputDeviceType")
+      ?: optNullableInt(s, "preferredCueOutputType")
+    val cueOutputAddress = optNullableString(out, "cueOutputAddress")
+      ?: optNullableString(s, "preferredCueOutputAddress")
+    val cueVolume = if (out.has("cueVolume") && !out.isNull("cueVolume")) {
+      out.optDouble("cueVolume", 0.85).toFloat().coerceIn(0f, 1f)
+    } else {
+      s.optDouble("cueVolume", 0.85).toFloat().coerceIn(0f, 1f)
+    }
     val bufferSizeMs = out.optInt("audioBufferSizeMs", s.optInt("audioBufferSizeMs", 50)).coerceIn(20, 500)
 
     val backupFolderUri = optNullableString(sync, "backupFolderUri")
@@ -662,10 +696,20 @@ object SettingsBackupSerializer : Backupable<SettingsBackupBundle> {
       startInFocusMode = s.optBoolean("startInFocusMode", false),
       focusCornerPanicEnabled = s.optBoolean("focusCornerPanicEnabled", true),
       focusModeMidiNote = optNullableInt(s, "focusModeMidiNote")?.coerceIn(0, 127),
+      lastBleMidiAddress = optNullableString(s, "lastBleMidiAddress"),
+      lastBleMidiName = optNullableString(s, "lastBleMidiName"),
+      bleAutoReconnectEnabled = s.optBoolean("bleAutoReconnectEnabled", true),
       preferredMainOutputId = mainOutputId,
       preferredMainOutputName = mainOutputName,
+      preferredMainOutputProductName = mainOutputProductName,
+      preferredMainOutputType = mainOutputDeviceType,
+      preferredMainOutputAddress = mainOutputAddress,
       preferredCueOutputId = cueOutputId,
       preferredCueOutputName = cueOutputName,
+      preferredCueOutputProductName = cueOutputProductName,
+      preferredCueOutputType = cueOutputDeviceType,
+      preferredCueOutputAddress = cueOutputAddress,
+      cueVolume = cueVolume,
       audioBufferSizeMs = bufferSizeMs,
       persistentBackupFolderUri = backupFolderUri,
       persistentBackupFolderName = backupFolderName,
@@ -683,8 +727,15 @@ object SettingsBackupSerializer : Backupable<SettingsBackupBundle> {
       audioOutput = AudioOutputConfigBackup(
         mainOutputDeviceId = mainOutputId,
         mainOutputDeviceName = mainOutputName,
+        mainOutputProductName = mainOutputProductName,
+        mainOutputDeviceType = mainOutputDeviceType,
+        mainOutputAddress = mainOutputAddress,
         cueOutputDeviceId = cueOutputId,
         cueOutputDeviceName = cueOutputName,
+        cueOutputProductName = cueOutputProductName,
+        cueOutputDeviceType = cueOutputDeviceType,
+        cueOutputAddress = cueOutputAddress,
+        cueVolume = cueVolume,
         audioBufferSizeMs = bufferSizeMs
       ),
       syncConfig = PersistentSyncConfigBackup(
@@ -712,7 +763,9 @@ object ProfileBackupSerializer : Backupable<ProfileBackupBundle> {
     val base = ProfileJsonSerializer.toJsonObject(
       profile = profile,
       pads = emptyList(),
-      ccMappings = data.ccMappings
+      ccMappings = data.ccMappings,
+      pcMappings = data.pcMappings,
+      focusModeMidiNote = profile.focusModeMidiNote
     )
     base.put("schemaVersion", schemaVersion)
     base.put("createdAtMs", profile.createdAtMs)
@@ -1455,6 +1508,7 @@ object SchedulerBackupSerializer : Backupable<SchedulerBackupBundle> {
           put("fadeInMs", t.fadeInMs)
           put("autoStopMinutes", t.autoStopMinutes)
           put("loopPlayback", t.loopPlayback)
+          put("requestCode", t.requestCode)
           put("nextTriggerAtMs", t.nextTriggerAtMs)
           put("createdAtMs", t.createdAtMs)
         }
@@ -1491,6 +1545,7 @@ object SchedulerBackupSerializer : Backupable<SchedulerBackupBundle> {
           fadeInMs = obj.optLong("fadeInMs", 0L).coerceIn(0L, 10000L),
           autoStopMinutes = obj.optInt("autoStopMinutes", 0).coerceAtLeast(0),
           loopPlayback = obj.optBoolean("loopPlayback", false),
+          requestCode = obj.optInt("requestCode", 0).coerceAtLeast(0),
           nextTriggerAtMs = obj.optLong("nextTriggerAtMs", 0L).coerceAtLeast(0L),
           createdAtMs = obj.optLong("createdAtMs", System.currentTimeMillis())
         )
@@ -1864,7 +1919,8 @@ object PersistentConfigBundleSerializer {
           profile = exported.profile,
           banks = banks,
           pads = entries,
-          ccMappings = exported.ccMappings
+          ccMappings = exported.ccMappings,
+          pcMappings = exported.pcMappings
         )
       }
       val layouts = deriveLayoutsFromProfiles(profileBundles)

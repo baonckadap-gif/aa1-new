@@ -21,8 +21,41 @@ import com.example.ui.toDomainPad
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+
+/**
+ * Pure dispatcher helper so target-specific scheduled auto-stop behavior can be unit-tested
+ * cleanly without triggering stopAll() on unrelated playing pads.
+ */
+object ScheduledAutoStopDispatcher {
+  fun dispatchStopTarget(
+    targetType: ScheduleTargetType,
+    targetId: String,
+    activePlaylistId: String?,
+    padsProvider: () -> List<Pair<String, Int>>, // padId to bankIndex
+    onStopPad: (String) -> Unit,
+    onStopSequencer: () -> Unit
+  ) {
+    when (targetType) {
+      ScheduleTargetType.PAD -> {
+        if (targetId.isNotBlank()) {
+          onStopPad(targetId)
+        }
+      }
+      ScheduleTargetType.BANK -> {
+        val bankIdx = targetId.toIntOrNull() ?: return
+        padsProvider()
+          .filter { (_, padBank) -> padBank == bankIdx }
+          .forEach { (padId, _) -> onStopPad(padId) }
+      }
+      ScheduleTargetType.SEQUENCER -> {
+        if (targetId.isBlank() || activePlaylistId == targetId) {
+          onStopSequencer()
+        }
+      }
+    }
+  }
+}
 
 class SoundPadApplication : Application() {
 
@@ -35,6 +68,9 @@ class SoundPadApplication : Application() {
     // Ensure scheduled tasks fire reliably even if the UI isn't open
     SoundPadPlaybackService.onScheduledTaskRequested = { taskId ->
       executeScheduledTaskInBackground(taskId)
+    }
+    SoundPadPlaybackService.onStopScheduledTaskRequested = { taskId, targetTypeRaw, targetId ->
+      stopScheduledTaskInBackground(taskId, targetTypeRaw, targetId)
     }
 
     // Re-register active alarms on process start as defensive guarantee
@@ -107,11 +143,46 @@ class SoundPadApplication : Application() {
           sequencerEngine.startPlaylist(playlistEntity.toDomain())
         }
       }
+    }
+  }
 
-      if (task.autoStopMinutes > 0) {
-        delay(task.autoStopMinutes * 60_000L)
-        sequencerEngine.stop()
-        audioEngine.stopAll()
+  private fun stopScheduledTaskInBackground(
+    taskId: String,
+    targetTypeRaw: String,
+    targetId: String
+  ) {
+    appScope.launch {
+      val targetType = runCatching { ScheduleTargetType.valueOf(targetTypeRaw) }
+        .getOrDefault(ScheduleTargetType.PAD)
+      val resolvedTargetId = if (targetId.isNotBlank()) {
+        targetId
+      } else if (taskId.isNotBlank()) {
+        database.soundPadDao().getScheduledTaskById(taskId)?.targetId.orEmpty()
+      } else {
+        ""
+      }
+
+      ScheduledAutoStopDispatcher.dispatchStopTarget(
+        targetType = targetType,
+        targetId = resolvedTargetId,
+        activePlaylistId = sequencerEngine.state.value.activePlaylistId,
+        padsProvider = {
+          val dao = database.soundPadDao()
+          // runBlocking not needed since we are already inside suspend appScope.launch
+          emptyList()
+        },
+        onStopPad = { padId -> audioEngine.stopPad(padId) },
+        onStopSequencer = { sequencerEngine.stop() }
+      ).let {
+        if (targetType == ScheduleTargetType.BANK) {
+          val bankIdx = resolvedTargetId.toIntOrNull() ?: return@let
+          val dao = database.soundPadDao()
+          val profiles = dao.getAllProfilesOnce()
+          val activeProfile = profiles.firstOrNull { it.isActive } ?: profiles.firstOrNull() ?: return@let
+          dao.getPadsForProfileOnce(activeProfile.id)
+            .filter { it.bankIndex == bankIdx }
+            .forEach { entity -> audioEngine.stopPad(entity.id) }
+        }
       }
     }
   }
@@ -120,6 +191,7 @@ class SoundPadApplication : Application() {
     super.onTerminate()
     persistentConfigManager.onAppExiting()
     SoundPadPlaybackService.onScheduledTaskRequested = null
+    SoundPadPlaybackService.onStopScheduledTaskRequested = null
     midiController.release()
     masterRecorder.cancelRecording()
     voiceRecorder.cancelRecording()

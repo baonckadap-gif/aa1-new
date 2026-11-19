@@ -27,12 +27,15 @@ class SoundPadPlaybackService : Service() {
     const val ACTION_UPDATE_MASTER_RECORDING = "com.example.action.UPDATE_MASTER_RECORDING"
     const val ACTION_STOP_MASTER_RECORDING = "com.example.action.STOP_MASTER_RECORDING"
     const val ACTION_TRIGGER_SCHEDULED_TASK = "com.example.action.SERVICE_TRIGGER_SCHEDULED_TASK"
+    const val ACTION_STOP_SCHEDULED_TASK = "com.example.action.SERVICE_STOP_SCHEDULED_TASK"
 
     const val EXTRA_ACTIVE_COUNT = "extra_active_count"
     const val EXTRA_ACTIVE_LABEL = "extra_active_label"
     const val EXTRA_IS_RECORDING = "extra_is_recording"
     const val EXTRA_RECORD_ELAPSED = "extra_record_elapsed"
     const val EXTRA_SCHEDULE_TASK_ID = "extra_schedule_task_id"
+    const val EXTRA_SCHEDULE_TARGET_TYPE = "extra_schedule_target_type"
+    const val EXTRA_SCHEDULE_TARGET_ID = "extra_schedule_target_id"
 
     @Volatile
     var onStopAllRequested: (() -> Unit)? = null
@@ -42,6 +45,9 @@ class SoundPadPlaybackService : Service() {
 
     @Volatile
     var onScheduledTaskRequested: ((String) -> Unit)? = null
+
+    @Volatile
+    var onStopScheduledTaskRequested: ((taskId: String, targetType: String, targetId: String) -> Unit)? = null
 
     @Volatile
     private var lastActiveCount = 0
@@ -119,6 +125,21 @@ class SoundPadPlaybackService : Service() {
       }
       runCatching { context.startForegroundService(intent) }
     }
+
+    fun stopScheduledExecution(
+      context: Context,
+      taskId: String,
+      targetType: String,
+      targetId: String
+    ) {
+      val intent = Intent(context, SoundPadPlaybackService::class.java).apply {
+        action = ACTION_STOP_SCHEDULED_TASK
+        putExtra(EXTRA_SCHEDULE_TASK_ID, taskId)
+        putExtra(EXTRA_SCHEDULE_TARGET_TYPE, targetType)
+        putExtra(EXTRA_SCHEDULE_TARGET_ID, targetId)
+      }
+      runCatching { context.startForegroundService(intent) }
+    }
   }
 
   override fun onCreate() {
@@ -167,7 +188,7 @@ class SoundPadPlaybackService : Service() {
         }
       }
       ACTION_TRIGGER_SCHEDULED_TASK -> {
-        val notification = buildNotification(activeCount = 1, activeLabel = "Jadwal Terpicu")
+        val notification = buildNotification(activeCount = lastActiveCount.coerceAtLeast(1), activeLabel = "Jadwal Terpicu")
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
           startForeground(
             NOTIFICATION_ID,
@@ -180,6 +201,27 @@ class SoundPadPlaybackService : Service() {
         val taskId = intent.getStringExtra(EXTRA_SCHEDULE_TASK_ID)
         if (!taskId.isNullOrBlank()) {
           onScheduledTaskRequested?.invoke(taskId)
+        }
+      }
+      ACTION_STOP_SCHEDULED_TASK -> {
+        val notification = buildNotification(activeCount = lastActiveCount.coerceAtLeast(1), activeLabel = lastActiveLabel)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+          startForeground(
+            NOTIFICATION_ID,
+            notification,
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
+          )
+        } else {
+          startForeground(NOTIFICATION_ID, notification)
+        }
+        val taskId = intent.getStringExtra(EXTRA_SCHEDULE_TASK_ID).orEmpty()
+        val targetType = intent.getStringExtra(EXTRA_SCHEDULE_TARGET_TYPE).orEmpty()
+        val targetId = intent.getStringExtra(EXTRA_SCHEDULE_TARGET_ID).orEmpty()
+        onStopScheduledTaskRequested?.invoke(taskId, targetType, targetId)
+        if (!lastRecordingActive && lastActiveCount <= 0) {
+          isForegroundPlaybackActive = false
+          stopForeground(STOP_FOREGROUND_REMOVE)
+          stopSelf()
         }
       }
       ACTION_START_OR_UPDATE, null -> {

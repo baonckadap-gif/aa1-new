@@ -288,6 +288,7 @@ data class PadProfile(
   val masterEqEnabled: Boolean = false,
   val masterEqPreset: EqPreset = EqPreset.FLAT,
   val masterEqBandsDb: List<Float> = listOf(0f, 0f, 0f, 0f, 0f),
+  val focusModeMidiNote: Int? = null,
   val themeMode: ThemeMode? = null,
   val useDynamicColor: Boolean? = null,
   val appAccentColorArgb: Long? = null,
@@ -379,15 +380,25 @@ data class GlobalSettings(
   val focusModeMidiNote: Int? = null,
   val preferredMainOutputId: Int? = null,
   val preferredMainOutputName: String? = null,
+  val preferredMainOutputProductName: String? = null,
+  val preferredMainOutputType: Int? = null,
+  val preferredMainOutputAddress: String? = null,
   val preferredCueOutputId: Int? = null,
   val preferredCueOutputName: String? = null,
+  val preferredCueOutputProductName: String? = null,
+  val preferredCueOutputType: Int? = null,
+  val preferredCueOutputAddress: String? = null,
+  val cueVolume: Float = 0.85f,
   val audioBufferSizeMs: Int = 50,
   val persistentBackupFolderUri: String? = null,
   val persistentBackupFolderName: String? = null,
   val persistentAutoSyncEnabled: Boolean = true,
   val persistentLastSyncAtMs: Long = 0L,
   val persistentIncludeWaveforms: Boolean = false,
-  val dragDropConflictMode: DragDropConflictMode = DragDropConflictMode.SWAP
+  val dragDropConflictMode: DragDropConflictMode = DragDropConflictMode.SWAP,
+  val lastBleMidiAddress: String? = null,
+  val lastBleMidiName: String? = null,
+  val bleAutoReconnectEnabled: Boolean = true
 )
 
 enum class MidiCcTarget(val label: String) {
@@ -434,8 +445,28 @@ data class AudioOutputDeviceUi(
   val id: Int,
   val name: String,
   val typeLabel: String,
-  val isHeadphoneLike: Boolean
+  val isHeadphoneLike: Boolean,
+  val deviceType: Int = 0,
+  val productName: String = "",
+  val address: String = ""
 )
+
+@Immutable
+data class LatencyTestReport(
+  val configuredBufferMs: Int,
+  val measuredReadyMs: Long,
+  val timestampMs: Long = System.currentTimeMillis()
+)
+
+enum class MasterRecordFormat(
+  val extension: String,
+  val mimeType: String,
+  val shortLabel: String,
+  val detailLabel: String
+) {
+  WAV("wav", "audio/wav", "WAV", "WAV 16-bit PCM Stereo (Lossless)"),
+  M4A("m4a", "audio/mp4", "M4A", "AAC-LC .m4a Stereo (Ringan ~192 kbps)")
+}
 
 enum class MasterRecordSampleRate(val hz: Int, val label: String) {
   RATE_44100(44100, "44.1 kHz"),
@@ -447,11 +478,13 @@ data class MasterRecordState(
   val elapsedMs: Long = 0L,
   val level: Float = 0f,
   val sampleRateHz: Int = 44100,
+  val format: MasterRecordFormat = MasterRecordFormat.WAV,
   val outputFolderUri: String? = null,
   val outputFolderName: String? = null,
   val autoAddAsPad: Boolean = true,
   val lastSavedUriString: String? = null,
-  val lastSavedName: String? = null
+  val lastSavedName: String? = null,
+  val lastSavedExtension: String = "wav"
 )
 
 enum class ScheduleTargetType(val label: String) {
@@ -480,6 +513,7 @@ data class ScheduledPadTask(
   val fadeInMs: Long = 0L,
   val autoStopMinutes: Int = 0,
   val loopPlayback: Boolean = false,
+  val requestCode: Int = 0,
   val nextTriggerAtMs: Long = 0L,
   val createdAtMs: Long = System.currentTimeMillis()
 )

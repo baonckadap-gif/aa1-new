@@ -10,8 +10,10 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -22,10 +24,13 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Alarm
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.RadioButtonUnchecked
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -320,12 +325,28 @@ private fun ScheduleEditorDialog(
   var autoStopMin by remember { mutableFloatStateOf(initial.autoStopMinutes.toFloat()) }
   var loopPlayback by remember { mutableStateOf(initial.loopPlayback) }
 
+  var padSearchQuery by remember { mutableStateOf("") }
+  var selectedBankKey by remember { mutableStateOf<Int?>(null) }
+  val bankFilters = remember(pads, bankPages) {
+    buildSchedulerBankFilters(pads = pads, bankPages = bankPages)
+  }
+  val activeBankFilter = remember(bankFilters, selectedBankKey) {
+    selectedBankKey?.let { key -> bankFilters.firstOrNull { it.bankKey == key } }
+  }
+  val filteredPads = remember(pads, padSearchQuery, activeBankFilter) {
+    filterSchedulerPads(
+      pads = pads,
+      searchQuery = padSearchQuery,
+      bankFilter = activeBankFilter
+    )
+  }
+
   AlertDialog(
     onDismissRequest = onDismiss,
     title = { Text("Atur Jadwal Pemutaran") },
     text = {
       LazyColumn(
-        modifier = Modifier.height(380.dp),
+        modifier = Modifier.height(420.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp)
       ) {
         item {
@@ -359,33 +380,211 @@ private fun ScheduleEditorDialog(
         }
 
         item {
-          Row(
-            modifier = Modifier
-              .fillMaxWidth()
-              .horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(6.dp)
-          ) {
-            when (targetType) {
-              ScheduleTargetType.PAD -> pads.take(24).forEach { pad ->
-                FilterChip(
-                  selected = targetId == pad.id,
-                  onClick = { targetId = pad.id },
-                  label = { Text(pad.displayName, maxLines = 1) }
+          when (targetType) {
+            ScheduleTargetType.PAD -> {
+              Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+              ) {
+                OutlinedTextField(
+                  value = padSearchQuery,
+                  onValueChange = { padSearchQuery = it },
+                  placeholder = { Text(stringResource(R.string.scheduler_search_pads_label)) },
+                  leadingIcon = {
+                    Icon(
+                      Icons.Filled.Search,
+                      contentDescription = null,
+                      modifier = Modifier.size(18.dp)
+                    )
+                  },
+                  trailingIcon = {
+                    if (padSearchQuery.isNotEmpty()) {
+                      IconButton(
+                        onClick = { padSearchQuery = "" },
+                        modifier = Modifier.testTag("scheduler_pad_search_clear")
+                      ) {
+                        Icon(
+                          Icons.Filled.Close,
+                          contentDescription = stringResource(R.string.scheduler_clear_search),
+                          modifier = Modifier.size(18.dp)
+                        )
+                      }
+                    }
+                  },
+                  singleLine = true,
+                  modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("scheduler_pad_search_input")
                 )
+
+                if (bankFilters.isNotEmpty()) {
+                  Row(
+                    modifier = Modifier
+                      .fillMaxWidth()
+                      .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                  ) {
+                    FilterChip(
+                      selected = selectedBankKey == null,
+                      onClick = { selectedBankKey = null },
+                      label = { Text(stringResource(R.string.scheduler_all_banks)) },
+                      modifier = Modifier.testTag("scheduler_bank_filter_all")
+                    )
+                    bankFilters.forEach { option ->
+                      FilterChip(
+                        selected = selectedBankKey == option.bankKey,
+                        onClick = {
+                          selectedBankKey = if (selectedBankKey == option.bankKey) null else option.bankKey
+                        },
+                        label = { Text(option.label, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                        modifier = Modifier.testTag("scheduler_bank_filter_${option.bankKey}")
+                      )
+                    }
+                  }
+                }
+
+                Text(
+                  text = stringResource(R.string.scheduler_pad_count_shown, filteredPads.size),
+                  style = MaterialTheme.typography.labelSmall,
+                  color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
+                Surface(
+                  shape = RoundedCornerShape(12.dp),
+                  color = MaterialTheme.colorScheme.surfaceContainerLow,
+                  border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+                ) {
+                  if (filteredPads.isEmpty()) {
+                    Box(
+                      modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                      contentAlignment = Alignment.Center
+                    ) {
+                      Text(
+                        text = stringResource(R.string.scheduler_no_matching_pads),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                      )
+                    }
+                  } else {
+                    LazyColumn(
+                      modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 100.dp, max = 180.dp)
+                        .testTag("scheduler_pad_picker_list"),
+                      contentPadding = PaddingValues(6.dp),
+                      verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                      items(filteredPads, key = { it.id }) { pad ->
+                        val isSelected = targetId == pad.id
+                        Surface(
+                          shape = RoundedCornerShape(8.dp),
+                          color = if (isSelected) {
+                            MaterialTheme.colorScheme.primaryContainer
+                          } else {
+                            MaterialTheme.colorScheme.surface
+                          },
+                          border = if (isSelected) {
+                            BorderStroke(1.dp, MaterialTheme.colorScheme.primary)
+                          } else {
+                            null
+                          },
+                          modifier = Modifier
+                            .fillMaxWidth()
+                            .defaultMinSize(minHeight = 48.dp)
+                            .clip(RoundedCornerShape(8.dp))
+                            .clickable { targetId = pad.id }
+                            .testTag("scheduler_pad_option_${pad.id}")
+                        ) {
+                          Row(
+                            modifier = Modifier
+                              .fillMaxWidth()
+                              .padding(horizontal = 10.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                          ) {
+                            Icon(
+                              imageVector = if (isSelected) {
+                                Icons.Filled.CheckCircle
+                              } else {
+                                Icons.Filled.RadioButtonUnchecked
+                              },
+                              contentDescription = null,
+                              tint = if (isSelected) {
+                                MaterialTheme.colorScheme.primary
+                              } else {
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                              },
+                              modifier = Modifier.size(18.dp)
+                            )
+                            Column(modifier = Modifier.weight(1f)) {
+                              Text(
+                                text = pad.displayName,
+                                style = MaterialTheme.typography.bodySmall.copy(
+                                  fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
+                                ),
+                                color = if (isSelected) {
+                                  MaterialTheme.colorScheme.onPrimaryContainer
+                                } else {
+                                  MaterialTheme.colorScheme.onSurface
+                                },
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                              )
+                              val bankTag = pad.subfolderName.ifBlank {
+                                stringResource(R.string.scheduler_bank_fallback, pad.bankIndex + 1)
+                              }
+                              Text(
+                                text = "$bankTag · #${pad.positionIndex + 1} · ${pad.extension}",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = if (isSelected) {
+                                  MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
+                                } else {
+                                  MaterialTheme.colorScheme.onSurfaceVariant
+                                },
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                              )
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
               }
-              ScheduleTargetType.BANK -> bankPages.distinctBy { it.bankKey }.forEach { bp ->
-                FilterChip(
-                  selected = targetId == bp.bankKey.toString(),
-                  onClick = { targetId = bp.bankKey.toString() },
-                  label = { Text(bp.title) }
-                )
+            }
+            ScheduleTargetType.BANK -> {
+              Row(
+                modifier = Modifier
+                  .fillMaxWidth()
+                  .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+              ) {
+                bankPages.distinctBy { it.bankKey }.forEach { bp ->
+                  FilterChip(
+                    selected = targetId == bp.bankKey.toString(),
+                    onClick = { targetId = bp.bankKey.toString() },
+                    label = { Text(bp.title) }
+                  )
+                }
               }
-              ScheduleTargetType.SEQUENCER -> playlists.forEach { pl ->
-                FilterChip(
-                  selected = targetId == pl.id,
-                  onClick = { targetId = pl.id },
-                  label = { Text(pl.name) }
-                )
+            }
+            ScheduleTargetType.SEQUENCER -> {
+              Row(
+                modifier = Modifier
+                  .fillMaxWidth()
+                  .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+              ) {
+                playlists.forEach { pl ->
+                  FilterChip(
+                    selected = targetId == pl.id,
+                    onClick = { targetId = pl.id },
+                    label = { Text(pl.name) }
+                  )
+                }
               }
             }
           }
@@ -491,4 +690,72 @@ private fun ScheduleEditorDialog(
       TextButton(onClick = onDismiss) { Text("Batal") }
     }
   )
+}
+
+data class SchedulerBankFilterOption(
+  val bankKey: Int,
+  val label: String,
+  val padIds: Set<String>? = null
+)
+
+fun buildSchedulerBankFilters(
+  pads: List<SoundPad>,
+  bankPages: List<BankPageUi>
+): List<SchedulerBankFilterOption> {
+  if (bankPages.isNotEmpty()) {
+    val grouped = bankPages.groupBy { it.bankKey }
+    val options = grouped.entries.mapNotNull { (bankKey, pages) ->
+      val padIds = pages.flatMap { it.pads }.mapTo(mutableSetOf()) { it.id }
+      if (padIds.isEmpty()) {
+        null
+      } else {
+        val rawTitle = pages.first().title
+        val cleanTitle = if (pages.size > 1) {
+          rawTitle.replace(Regex("""\s*\(\d+\)$"""), "").ifBlank { rawTitle }
+        } else {
+          rawTitle
+        }
+        SchedulerBankFilterOption(
+          bankKey = bankKey,
+          label = cleanTitle,
+          padIds = padIds
+        )
+      }
+    }
+    if (options.isNotEmpty()) return options
+  }
+
+  return pads.groupBy { it.bankIndex }
+    .toSortedMap()
+    .map { (bankIdx, bankPads) ->
+      val label = bankPads.firstOrNull { it.subfolderName.isNotBlank() }?.subfolderName
+        ?: "Bank ${bankIdx + 1}"
+      SchedulerBankFilterOption(
+        bankKey = bankIdx,
+        label = label,
+        padIds = null
+      )
+    }
+}
+
+fun filterSchedulerPads(
+  pads: List<SoundPad>,
+  searchQuery: String,
+  bankFilter: SchedulerBankFilterOption?
+): List<SoundPad> {
+  val query = searchQuery.trim().lowercase()
+  return pads.filter { pad ->
+    val matchesBank = when {
+      bankFilter == null -> true
+      bankFilter.padIds != null -> pad.id in bankFilter.padIds
+      else -> pad.bankIndex == bankFilter.bankKey
+    }
+    if (!matchesBank) return@filter false
+    if (query.isEmpty()) return@filter true
+    pad.displayName.lowercase().contains(query) ||
+      pad.fileName.lowercase().contains(query) ||
+      pad.subfolderName.lowercase().contains(query) ||
+      pad.extension.lowercase().contains(query) ||
+      pad.categoryTag.lowercase().contains(query)
+  }
 }

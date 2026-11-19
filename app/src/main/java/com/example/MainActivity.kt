@@ -497,6 +497,7 @@ class MainActivity : ComponentActivity() {
     val onAppLanguageChanged = viewModel::setAppLanguage
     val onOpenMasterRecorder = viewModel::openMasterRecordSheet
     val onCloseMasterRecorder = viewModel::closeMasterRecordSheet
+    val onSelectMasterRecordFormat = viewModel::setMasterRecordFormat
     val onSelectMasterRecordSampleRate = viewModel::setMasterRecordSampleRate
     val onToggleMasterRecordAutoAddPad = viewModel::setMasterRecordAutoAddAsPad
     val onStartMasterRecording = viewModel::startMasterRecording
@@ -623,6 +624,9 @@ class MainActivity : ComponentActivity() {
       onStartBleMidiScan = actions.onStartBleMidiScan,
       onStopBleMidiScan = viewModel::stopBleMidiScan,
       onConnectBleMidiDevice = viewModel::connectBleMidiDevice,
+      onToggleBleAutoReconnect = viewModel::setBleAutoReconnectEnabled,
+      onTriggerBleReconnectNow = viewModel::triggerBleReconnectNow,
+      onForgetSavedBleDevice = viewModel::forgetSavedBleMidiDevice,
       onStopAll = viewModel::stopAll,
       onFadeOutAll = viewModel::fadeOutAll,
       onToggleLockMode = viewModel::toggleLockMode,
@@ -637,6 +641,9 @@ class MainActivity : ComponentActivity() {
       onRefreshOutputDevices = viewModel::refreshOutputDevices,
       onSelectMainOutputDevice = viewModel::selectMainOutputDevice,
       onSelectCueOutputDevice = viewModel::selectCueOutputDevice,
+      onCueVolumeChange = viewModel::setCueVolume,
+      onAudioBufferSizeChange = viewModel::setAudioBufferSizeMs,
+      onRunLatencyTest = viewModel::runAudioLatencyTest,
       onToggleCuePreview = viewModel::toggleCuePreview,
       onMasterLimiterToggle = viewModel::setMasterLimiterEnabled,
       onDuckingToggle = viewModel::setDuckingEnabled,
@@ -689,6 +696,7 @@ class MainActivity : ComponentActivity() {
       onRequestExactAlarmPermission = actions.onRequestExactAlarmPermission,
       onOpenMasterRecorder = actions.onOpenMasterRecorder,
       onCloseMasterRecorder = actions.onCloseMasterRecorder,
+      onSelectMasterRecordFormat = actions.onSelectMasterRecordFormat,
       onSelectMasterRecordSampleRate = actions.onSelectMasterRecordSampleRate,
       onPickMasterRecordFolder = actions.onPickMasterRecordFolder,
       onToggleMasterRecordAutoAddPad = actions.onToggleMasterRecordAutoAddPad,

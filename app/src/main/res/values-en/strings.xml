@@ -278,4 +278,35 @@
     <string name="move_slot_invalid_error">Enter a slot number between 1 and %1$d</string>
     <string name="settings_drag_conflict_title">OCCUPIED SLOT DROP MODE</string>
     <string name="settings_drag_conflict_subtitle">Behavior when dropping a pad onto an occupied slot</string>
+
+    <!-- Tahap 2: Scheduler Pad Search & Bank Filter -->
+    <string name="scheduler_search_pads_label">Search pads (name, file, bank)…</string>
+    <string name="scheduler_all_banks">All Banks</string>
+    <string name="scheduler_no_matching_pads">No pads match the current search or bank filter.</string>
+    <string name="scheduler_bank_fallback">Bank %1$d</string>
+    <string name="scheduler_clear_search">Clear search</string>
+    <string name="scheduler_pad_count_shown">%1$d pads found</string>
+
+    <!-- Stage 3: Cue Volume, Audio Buffer & Latency Test, Stable Device Auto-Reconnect -->
+    <string name="cue_volume_title">CUE MONITOR VOLUME</string>
+    <string name="cue_volume_subtitle">Independent gain for headphone cue preview (does not affect main PA output)</string>
+    <string name="audio_buffer_section_title">AUDIO BUFFER &amp; LATENCY</string>
+    <string name="audio_buffer_slider_label">PLAYBACK BUFFER SIZE</string>
+    <string name="audio_buffer_hint">Lower = snappier pad taps; higher = safer against glitches under heavy load</string>
+    <string name="audio_buffer_pending_rebuild_warning">Buffer change applies to new pad triggers and remaining pool slots once active audio finishes so live playback won\'t cut out.</string>
+    <string name="latency_test_button">Latency test</string>
+    <string name="latency_test_running">Testing…</string>
+    <string name="latency_test_result">Ready in %1$d ms (target %2$d ms buffer)</string>
+    <string name="output_device_reconnected">Output auto-reconnected: %1$s</string>
+    <string name="cue_device_reconnected">Cue monitor auto-reconnected: %1$s</string>
+
+    <!-- Stage 4: Master Limiter Bus, BLE Auto-Reconnect, Per-Profile Focus MIDI, Master Record WAV/M4A -->
+    <string name="ble_auto_reconnect_title">BLE MIDI Auto-Reconnect</string>
+    <string name="ble_auto_reconnect_none_saved">No saved BLE MIDI controller yet</string>
+    <string name="ble_auto_reconnect_ready">Ready for saved BLE MIDI controller</string>
+    <string name="ble_reconnect_now">Reconnect</string>
+    <string name="ble_forget_device">Forget</string>
+    <string name="master_rec_format_label">Output File Format</string>
+    <string name="master_rec_samplerate_label">Output Sample Rate</string>
+    <string name="master_rec_stop_format">Stop &amp; Save %1$s</string>
 </resources>

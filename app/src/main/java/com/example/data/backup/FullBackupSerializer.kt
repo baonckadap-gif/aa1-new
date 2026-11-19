@@ -82,8 +82,15 @@ object FullBackupSerializer {
       put("focusModeMidiNote", settings.focusModeMidiNote ?: JSONObject.NULL)
       put("preferredMainOutputId", settings.preferredMainOutputId ?: JSONObject.NULL)
       put("preferredMainOutputName", settings.preferredMainOutputName ?: JSONObject.NULL)
+      put("preferredMainOutputProductName", settings.preferredMainOutputProductName ?: JSONObject.NULL)
+      put("preferredMainOutputType", settings.preferredMainOutputType ?: JSONObject.NULL)
+      put("preferredMainOutputAddress", settings.preferredMainOutputAddress ?: JSONObject.NULL)
       put("preferredCueOutputId", settings.preferredCueOutputId ?: JSONObject.NULL)
       put("preferredCueOutputName", settings.preferredCueOutputName ?: JSONObject.NULL)
+      put("preferredCueOutputProductName", settings.preferredCueOutputProductName ?: JSONObject.NULL)
+      put("preferredCueOutputType", settings.preferredCueOutputType ?: JSONObject.NULL)
+      put("preferredCueOutputAddress", settings.preferredCueOutputAddress ?: JSONObject.NULL)
+      put("cueVolume", settings.cueVolume.toDouble())
       put("audioBufferSizeMs", settings.audioBufferSizeMs)
       put("persistentBackupFolderUri", settings.persistentBackupFolderUri ?: JSONObject.NULL)
       put("persistentBackupFolderName", settings.persistentBackupFolderName ?: JSONObject.NULL)
@@ -91,12 +98,21 @@ object FullBackupSerializer {
       put("persistentLastSyncAtMs", settings.persistentLastSyncAtMs)
       put("persistentIncludeWaveforms", settings.persistentIncludeWaveforms)
       put("dragDropConflictMode", settings.dragDropConflictMode.name)
+      put("lastBleMidiAddress", settings.lastBleMidiAddress ?: JSONObject.NULL)
+      put("lastBleMidiName", settings.lastBleMidiName ?: JSONObject.NULL)
+      put("bleAutoReconnectEnabled", settings.bleAutoReconnectEnabled)
     }
 
     val profilesArr = JSONArray()
     profiles.forEach { bundle ->
       profilesArr.put(
-        ProfileJsonSerializer.toJsonObject(bundle.profile, bundle.pads, bundle.ccMappings)
+        ProfileJsonSerializer.toJsonObject(
+          profile = bundle.profile,
+          pads = bundle.pads,
+          ccMappings = bundle.ccMappings,
+          pcMappings = bundle.pcMappings,
+          focusModeMidiNote = bundle.profile.focusModeMidiNote ?: bundle.focusModeMidiNote ?: settings.focusModeMidiNote
+        )
       )
     }
 
@@ -190,8 +206,15 @@ object FullBackupSerializer {
       focusModeMidiNote = if (s.isNull("focusModeMidiNote")) null else s.optInt("focusModeMidiNote").coerceIn(0, 127),
       preferredMainOutputId = if (s.isNull("preferredMainOutputId")) null else s.optInt("preferredMainOutputId"),
       preferredMainOutputName = if (s.isNull("preferredMainOutputName")) null else s.optString("preferredMainOutputName", "").ifBlank { null },
+      preferredMainOutputProductName = if (s.isNull("preferredMainOutputProductName")) null else s.optString("preferredMainOutputProductName", "").ifBlank { null },
+      preferredMainOutputType = if (s.isNull("preferredMainOutputType")) null else s.optInt("preferredMainOutputType"),
+      preferredMainOutputAddress = if (s.isNull("preferredMainOutputAddress")) null else s.optString("preferredMainOutputAddress", "").ifBlank { null },
       preferredCueOutputId = if (s.isNull("preferredCueOutputId")) null else s.optInt("preferredCueOutputId"),
       preferredCueOutputName = if (s.isNull("preferredCueOutputName")) null else s.optString("preferredCueOutputName", "").ifBlank { null },
+      preferredCueOutputProductName = if (s.isNull("preferredCueOutputProductName")) null else s.optString("preferredCueOutputProductName", "").ifBlank { null },
+      preferredCueOutputType = if (s.isNull("preferredCueOutputType")) null else s.optInt("preferredCueOutputType"),
+      preferredCueOutputAddress = if (s.isNull("preferredCueOutputAddress")) null else s.optString("preferredCueOutputAddress", "").ifBlank { null },
+      cueVolume = s.optDouble("cueVolume", 0.85).toFloat().coerceIn(0f, 1f),
       audioBufferSizeMs = s.optInt("audioBufferSizeMs", 50).coerceIn(20, 500),
       persistentBackupFolderUri = if (s.isNull("persistentBackupFolderUri")) null else s.optString("persistentBackupFolderUri", "").ifBlank { null },
       persistentBackupFolderName = if (s.isNull("persistentBackupFolderName")) null else s.optString("persistentBackupFolderName", "").ifBlank { null },
@@ -200,7 +223,10 @@ object FullBackupSerializer {
       persistentIncludeWaveforms = s.optBoolean("persistentIncludeWaveforms", false),
       dragDropConflictMode = runCatching {
         DragDropConflictMode.valueOf(s.optString("dragDropConflictMode", DragDropConflictMode.SWAP.name))
-      }.getOrDefault(DragDropConflictMode.SWAP)
+      }.getOrDefault(DragDropConflictMode.SWAP),
+      lastBleMidiAddress = if (s.isNull("lastBleMidiAddress")) null else s.optString("lastBleMidiAddress", "").ifBlank { null },
+      lastBleMidiName = if (s.isNull("lastBleMidiName")) null else s.optString("lastBleMidiName", "").ifBlank { null },
+      bleAutoReconnectEnabled = s.optBoolean("bleAutoReconnectEnabled", true)
     )
 
     val profilesArr = root.optJSONArray("profiles") ?: JSONArray()

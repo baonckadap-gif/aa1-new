@@ -1,0 +1,150 @@
+{
+  "formatVersion": 1,
+  "database": {
+    "version": 8,
+    "identityHash": "soundpad_schema_v8_compat",
+    "entities": [
+      {
+        "tableName": "pad_profiles",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `name` TEXT NOT NULL, `folderUri` TEXT, `gridPreset` TEXT NOT NULL, `gridRows` INTEGER NOT NULL, `gridCols` INTEGER NOT NULL, `bankNamesJson` TEXT NOT NULL, `createdAtMs` INTEGER NOT NULL, `updatedAtMs` INTEGER NOT NULL, `isActive` INTEGER NOT NULL, PRIMARY KEY(`id`))",
+        "fields": [
+          { "fieldPath": "id", "columnName": "id", "affinity": "TEXT", "notNull": true },
+          { "fieldPath": "name", "columnName": "name", "affinity": "TEXT", "notNull": true },
+          { "fieldPath": "folderUri", "columnName": "folderUri", "affinity": "TEXT" },
+          { "fieldPath": "gridPreset", "columnName": "gridPreset", "affinity": "TEXT", "notNull": true },
+          { "fieldPath": "gridRows", "columnName": "gridRows", "affinity": "INTEGER", "notNull": true },
+          { "fieldPath": "gridCols", "columnName": "gridCols", "affinity": "INTEGER", "notNull": true },
+          { "fieldPath": "bankNamesJson", "columnName": "bankNamesJson", "affinity": "TEXT", "notNull": true },
+          { "fieldPath": "createdAtMs", "columnName": "createdAtMs", "affinity": "INTEGER", "notNull": true },
+          { "fieldPath": "updatedAtMs", "columnName": "updatedAtMs", "affinity": "INTEGER", "notNull": true },
+          { "fieldPath": "isActive", "columnName": "isActive", "affinity": "INTEGER", "notNull": true }
+        ],
+        "primaryKey": { "autoGenerate": false, "columnNames": ["id"] }
+      },
+      {
+        "tableName": "sound_pads",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `profileId` TEXT NOT NULL, `uriString` TEXT NOT NULL, `fileName` TEXT NOT NULL, `displayName` TEXT NOT NULL, `extension` TEXT NOT NULL, `durationMs` INTEGER NOT NULL, `sizeBytes` INTEGER NOT NULL, `positionIndex` INTEGER NOT NULL, `colorArgb` INTEGER, `glowColorArgb` INTEGER, `glowIntensity` REAL NOT NULL, `shapeStyle` TEXT, `borderColorArgb` INTEGER, `borderWidthDp` REAL NOT NULL, `cornerRadiusDp` REAL NOT NULL, `textColorArgb` INTEGER, `surfaceFinish` TEXT NOT NULL, `badgeIcon` TEXT NOT NULL, `showSlotNumber` INTEGER NOT NULL, `showDurationLabel` INTEGER NOT NULL, `isClone` INTEGER NOT NULL, `midiNote` INTEGER, `isFavorite` INTEGER NOT NULL, `categoryTag` TEXT NOT NULL, PRIMARY KEY(`id`), FOREIGN KEY(`profileId`) REFERENCES `pad_profiles`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+        "fields": [
+          { "fieldPath": "id", "columnName": "id", "affinity": "TEXT", "notNull": true },
+          { "fieldPath": "profileId", "columnName": "profileId", "affinity": "TEXT", "notNull": true },
+          { "fieldPath": "uriString", "columnName": "uriString", "affinity": "TEXT", "notNull": true },
+          { "fieldPath": "fileName", "columnName": "fileName", "affinity": "TEXT", "notNull": true },
+          { "fieldPath": "displayName", "columnName": "displayName", "affinity": "TEXT", "notNull": true },
+          { "fieldPath": "extension", "columnName": "extension", "affinity": "TEXT", "notNull": true },
+          { "fieldPath": "durationMs", "columnName": "durationMs", "affinity": "INTEGER", "notNull": true },
+          { "fieldPath": "sizeBytes", "columnName": "sizeBytes", "affinity": "INTEGER", "notNull": true },
+          { "fieldPath": "positionIndex", "columnName": "positionIndex", "affinity": "INTEGER", "notNull": true },
+          { "fieldPath": "colorArgb", "columnName": "colorArgb", "affinity": "INTEGER" },
+          { "fieldPath": "glowColorArgb", "columnName": "glowColorArgb", "affinity": "INTEGER" },
+          { "fieldPath": "glowIntensity", "columnName": "glowIntensity", "affinity": "REAL", "notNull": true },
+          { "fieldPath": "shapeStyle", "columnName": "shapeStyle", "affinity": "TEXT" },
+          { "fieldPath": "borderColorArgb", "columnName": "borderColorArgb", "affinity": "INTEGER" },
+          { "fieldPath": "borderWidthDp", "columnName": "borderWidthDp", "affinity": "REAL", "notNull": true },
+          { "fieldPath": "cornerRadiusDp", "columnName": "cornerRadiusDp", "affinity": "REAL", "notNull": true },
+          { "fieldPath": "textColorArgb", "columnName": "textColorArgb", "affinity": "INTEGER" },
+          { "fieldPath": "surfaceFinish", "columnName": "surfaceFinish", "affinity": "TEXT", "notNull": true },
+          { "fieldPath": "badgeIcon", "columnName": "badgeIcon", "affinity": "TEXT", "notNull": true },
+          { "fieldPath": "showSlotNumber", "columnName": "showSlotNumber", "affinity": "INTEGER", "notNull": true },
+          { "fieldPath": "showDurationLabel", "columnName": "showDurationLabel", "affinity": "INTEGER", "notNull": true },
+          { "fieldPath": "isClone", "columnName": "isClone", "affinity": "INTEGER", "notNull": true },
+          { "fieldPath": "midiNote", "columnName": "midiNote", "affinity": "INTEGER" },
+          { "fieldPath": "isFavorite", "columnName": "isFavorite", "affinity": "INTEGER", "notNull": true },
+          { "fieldPath": "categoryTag", "columnName": "categoryTag", "affinity": "TEXT", "notNull": true }
+        ],
+        "primaryKey": { "autoGenerate": false, "columnNames": ["id"] },
+        "indices": [
+          {
+            "name": "index_sound_pads_profileId",
+            "unique": false,
+            "columnNames": ["profileId"],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_sound_pads_profileId` ON `${TABLE_NAME}` (`profileId`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "pad_profiles",
+            "onDelete": "CASCADE",
+            "onUpdate": "NO ACTION",
+            "columns": ["profileId"],
+            "referencedColumns": ["id"]
+          }
+        ]
+      },
+      {
+        "tableName": "pad_settings",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`padId` TEXT NOT NULL, `volume` REAL NOT NULL, `speed` REAL NOT NULL, `pitch` REAL NOT NULL, `isLooping` INTEGER NOT NULL, `triggerMode` TEXT NOT NULL, `chokeGroup` INTEGER NOT NULL, `fadeInMs` INTEGER NOT NULL, `fadeOutMs` INTEGER NOT NULL, `fadeCurve` TEXT NOT NULL, `crossfadeEnabled` INTEGER NOT NULL, `trimStartMs` INTEGER NOT NULL, `trimEndMs` INTEGER NOT NULL, `isDuckingSource` INTEGER NOT NULL, `normalizedGain` REAL NOT NULL, PRIMARY KEY(`padId`), FOREIGN KEY(`padId`) REFERENCES `sound_pads`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+        "fields": [
+          { "fieldPath": "padId", "columnName": "padId", "affinity": "TEXT", "notNull": true },
+          { "fieldPath": "volume", "columnName": "volume", "affinity": "REAL", "notNull": true },
+          { "fieldPath": "speed", "columnName": "speed", "affinity": "REAL", "notNull": true },
+          { "fieldPath": "pitch", "columnName": "pitch", "affinity": "REAL", "notNull": true },
+          { "fieldPath": "isLooping", "columnName": "isLooping", "affinity": "INTEGER", "notNull": true },
+          { "fieldPath": "triggerMode", "columnName": "triggerMode", "affinity": "TEXT", "notNull": true },
+          { "fieldPath": "chokeGroup", "columnName": "chokeGroup", "affinity": "INTEGER", "notNull": true },
+          { "fieldPath": "fadeInMs", "columnName": "fadeInMs", "affinity": "INTEGER", "notNull": true },
+          { "fieldPath": "fadeOutMs", "columnName": "fadeOutMs", "affinity": "INTEGER", "notNull": true },
+          { "fieldPath": "fadeCurve", "columnName": "fadeCurve", "affinity": "TEXT", "notNull": true },
+          { "fieldPath": "crossfadeEnabled", "columnName": "crossfadeEnabled", "affinity": "INTEGER", "notNull": true },
+          { "fieldPath": "trimStartMs", "columnName": "trimStartMs", "affinity": "INTEGER", "notNull": true },
+          { "fieldPath": "trimEndMs", "columnName": "trimEndMs", "affinity": "INTEGER", "notNull": true },
+          { "fieldPath": "isDuckingSource", "columnName": "isDuckingSource", "affinity": "INTEGER", "notNull": true },
+          { "fieldPath": "normalizedGain", "columnName": "normalizedGain", "affinity": "REAL", "notNull": true }
+        ],
+        "primaryKey": { "autoGenerate": false, "columnNames": ["padId"] },
+        "indices": [
+          {
+            "name": "index_pad_settings_padId",
+            "unique": false,
+            "columnNames": ["padId"],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_pad_settings_padId` ON `${TABLE_NAME}` (`padId`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "sound_pads",
+            "onDelete": "CASCADE",
+            "onUpdate": "NO ACTION",
+            "columns": ["padId"],
+            "referencedColumns": ["id"]
+          }
+        ]
+      },
+      {
+        "tableName": "midi_cc_mappings",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `profileId` TEXT NOT NULL, `target` TEXT NOT NULL, `ccNumber` INTEGER NOT NULL, `channel` INTEGER NOT NULL, PRIMARY KEY(`id`), FOREIGN KEY(`profileId`) REFERENCES `pad_profiles`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+        "fields": [
+          { "fieldPath": "id", "columnName": "id", "affinity": "TEXT", "notNull": true },
+          { "fieldPath": "profileId", "columnName": "profileId", "affinity": "TEXT", "notNull": true },
+          { "fieldPath": "target", "columnName": "target", "affinity": "TEXT", "notNull": true },
+          { "fieldPath": "ccNumber", "columnName": "ccNumber", "affinity": "INTEGER", "notNull": true },
+          { "fieldPath": "channel", "columnName": "channel", "affinity": "INTEGER", "notNull": true }
+        ],
+        "primaryKey": { "autoGenerate": false, "columnNames": ["id"] },
+        "indices": [
+          {
+            "name": "index_midi_cc_mappings_profileId",
+            "unique": false,
+            "columnNames": ["profileId"],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_midi_cc_mappings_profileId` ON `${TABLE_NAME}` (`profileId`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "pad_profiles",
+            "onDelete": "CASCADE",
+            "onUpdate": "NO ACTION",
+            "columns": ["profileId"],
+            "referencedColumns": ["id"]
+          }
+        ]
+      }
+    ],
+    "setupQueries": [
+      "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, 'soundpad_schema_v8_compat')"
+    ]
+  }
+}

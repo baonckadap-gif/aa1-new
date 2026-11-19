@@ -84,8 +84,15 @@ class GlobalSettingsRepository(private val context: Context) {
     val FOCUS_MODE_MIDI_NOTE = intPreferencesKey("focus_mode_midi_note")
     val PREFERRED_MAIN_OUTPUT_ID = intPreferencesKey("preferred_main_output_id")
     val PREFERRED_MAIN_OUTPUT_NAME = stringPreferencesKey("preferred_main_output_name")
+    val PREFERRED_MAIN_OUTPUT_PRODUCT_NAME = stringPreferencesKey("preferred_main_output_product_name")
+    val PREFERRED_MAIN_OUTPUT_TYPE = intPreferencesKey("preferred_main_output_type")
+    val PREFERRED_MAIN_OUTPUT_ADDRESS = stringPreferencesKey("preferred_main_output_address")
     val PREFERRED_CUE_OUTPUT_ID = intPreferencesKey("preferred_cue_output_id")
     val PREFERRED_CUE_OUTPUT_NAME = stringPreferencesKey("preferred_cue_output_name")
+    val PREFERRED_CUE_OUTPUT_PRODUCT_NAME = stringPreferencesKey("preferred_cue_output_product_name")
+    val PREFERRED_CUE_OUTPUT_TYPE = intPreferencesKey("preferred_cue_output_type")
+    val PREFERRED_CUE_OUTPUT_ADDRESS = stringPreferencesKey("preferred_cue_output_address")
+    val CUE_VOLUME = floatPreferencesKey("cue_volume")
     val AUDIO_BUFFER_SIZE_MS = intPreferencesKey("audio_buffer_size_ms")
     val PERSISTENT_BACKUP_FOLDER_URI = stringPreferencesKey("persistent_backup_folder_uri")
     val PERSISTENT_BACKUP_FOLDER_NAME = stringPreferencesKey("persistent_backup_folder_name")
@@ -96,6 +103,9 @@ class GlobalSettingsRepository(private val context: Context) {
     val LAST_DAILY_SNAPSHOT_DAY = stringPreferencesKey("last_daily_snapshot_day")
     val LAST_BACKED_UP_VERSION_CODE = intPreferencesKey("last_backed_up_version_code")
     val DRAG_DROP_CONFLICT_MODE = stringPreferencesKey("drag_drop_conflict_mode")
+    val LAST_BLE_MIDI_ADDRESS = stringPreferencesKey("last_ble_midi_address")
+    val LAST_BLE_MIDI_NAME = stringPreferencesKey("last_ble_midi_name")
+    val BLE_AUTO_RECONNECT_ENABLED = booleanPreferencesKey("ble_auto_reconnect_enabled")
   }
 
   val settingsFlow: Flow<GlobalSettings> = context.soundPadDataStore.data.map { prefs ->
@@ -197,15 +207,25 @@ class GlobalSettingsRepository(private val context: Context) {
       focusModeMidiNote = prefs[Keys.FOCUS_MODE_MIDI_NOTE],
       preferredMainOutputId = prefs[Keys.PREFERRED_MAIN_OUTPUT_ID],
       preferredMainOutputName = prefs[Keys.PREFERRED_MAIN_OUTPUT_NAME],
+      preferredMainOutputProductName = prefs[Keys.PREFERRED_MAIN_OUTPUT_PRODUCT_NAME],
+      preferredMainOutputType = prefs[Keys.PREFERRED_MAIN_OUTPUT_TYPE],
+      preferredMainOutputAddress = prefs[Keys.PREFERRED_MAIN_OUTPUT_ADDRESS],
       preferredCueOutputId = prefs[Keys.PREFERRED_CUE_OUTPUT_ID],
       preferredCueOutputName = prefs[Keys.PREFERRED_CUE_OUTPUT_NAME],
+      preferredCueOutputProductName = prefs[Keys.PREFERRED_CUE_OUTPUT_PRODUCT_NAME],
+      preferredCueOutputType = prefs[Keys.PREFERRED_CUE_OUTPUT_TYPE],
+      preferredCueOutputAddress = prefs[Keys.PREFERRED_CUE_OUTPUT_ADDRESS],
+      cueVolume = (prefs[Keys.CUE_VOLUME] ?: 0.85f).coerceIn(0f, 1f),
       audioBufferSizeMs = (prefs[Keys.AUDIO_BUFFER_SIZE_MS] ?: 50).coerceIn(20, 500),
       persistentBackupFolderUri = prefs[Keys.PERSISTENT_BACKUP_FOLDER_URI],
       persistentBackupFolderName = prefs[Keys.PERSISTENT_BACKUP_FOLDER_NAME],
       persistentAutoSyncEnabled = prefs[Keys.PERSISTENT_AUTO_SYNC_ENABLED] ?: true,
       persistentLastSyncAtMs = prefs[Keys.PERSISTENT_LAST_SYNC_AT_MS] ?: 0L,
       persistentIncludeWaveforms = prefs[Keys.PERSISTENT_INCLUDE_WAVEFORMS] ?: false,
-      dragDropConflictMode = dragDropConflictMode
+      dragDropConflictMode = dragDropConflictMode,
+      lastBleMidiAddress = prefs[Keys.LAST_BLE_MIDI_ADDRESS],
+      lastBleMidiName = prefs[Keys.LAST_BLE_MIDI_NAME],
+      bleAutoReconnectEnabled = prefs[Keys.BLE_AUTO_RECONNECT_ENABLED] ?: true
     )
   }
 
@@ -404,21 +424,51 @@ class GlobalSettingsRepository(private val context: Context) {
     }
   }
 
-  suspend fun setPreferredMainOutput(deviceId: Int?, deviceName: String?) {
+  suspend fun setPreferredMainOutput(
+    deviceId: Int?,
+    deviceName: String?,
+    productName: String? = null,
+    deviceType: Int? = null,
+    address: String? = null
+  ) {
     context.soundPadDataStore.edit { prefs ->
       if (deviceId == null) prefs.remove(Keys.PREFERRED_MAIN_OUTPUT_ID)
       else prefs[Keys.PREFERRED_MAIN_OUTPUT_ID] = deviceId
       if (deviceName.isNullOrBlank()) prefs.remove(Keys.PREFERRED_MAIN_OUTPUT_NAME)
       else prefs[Keys.PREFERRED_MAIN_OUTPUT_NAME] = deviceName
+      if (productName.isNullOrBlank()) prefs.remove(Keys.PREFERRED_MAIN_OUTPUT_PRODUCT_NAME)
+      else prefs[Keys.PREFERRED_MAIN_OUTPUT_PRODUCT_NAME] = productName
+      if (deviceType == null) prefs.remove(Keys.PREFERRED_MAIN_OUTPUT_TYPE)
+      else prefs[Keys.PREFERRED_MAIN_OUTPUT_TYPE] = deviceType
+      if (address.isNullOrBlank()) prefs.remove(Keys.PREFERRED_MAIN_OUTPUT_ADDRESS)
+      else prefs[Keys.PREFERRED_MAIN_OUTPUT_ADDRESS] = address
     }
   }
 
-  suspend fun setPreferredCueOutput(deviceId: Int?, deviceName: String?) {
+  suspend fun setPreferredCueOutput(
+    deviceId: Int?,
+    deviceName: String?,
+    productName: String? = null,
+    deviceType: Int? = null,
+    address: String? = null
+  ) {
     context.soundPadDataStore.edit { prefs ->
       if (deviceId == null) prefs.remove(Keys.PREFERRED_CUE_OUTPUT_ID)
       else prefs[Keys.PREFERRED_CUE_OUTPUT_ID] = deviceId
       if (deviceName.isNullOrBlank()) prefs.remove(Keys.PREFERRED_CUE_OUTPUT_NAME)
       else prefs[Keys.PREFERRED_CUE_OUTPUT_NAME] = deviceName
+      if (productName.isNullOrBlank()) prefs.remove(Keys.PREFERRED_CUE_OUTPUT_PRODUCT_NAME)
+      else prefs[Keys.PREFERRED_CUE_OUTPUT_PRODUCT_NAME] = productName
+      if (deviceType == null) prefs.remove(Keys.PREFERRED_CUE_OUTPUT_TYPE)
+      else prefs[Keys.PREFERRED_CUE_OUTPUT_TYPE] = deviceType
+      if (address.isNullOrBlank()) prefs.remove(Keys.PREFERRED_CUE_OUTPUT_ADDRESS)
+      else prefs[Keys.PREFERRED_CUE_OUTPUT_ADDRESS] = address
+    }
+  }
+
+  suspend fun setCueVolume(volume: Float) {
+    context.soundPadDataStore.edit { prefs ->
+      prefs[Keys.CUE_VOLUME] = volume.coerceIn(0f, 1f)
     }
   }
 
@@ -488,6 +538,27 @@ class GlobalSettingsRepository(private val context: Context) {
   suspend fun setDragDropConflictMode(mode: DragDropConflictMode) {
     context.soundPadDataStore.edit { prefs ->
       prefs[Keys.DRAG_DROP_CONFLICT_MODE] = mode.name
+    }
+  }
+
+  suspend fun setLastBleMidiDevice(address: String?, name: String?) {
+    context.soundPadDataStore.edit { prefs ->
+      if (address.isNullOrBlank()) {
+        prefs.remove(Keys.LAST_BLE_MIDI_ADDRESS)
+      } else {
+        prefs[Keys.LAST_BLE_MIDI_ADDRESS] = address
+      }
+      if (name.isNullOrBlank()) {
+        prefs.remove(Keys.LAST_BLE_MIDI_NAME)
+      } else {
+        prefs[Keys.LAST_BLE_MIDI_NAME] = name
+      }
+    }
+  }
+
+  suspend fun setBleAutoReconnectEnabled(enabled: Boolean) {
+    context.soundPadDataStore.edit { prefs ->
+      prefs[Keys.BLE_AUTO_RECONNECT_ENABLED] = enabled
     }
   }
 
@@ -562,6 +633,21 @@ class GlobalSettingsRepository(private val context: Context) {
       } else {
         prefs.remove(Keys.PREFERRED_MAIN_OUTPUT_NAME)
       }
+      if (!gs.preferredMainOutputProductName.isNullOrBlank()) {
+        prefs[Keys.PREFERRED_MAIN_OUTPUT_PRODUCT_NAME] = gs.preferredMainOutputProductName
+      } else {
+        prefs.remove(Keys.PREFERRED_MAIN_OUTPUT_PRODUCT_NAME)
+      }
+      if (gs.preferredMainOutputType != null) {
+        prefs[Keys.PREFERRED_MAIN_OUTPUT_TYPE] = gs.preferredMainOutputType
+      } else {
+        prefs.remove(Keys.PREFERRED_MAIN_OUTPUT_TYPE)
+      }
+      if (!gs.preferredMainOutputAddress.isNullOrBlank()) {
+        prefs[Keys.PREFERRED_MAIN_OUTPUT_ADDRESS] = gs.preferredMainOutputAddress
+      } else {
+        prefs.remove(Keys.PREFERRED_MAIN_OUTPUT_ADDRESS)
+      }
       if (gs.preferredCueOutputId != null) {
         prefs[Keys.PREFERRED_CUE_OUTPUT_ID] = gs.preferredCueOutputId
       } else {
@@ -572,10 +658,37 @@ class GlobalSettingsRepository(private val context: Context) {
       } else {
         prefs.remove(Keys.PREFERRED_CUE_OUTPUT_NAME)
       }
+      if (!gs.preferredCueOutputProductName.isNullOrBlank()) {
+        prefs[Keys.PREFERRED_CUE_OUTPUT_PRODUCT_NAME] = gs.preferredCueOutputProductName
+      } else {
+        prefs.remove(Keys.PREFERRED_CUE_OUTPUT_PRODUCT_NAME)
+      }
+      if (gs.preferredCueOutputType != null) {
+        prefs[Keys.PREFERRED_CUE_OUTPUT_TYPE] = gs.preferredCueOutputType
+      } else {
+        prefs.remove(Keys.PREFERRED_CUE_OUTPUT_TYPE)
+      }
+      if (!gs.preferredCueOutputAddress.isNullOrBlank()) {
+        prefs[Keys.PREFERRED_CUE_OUTPUT_ADDRESS] = gs.preferredCueOutputAddress
+      } else {
+        prefs.remove(Keys.PREFERRED_CUE_OUTPUT_ADDRESS)
+      }
+      prefs[Keys.CUE_VOLUME] = gs.cueVolume.coerceIn(0f, 1f)
       prefs[Keys.AUDIO_BUFFER_SIZE_MS] = gs.audioBufferSizeMs.coerceIn(20, 500)
       prefs[Keys.PERSISTENT_AUTO_SYNC_ENABLED] = gs.persistentAutoSyncEnabled
       prefs[Keys.PERSISTENT_INCLUDE_WAVEFORMS] = gs.persistentIncludeWaveforms
       prefs[Keys.DRAG_DROP_CONFLICT_MODE] = gs.dragDropConflictMode.name
+      if (!gs.lastBleMidiAddress.isNullOrBlank()) {
+        prefs[Keys.LAST_BLE_MIDI_ADDRESS] = gs.lastBleMidiAddress
+      } else {
+        prefs.remove(Keys.LAST_BLE_MIDI_ADDRESS)
+      }
+      if (!gs.lastBleMidiName.isNullOrBlank()) {
+        prefs[Keys.LAST_BLE_MIDI_NAME] = gs.lastBleMidiName
+      } else {
+        prefs.remove(Keys.LAST_BLE_MIDI_NAME)
+      }
+      prefs[Keys.BLE_AUTO_RECONNECT_ENABLED] = gs.bleAutoReconnectEnabled
       if (restoreSyncFolderConfig) {
         if (!gs.persistentBackupFolderUri.isNullOrBlank()) {
           prefs[Keys.PERSISTENT_BACKUP_FOLDER_URI] = gs.persistentBackupFolderUri

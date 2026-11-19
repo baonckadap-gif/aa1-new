@@ -280,4 +280,35 @@
     <string name="move_slot_invalid_error">Masukkan nomor slot antara 1 sampai %1$d</string>
     <string name="settings_drag_conflict_title">MODE DROP KE SLOT TERISI</string>
     <string name="settings_drag_conflict_subtitle">Pilih perilaku saat menjatuhkan pad ke slot yang sudah terisi</string>
+
+    <!-- Tahap 2: Scheduler Pad Search & Bank Filter -->
+    <string name="scheduler_search_pads_label">Cari pad (nama, file, bank)…</string>
+    <string name="scheduler_all_banks">Semua Bank</string>
+    <string name="scheduler_no_matching_pads">Tidak ada pad yang cocok dengan pencarian/filter.</string>
+    <string name="scheduler_bank_fallback">Bank %1$d</string>
+    <string name="scheduler_clear_search">Hapus pencarian</string>
+    <string name="scheduler_pad_count_shown">%1$d pad ditemukan</string>
+
+    <!-- Tahap 3: Cue Volume, Audio Buffer & Latency Test, Stable Device Auto-Reconnect -->
+    <string name="cue_volume_title">VOLUME MONITOR CUE</string>
+    <string name="cue_volume_subtitle">Volume terpisah untuk headphone/preview cue (tidak memengaruhi output utama)</string>
+    <string name="audio_buffer_section_title">BUFFER AUDIO &amp; LATENSI</string>
+    <string name="audio_buffer_slider_label">UKURAN BUFFER PEMUTARAN</string>
+    <string name="audio_buffer_hint">Lebih kecil = respons lebih cepat; lebih besar = lebih stabil saat beban CPU tinggi</string>
+    <string name="audio_buffer_pending_rebuild_warning">Perubahan buffer menunggu slot aktif berhenti (atau berlaku pada pemutaran baru agar audio yang berjalan tidak terputus).</string>
+    <string name="latency_test_button">Latency test</string>
+    <string name="latency_test_running">Mengukur…</string>
+    <string name="latency_test_result">Siap dalam %1$d ms (target buffer %2$d ms)</string>
+    <string name="output_device_reconnected">Output terhubung ulang otomatis: %1$s</string>
+    <string name="cue_device_reconnected">Monitor Cue terhubung ulang otomatis: %1$s</string>
+
+    <!-- Tahap 4: Master Limiter Bus, BLE Auto-Reconnect, Per-Profile Focus MIDI, Master Record WAV/M4A -->
+    <string name="ble_auto_reconnect_title">Auto-Reconnect BLE MIDI</string>
+    <string name="ble_auto_reconnect_none_saved">Belum ada controller BLE MIDI tersimpan</string>
+    <string name="ble_auto_reconnect_ready">Menunggu perangkat BLE MIDI tersimpan</string>
+    <string name="ble_reconnect_now">Sambung Ulang</string>
+    <string name="ble_forget_device">Lupakan</string>
+    <string name="master_rec_format_label">Format File Output</string>
+    <string name="master_rec_samplerate_label">Sample Rate Output</string>
+    <string name="master_rec_stop_format">Stop &amp; Simpan %1$s</string>
 </resources>

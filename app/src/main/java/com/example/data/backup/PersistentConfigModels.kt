@@ -61,8 +61,15 @@ data class ConfigMetaJson(
 data class AudioOutputConfigBackup(
   val mainOutputDeviceId: Int? = null,
   val mainOutputDeviceName: String? = null,
+  val mainOutputProductName: String? = null,
+  val mainOutputDeviceType: Int? = null,
+  val mainOutputAddress: String? = null,
   val cueOutputDeviceId: Int? = null,
   val cueOutputDeviceName: String? = null,
+  val cueOutputProductName: String? = null,
+  val cueOutputDeviceType: Int? = null,
+  val cueOutputAddress: String? = null,
+  val cueVolume: Float = 0.85f,
   val audioBufferSizeMs: Int = 50
 )
 
@@ -80,8 +87,15 @@ data class SettingsBackupBundle(
   val audioOutput: AudioOutputConfigBackup = AudioOutputConfigBackup(
     mainOutputDeviceId = settings.preferredMainOutputId,
     mainOutputDeviceName = settings.preferredMainOutputName,
+    mainOutputProductName = settings.preferredMainOutputProductName,
+    mainOutputDeviceType = settings.preferredMainOutputType,
+    mainOutputAddress = settings.preferredMainOutputAddress,
     cueOutputDeviceId = settings.preferredCueOutputId,
     cueOutputDeviceName = settings.preferredCueOutputName,
+    cueOutputProductName = settings.preferredCueOutputProductName,
+    cueOutputDeviceType = settings.preferredCueOutputType,
+    cueOutputAddress = settings.preferredCueOutputAddress,
+    cueVolume = settings.cueVolume,
     audioBufferSizeMs = settings.audioBufferSizeMs
   ),
   val syncConfig: PersistentSyncConfigBackup = PersistentSyncConfigBackup(

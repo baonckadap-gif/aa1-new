@@ -16,7 +16,21 @@ import java.util.Calendar
 
 object PadSchedulerManager {
   const val ACTION_TRIGGER_SCHEDULE = "com.example.action.TRIGGER_SCHEDULED_PAD"
+  const val ACTION_STOP_SCHEDULED_PAD = "com.example.action.STOP_SCHEDULED_PAD"
   const val EXTRA_TASK_ID = "extra_task_id"
+  const val EXTRA_TARGET_TYPE = "extra_target_type"
+  const val EXTRA_TARGET_ID = "extra_target_id"
+
+  private const val STOP_REQUEST_CODE_OFFSET = 1_000_000
+
+  fun startRequestCode(taskId: String, persistedRequestCode: Int): Int {
+    if (persistedRequestCode > 0) return persistedRequestCode
+    return (taskId.hashCode() and 0x000FFFFF).coerceAtLeast(100)
+  }
+
+  fun stopRequestCode(taskId: String, persistedRequestCode: Int): Int {
+    return STOP_REQUEST_CODE_OFFSET + startRequestCode(taskId, persistedRequestCode)
+  }
 
   fun canScheduleExactAlarms(context: Context): Boolean {
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return true
@@ -109,7 +123,7 @@ object PadSchedulerManager {
   fun scheduleTask(context: Context, task: ScheduledPadTask): Long {
     val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as? AlarmManager ?: return 0L
     if (!task.enabled) {
-      cancelTask(context, task.id)
+      cancelTask(context, task.id, task.requestCode)
       return 0L
     }
     val triggerAtMs = computeNextTriggerTimeMs(
@@ -118,21 +132,49 @@ object PadSchedulerManager {
       repeatMode = task.repeatMode,
       daysOfWeekMask = task.daysOfWeekMask
     )
-    val pi = buildPendingIntent(context, task.id)
-    runCatching {
-      if (canScheduleExactAlarms(context)) {
-        alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAtMs, pi)
-      } else {
-        alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAtMs, pi)
-      }
-    }
+    val pi = buildStartPendingIntent(context, task.id, task.requestCode)
+    scheduleAlarmAt(context, alarmManager, triggerAtMs, pi)
     return triggerAtMs
   }
 
-  fun cancelTask(context: Context, taskId: String) {
+  /**
+   * Schedules a dedicated second AlarmManager alarm to stop ONLY the target (pad/bank/sequencer)
+   * after [task.autoStopMinutes], replacing fragile background coroutine delays.
+   */
+  fun scheduleAutoStop(
+    context: Context,
+    task: ScheduledPadTask,
+    nowMs: Long = System.currentTimeMillis()
+  ): Long {
+    if (task.autoStopMinutes <= 0) return 0L
+    val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as? AlarmManager ?: return 0L
+    val stopAtMs = nowMs + task.autoStopMinutes * 60_000L
+    val pi = buildStopPendingIntent(
+      context = context,
+      taskId = task.id,
+      targetType = task.targetType,
+      targetId = task.targetId,
+      persistedRequestCode = task.requestCode
+    )
+    scheduleAlarmAt(context, alarmManager, stopAtMs, pi)
+    return stopAtMs
+  }
+
+  fun cancelTask(context: Context, taskId: String, persistedRequestCode: Int = 0) {
     val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as? AlarmManager ?: return
     runCatching {
-      alarmManager.cancel(buildPendingIntent(context, taskId))
+      alarmManager.cancel(buildStartPendingIntent(context, taskId, persistedRequestCode))
+    }
+    runCatching {
+      alarmManager.cancel(
+        buildStopPendingIntent(
+          context = context,
+          taskId = taskId,
+          targetType = ScheduleTargetType.PAD,
+          targetId = "",
+          persistedRequestCode = persistedRequestCode
+        )
+      )
     }
   }
 
@@ -140,22 +182,67 @@ object PadSchedulerManager {
     val dao = SoundPadDatabase.getInstance(context).soundPadDao()
     val active = dao.getActiveScheduledTasksOnce()
     active.forEach { entity ->
-      val domain = entity.toDomain()
+      val ensured = if (entity.requestCode <= 0) {
+        dao.upsertScheduledTaskAssigningRequestCode(entity)
+      } else {
+        entity
+      }
+      val domain = ensured.toDomain()
       val nextMs = scheduleTask(context, domain)
-      if (nextMs > 0L && nextMs != entity.nextTriggerAtMs) {
-        dao.upsertScheduledTask(entity.copy(nextTriggerAtMs = nextMs))
+      if (nextMs > 0L && nextMs != ensured.nextTriggerAtMs) {
+        dao.upsertScheduledTask(ensured.copy(nextTriggerAtMs = nextMs))
       }
     }
   }
 
-  private fun buildPendingIntent(context: Context, taskId: String): PendingIntent {
+  private fun scheduleAlarmAt(
+    context: Context,
+    alarmManager: AlarmManager,
+    triggerAtMs: Long,
+    pendingIntent: PendingIntent
+  ) {
+    runCatching {
+      if (canScheduleExactAlarms(context)) {
+        alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAtMs, pendingIntent)
+      } else {
+        alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAtMs, pendingIntent)
+      }
+    }
+  }
+
+  fun buildStartPendingIntent(
+    context: Context,
+    taskId: String,
+    persistedRequestCode: Int
+  ): PendingIntent {
     val intent = Intent(context, PadSchedulerReceiver::class.java).apply {
       action = ACTION_TRIGGER_SCHEDULE
       putExtra(EXTRA_TASK_ID, taskId)
     }
     return PendingIntent.getBroadcast(
       context,
-      taskId.hashCode(),
+      startRequestCode(taskId, persistedRequestCode),
+      intent,
+      PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+    )
+  }
+
+  fun buildStopPendingIntent(
+    context: Context,
+    taskId: String,
+    targetType: ScheduleTargetType,
+    targetId: String,
+    persistedRequestCode: Int
+  ): PendingIntent {
+    val intent = Intent(context, PadSchedulerReceiver::class.java).apply {
+      action = ACTION_STOP_SCHEDULED_PAD
+      putExtra(EXTRA_TASK_ID, taskId)
+      putExtra(EXTRA_TARGET_TYPE, targetType.name)
+      putExtra(EXTRA_TARGET_ID, targetId)
+    }
+    return PendingIntent.getBroadcast(
+      context,
+      stopRequestCode(taskId, persistedRequestCode),
       intent,
       PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
     )
@@ -176,6 +263,7 @@ fun ScheduledTaskEntity.toDomain(): ScheduledPadTask = ScheduledPadTask(
   fadeInMs = fadeInMs,
   autoStopMinutes = autoStopMinutes,
   loopPlayback = loopPlayback,
+  requestCode = requestCode,
   nextTriggerAtMs = nextTriggerAtMs,
   createdAtMs = createdAtMs
 )
@@ -194,6 +282,7 @@ fun ScheduledPadTask.toEntity(): ScheduledTaskEntity = ScheduledTaskEntity(
   fadeInMs = fadeInMs,
   autoStopMinutes = autoStopMinutes,
   loopPlayback = loopPlayback,
+  requestCode = requestCode,
   nextTriggerAtMs = nextTriggerAtMs,
   createdAtMs = createdAtMs
 )

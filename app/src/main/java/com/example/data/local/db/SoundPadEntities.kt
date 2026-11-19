@@ -22,6 +22,7 @@ data class PadProfileEntity(
   val masterEqEnabled: Boolean = false,
   val masterEqPreset: String = "FLAT",
   val masterEqBandsJson: String = "[0.0,0.0,0.0,0.0,0.0]",
+  val focusModeMidiNote: Int? = null,
   val createdAtMs: Long,
   val updatedAtMs: Long,
   val isActive: Boolean = false
@@ -164,8 +165,15 @@ data class ScheduledTaskEntity(
   val fadeInMs: Long,
   val autoStopMinutes: Int,
   val loopPlayback: Boolean,
+  val requestCode: Int = 0,
   val nextTriggerAtMs: Long,
   val createdAtMs: Long
+)
+
+@Entity(tableName = "scheduler_id_counter")
+data class SchedulerIdCounterEntity(
+  @PrimaryKey val id: Int = 1,
+  val nextRequestCode: Int = 100
 )
 
 @Entity(tableName = "sequencer_playlists")

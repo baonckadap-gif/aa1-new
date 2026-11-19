@@ -22,6 +22,7 @@ import androidx.media3.exoplayer.audio.DefaultAudioSink
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import com.example.domain.model.FadeCurve
 import com.example.domain.model.GlobalSettings
+import com.example.domain.model.LatencyTestReport
 import com.example.domain.model.PadErrorType
 import com.example.domain.model.PadPlaybackState
 import com.example.domain.model.PadTriggerMode
@@ -38,7 +39,34 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.File
+import java.io.RandomAccessFile
+import kotlin.math.PI
+import kotlin.math.sin
 import kotlin.math.sqrt
+
+data class LoadControlDurations(
+  val minBufferMs: Int,
+  val maxBufferMs: Int,
+  val bufferForPlaybackMs: Int,
+  val bufferForPlaybackAfterRebufferMs: Int
+)
+
+object AudioBufferMath {
+  fun computeLoadControlDurations(audioBufferSizeMs: Int): LoadControlDurations {
+    val playbackMs = audioBufferSizeMs.coerceIn(20, 500)
+    val afterRebufferMs = (playbackMs * 2).coerceAtLeast(100).coerceAtLeast(playbackMs)
+    val minBufferMs = maxOf(1000, afterRebufferMs * 2)
+    val maxBufferMs = maxOf(4000, minBufferMs * 2)
+    return LoadControlDurations(
+      minBufferMs = minBufferMs,
+      maxBufferMs = maxBufferMs,
+      bufferForPlaybackMs = playbackMs,
+      bufferForPlaybackAfterRebufferMs = afterRebufferMs
+    )
+  }
+}
 
 object AudioMixMath {
   fun computeSlotGain(
@@ -49,7 +77,8 @@ object AudioMixMath {
     autoNormalizeEnabled: Boolean,
     limiterEnabled: Boolean,
     activeSlotCount: Int,
-    duckingMultiplier: Float
+    duckingMultiplier: Float,
+    useRealtimeBusLimiter: Boolean = false
   ): Float {
     val normFactor = if (autoNormalizeEnabled) normalizedGain.coerceIn(0.35f, 1.60f) else 1.0f
     val raw = masterVolume.coerceIn(0f, 1f) *
@@ -58,13 +87,17 @@ object AudioMixMath {
       normFactor *
       duckingMultiplier.coerceIn(0.05f, 1f)
 
-    val limiterScale = if (limiterEnabled && activeSlotCount > 1) {
-      // Soft-knee headroom scaling prevents polyphony clipping on Android mixer
+    val limiterScale = if (limiterEnabled && !useRealtimeBusLimiter && activeSlotCount > 1) {
+      // Fallback soft-knee headroom scaling when real-time bus limiter is inactive
       (1.12f / sqrt(activeSlotCount.toFloat())).coerceIn(0.32f, 1.0f)
     } else {
       1.0f
     }
     return (raw * limiterScale).coerceIn(0f, 1f)
+  }
+
+  fun computeCueGain(padVolume: Float, cueVolume: Float): Float {
+    return (padVolume.coerceIn(0f, 1f) * cueVolume.coerceIn(0f, 1f)).coerceIn(0f, 1f)
   }
 }
 
@@ -81,11 +114,19 @@ class SoundPadAudioEngine(
 
   var onPlaybackError: ((pad: SoundPad, errorType: PadErrorType, message: String, stackTrace: String) -> Unit)? = null
 
+  @OptIn(UnstableApi::class)
+  val limiterProcessor = MasterLimiterAudioProcessor()
+
+  @OptIn(UnstableApi::class)
+  private val mixerBus = MasterAudioMixerBus(context = context, limiterProcessor = limiterProcessor)
+
   @Volatile
   private var masterRecorder: MasterOutputRecorder? = null
 
+  @OptIn(UnstableApi::class)
   fun attachMasterRecorder(recorder: MasterOutputRecorder) {
     masterRecorder = recorder
+    mixerBus.attachMasterRecorder(recorder)
   }
 
   private data class PlayerSlot @OptIn(UnstableApi::class) constructor(
@@ -94,7 +135,7 @@ class SoundPadAudioEngine(
     val eqProcessor: FiveBandEqAudioProcessor,
     val fxProcessor: ReverbEchoAudioProcessor,
     val panProcessor: StereoPanAudioProcessor,
-    val tapProcessor: MasterTapAudioProcessor?,
+    val tapProcessor: MasterBusSlotTapAudioProcessor?,
     val listener: Player.Listener,
     val fadeInStartElapsedMs: Long,
     val fadeInDurationMs: Long,
@@ -135,13 +176,33 @@ class SoundPadAudioEngine(
   private val _cuePreviewPadId = MutableStateFlow<String?>(null)
   val cuePreviewPadId: StateFlow<String?> = _cuePreviewPadId.asStateFlow()
   private var cuePlayer: ExoPlayer? = null
+  private var activeCuePad: SoundPad? = null
+
+  private var appliedBufferSizeMs: Int = currentSettings.audioBufferSizeMs
+  private val _hasPendingBufferRebuild = MutableStateFlow(false)
+  val hasPendingBufferRebuild: StateFlow<Boolean> = _hasPendingBufferRebuild.asStateFlow()
+
+  private val _isRunningLatencyTest = MutableStateFlow(false)
+  val isRunningLatencyTest: StateFlow<Boolean> = _isRunningLatencyTest.asStateFlow()
+
+  private val _latencyTestReport = MutableStateFlow<LatencyTestReport?>(null)
+  val latencyTestReport: StateFlow<LatencyTestReport?> = _latencyTestReport.asStateFlow()
+
+  private var latencyTestPlayer: ExoPlayer? = null
 
   @OptIn(UnstableApi::class)
-  private fun createLowLatencyLoadControl(): DefaultLoadControl =
-    DefaultLoadControl.Builder()
-      .setBufferDurationsMs(1000, 4000, 50, 150)
+  private fun createLowLatencyLoadControl(bufferMs: Int = currentSettings.audioBufferSizeMs): DefaultLoadControl {
+    val d = AudioBufferMath.computeLoadControlDurations(bufferMs)
+    return DefaultLoadControl.Builder()
+      .setBufferDurationsMs(
+        d.minBufferMs,
+        d.maxBufferMs,
+        d.bufferForPlaybackMs,
+        d.bufferForPlaybackAfterRebufferMs
+      )
       .setPrioritizeTimeOverSizeThresholds(true)
       .build()
+  }
 
   private val wakeLock: PowerManager.WakeLock by lazy {
     val pm = context.getSystemService(Context.POWER_SERVICE) as PowerManager
@@ -158,10 +219,30 @@ class SoundPadAudioEngine(
 
   @OptIn(UnstableApi::class)
   fun updateGlobalSettings(settings: GlobalSettings) {
+    val bufferChanged = settings.audioBufferSizeMs != appliedBufferSizeMs
     currentSettings = settings
+    if (bufferChanged) {
+      appliedBufferSizeMs = settings.audioBufferSizeMs
+    }
+    limiterProcessor.setEnabled(settings.masterLimiterEnabled)
+    mixerBus.setLimiterEnabled(settings.masterLimiterEnabled)
     scope.launch {
+      if (bufferChanged) {
+        // Keep playing pads uninterrupted; active slots using older buffer trigger a gentle rebuild notice
+        _hasPendingBufferRebuild.value = activeSlots.isNotEmpty()
+      }
+      if (settings.masterLimiterEnabled) {
+        if (activeSlots.isNotEmpty()) {
+          mixerBus.ensureStarted(settings.audioBufferSizeMs)
+        }
+      } else {
+        mixerBus.stop()
+      }
       activeSlots.values.forEach { slot ->
         applySlotDsp(slot.eqProcessor, slot.fxProcessor, slot.panProcessor, slot.pad, settings)
+      }
+      activeCuePad?.let { cuePad ->
+        cuePlayer?.volume = AudioMixMath.computeCueGain(cuePad.settings.volume, settings.cueVolume)
       }
       refreshAllActiveSlotVolumes()
     }
@@ -190,6 +271,26 @@ class SoundPadAudioEngine(
     currentSettings = currentSettings.copy(masterVolume = volume.coerceIn(0f, 1f))
     scope.launch {
       refreshAllActiveSlotVolumes()
+    }
+  }
+
+  fun setCueVolume(volume: Float) {
+    val clamped = volume.coerceIn(0f, 1f)
+    currentSettings = currentSettings.copy(cueVolume = clamped)
+    scope.launch {
+      activeCuePad?.let { cuePad ->
+        cuePlayer?.volume = AudioMixMath.computeCueGain(cuePad.settings.volume, clamped)
+      }
+    }
+  }
+
+  fun setAudioBufferSizeMs(bufferMs: Int) {
+    val clamped = bufferMs.coerceIn(20, 500)
+    if (clamped == appliedBufferSizeMs && currentSettings.audioBufferSizeMs == clamped) return
+    currentSettings = currentSettings.copy(audioBufferSizeMs = clamped)
+    appliedBufferSizeMs = clamped
+    scope.launch {
+      _hasPendingBufferRebuild.value = activeSlots.isNotEmpty()
     }
   }
 
@@ -236,6 +337,7 @@ class SoundPadAudioEngine(
     scope.launch {
       val info = AudioOutputRouter.findOutputDeviceById(context, deviceId)
       cachedMainOutputDevice = info
+      mixerBus.setPreferredOutputDevice(info)
       activeSlots.values.forEach { slot ->
         runCatching { slot.player.setPreferredAudioDevice(info) }
       }
@@ -252,6 +354,136 @@ class SoundPadAudioEngine(
       runCatching { previewPlayer?.setPreferredAudioDevice(info) }
     }
   }
+
+  @OptIn(UnstableApi::class)
+  fun runLatencyTest() {
+    if (_isRunningLatencyTest.value) return
+    scope.launch {
+      _isRunningLatencyTest.value = true
+      val configuredMs = currentSettings.audioBufferSizeMs.coerceIn(20, 500)
+      try {
+        releaseLatencyTestPlayer()
+        val wavFile = withContext(Dispatchers.IO) { ensureLatencyTestPingWav() }
+        val startElapsed = SystemClock.elapsedRealtime()
+        val player = buildExoPlayerWithProcessors(
+          eqProcessor = FiveBandEqAudioProcessor(),
+          fxProcessor = ReverbEchoAudioProcessor(),
+          panProcessor = StereoPanAudioProcessor(),
+          includeAudioEffects = false,
+          handleAudioFocus = false
+        )
+        cachedMainOutputDevice?.let { info ->
+          runCatching { player.setPreferredAudioDevice(info) }
+        }
+        latencyTestPlayer = player
+        var recordedLatency = false
+        player.addListener(object : Player.Listener {
+          override fun onPlaybackStateChanged(playbackState: Int) {
+            if (!recordedLatency && playbackState == Player.STATE_READY) {
+              recordedLatency = true
+              val readyElapsed = (SystemClock.elapsedRealtime() - startElapsed).coerceAtLeast(1L)
+              _latencyTestReport.value = LatencyTestReport(
+                configuredBufferMs = configuredMs,
+                measuredReadyMs = readyElapsed
+              )
+            } else if (playbackState == Player.STATE_ENDED) {
+              releaseLatencyTestPlayer()
+              _isRunningLatencyTest.value = false
+            }
+          }
+
+          override fun onPlayerError(error: PlaybackException) {
+            if (!recordedLatency) {
+              recordedLatency = true
+              _latencyTestReport.value = LatencyTestReport(
+                configuredBufferMs = configuredMs,
+                measuredReadyMs = (SystemClock.elapsedRealtime() - startElapsed).coerceAtLeast(1L)
+              )
+            }
+            releaseLatencyTestPlayer()
+            _isRunningLatencyTest.value = false
+          }
+        })
+        player.volume = (currentSettings.masterVolume * 0.45f).coerceIn(0.05f, 0.75f)
+        player.setMediaItem(MediaItem.fromUri(Uri.fromFile(wavFile)))
+        player.prepare()
+        player.play()
+
+        // Safety timeout so UI never stays stuck in testing state
+        delay(600L)
+        if (_isRunningLatencyTest.value) {
+          if (!recordedLatency) {
+            _latencyTestReport.value = LatencyTestReport(
+              configuredBufferMs = configuredMs,
+              measuredReadyMs = (SystemClock.elapsedRealtime() - startElapsed).coerceAtLeast(1L)
+            )
+          }
+          releaseLatencyTestPlayer()
+          _isRunningLatencyTest.value = false
+        }
+      } catch (_: Exception) {
+        _latencyTestReport.value = LatencyTestReport(
+          configuredBufferMs = configuredMs,
+          measuredReadyMs = configuredMs.toLong()
+        )
+        releaseLatencyTestPlayer()
+        _isRunningLatencyTest.value = false
+      }
+    }
+  }
+
+  private fun releaseLatencyTestPlayer() {
+    latencyTestPlayer?.let { p ->
+      runCatching { p.stop() }
+      runCatching { p.release() }
+    }
+    latencyTestPlayer = null
+  }
+
+  private fun ensureLatencyTestPingWav(): File {
+    val file = File(context.cacheDir, "soundpad_latency_ping.wav")
+    if (file.exists() && file.length() > 100L) return file
+    val sampleRate = 44100
+    val durationSamples = (sampleRate * 0.065f).toInt()
+    val dataBytes = durationSamples * 2
+    RandomAccessFile(file, "rw").use { raf ->
+      raf.setLength(0)
+      raf.writeBytes("RIFF")
+      raf.write(intLe(36 + dataBytes))
+      raf.writeBytes("WAVE")
+      raf.writeBytes("fmt ")
+      raf.write(intLe(16))
+      raf.write(shortLe(1))
+      raf.write(shortLe(1))
+      raf.write(intLe(sampleRate))
+      raf.write(intLe(sampleRate * 2))
+      raf.write(shortLe(2))
+      raf.write(shortLe(16))
+      raf.writeBytes("data")
+      raf.write(intLe(dataBytes))
+      val buf = ByteArray(dataBytes)
+      for (i in 0 until durationSamples) {
+        val env = 1.0 - (i.toDouble() / durationSamples.toDouble())
+        val sample = (sin(2.0 * PI * 880.0 * i / sampleRate) * env * 12000.0).toInt().coerceIn(-32767, 32767)
+        buf[i * 2] = (sample and 0xFF).toByte()
+        buf[i * 2 + 1] = ((sample ushr 8) and 0xFF).toByte()
+      }
+      raf.write(buf)
+    }
+    return file
+  }
+
+  private fun intLe(v: Int): ByteArray = byteArrayOf(
+    (v and 0xFF).toByte(),
+    ((v ushr 8) and 0xFF).toByte(),
+    ((v ushr 16) and 0xFF).toByte(),
+    ((v ushr 24) and 0xFF).toByte()
+  )
+
+  private fun shortLe(v: Int): ByteArray = byteArrayOf(
+    (v and 0xFF).toByte(),
+    ((v ushr 8) and 0xFF).toByte()
+  )
 
   @OptIn(UnstableApi::class)
   fun updateActivePadParameters(pad: SoundPad) {
@@ -504,11 +736,12 @@ class SoundPadAudioEngine(
           pad.settings.speed.coerceIn(0.5f, 2.0f),
           pad.settings.pitch.coerceIn(0.5f, 2.0f)
         )
-        player.volume = (pad.settings.volume * 0.85f).coerceIn(0.05f, 1f)
+        player.volume = AudioMixMath.computeCueGain(pad.settings.volume, currentSettings.cueVolume)
         player.setMediaItem(mediaItem)
         player.prepare()
         player.play()
         cuePlayer = player
+        activeCuePad = pad
         _cuePreviewPadId.value = pad.id
       } catch (e: Exception) {
         onPlaybackError?.invoke(
@@ -532,6 +765,7 @@ class SoundPadAudioEngine(
       runCatching { it.release() }
     }
     cuePlayer = null
+    activeCuePad = null
     _cuePreviewPadId.value = null
   }
 
@@ -613,11 +847,14 @@ class SoundPadAudioEngine(
     _previewPositionMs.value = null
   }
 
+  @OptIn(UnstableApi::class)
   fun release() {
     SoundPadPlaybackService.onStopAllRequested = null
+    releaseLatencyTestPlayer()
     stopCuePreviewInternal()
     stopEditorPreviewInternal()
     stopAllInternal()
+    mixerBus.release()
     releaseWakeLock()
     SoundPadPlaybackService.updateForegroundState(context, 0, null)
     scope.cancel()
@@ -735,7 +972,7 @@ class SoundPadAudioEngine(
     eqProcessor: FiveBandEqAudioProcessor,
     fxProcessor: ReverbEchoAudioProcessor,
     panProcessor: StereoPanAudioProcessor,
-    tapProcessor: MasterTapAudioProcessor? = null,
+    tapProcessor: MasterBusSlotTapAudioProcessor? = null,
     includeAudioEffects: Boolean = true,
     handleAudioFocus: Boolean = false
   ): ExoPlayer {
@@ -850,8 +1087,27 @@ class SoundPadAudioEngine(
       val eqProcessor = FiveBandEqAudioProcessor()
       val fxProcessor = ReverbEchoAudioProcessor()
       val panProcessor = StereoPanAudioProcessor()
-      val tapProcessor = masterRecorder?.let { rec ->
-        MasterTapAudioProcessor(slotId = "${pad.id}_${SystemClock.elapsedRealtimeNanos()}", recorder = rec)
+
+      val mainDevice = cachedMainOutputDevice ?: if (preferredOutputDeviceId != null) {
+        AudioOutputRouter.findOutputDeviceById(context, preferredOutputDeviceId).also { cachedMainOutputDevice = it }
+      } else null
+      mixerBus.setPreferredOutputDevice(mainDevice)
+
+      if (currentSettings.masterLimiterEnabled) {
+        mixerBus.ensureStarted(currentSettings.audioBufferSizeMs)
+      }
+      val busActive = currentSettings.masterLimiterEnabled && mixerBus.isActivelyHandlingOutput
+
+      val tapProcessor = if (busActive || masterRecorder != null) {
+        MasterBusSlotTapAudioProcessor(
+          slotId = "${pad.id}_${SystemClock.elapsedRealtimeNanos()}",
+          mixerBus = mixerBus,
+          recorder = masterRecorder
+        ).apply {
+          setRouteViaMixerBus(busActive)
+        }
+      } else {
+        null
       }
       applySlotDsp(eqProcessor, fxProcessor, panProcessor, pad, currentSettings)
 
@@ -864,9 +1120,6 @@ class SoundPadAudioEngine(
         handleAudioFocus = false
       )
 
-      val mainDevice = cachedMainOutputDevice ?: if (preferredOutputDeviceId != null) {
-        AudioOutputRouter.findOutputDeviceById(context, preferredOutputDeviceId).also { cachedMainOutputDevice = it }
-      } else null
       mainDevice?.let { info ->
         runCatching { player.setPreferredAudioDevice(info) }
       }
@@ -971,6 +1224,7 @@ class SoundPadAudioEngine(
   private fun refreshAllActiveSlotVolumes() {
     val activeCount = activeSlots.size.coerceAtLeast(1)
     val hasActiveDuckSource = activeSlots.values.any { it.pad.settings.isDuckingSource && !it.isFadingOut }
+    val busActive = currentSettings.masterLimiterEnabled && mixerBus.isActivelyHandlingOutput
     activeSlots.values.forEach { slot ->
       val duckMult = computeDuckingMultiplierForSlot(slot, hasActiveDuckSource)
       val gain = AudioMixMath.computeSlotGain(
@@ -981,10 +1235,12 @@ class SoundPadAudioEngine(
         autoNormalizeEnabled = currentSettings.autoNormalizeEnabled,
         limiterEnabled = currentSettings.masterLimiterEnabled,
         activeSlotCount = activeCount,
-        duckingMultiplier = duckMult
+        duckingMultiplier = duckMult,
+        useRealtimeBusLimiter = busActive && slot.tapProcessor != null
       )
-      slot.player.volume = gain
+      slot.tapProcessor?.setRouteViaMixerBus(busActive)
       slot.tapProcessor?.setGain(gain)
+      slot.player.volume = if (busActive && slot.tapProcessor != null) 1.0f else gain
     }
   }
 
@@ -993,7 +1249,7 @@ class SoundPadAudioEngine(
     player: ExoPlayer,
     pad: SoundPad,
     envelopeGain: Float,
-    tapProcessor: MasterTapAudioProcessor? = activeSlots[pad.id]?.tapProcessor
+    tapProcessor: MasterBusSlotTapAudioProcessor? = activeSlots[pad.id]?.tapProcessor
   ) {
     val activeCount = activeSlots.size.coerceAtLeast(1)
     val hasActiveDuckSource = activeSlots.values.any { it.pad.settings.isDuckingSource && !it.isFadingOut }
@@ -1002,6 +1258,7 @@ class SoundPadAudioEngine(
     } else {
       1.0f
     }
+    val busActive = currentSettings.masterLimiterEnabled && mixerBus.isActivelyHandlingOutput && tapProcessor != null
     val gain = AudioMixMath.computeSlotGain(
       masterVolume = currentSettings.masterVolume,
       padVolume = pad.settings.volume,
@@ -1010,10 +1267,12 @@ class SoundPadAudioEngine(
       autoNormalizeEnabled = currentSettings.autoNormalizeEnabled,
       limiterEnabled = currentSettings.masterLimiterEnabled,
       activeSlotCount = activeCount,
-      duckingMultiplier = duckMult
+      duckingMultiplier = duckMult,
+      useRealtimeBusLimiter = busActive
     )
-    player.volume = gain
+    tapProcessor?.setRouteViaMixerBus(busActive)
     tapProcessor?.setGain(gain)
+    player.volume = if (busActive) 1.0f else gain
     val speed = pad.settings.speed.coerceIn(0.5f, 2.0f)
     val pitch = pad.settings.pitch.coerceIn(0.5f, 2.0f)
     player.playbackParameters = PlaybackParameters(speed, pitch)
@@ -1055,6 +1314,7 @@ class SoundPadAudioEngine(
     syncStateAndService()
   }
 
+  @OptIn(UnstableApi::class)
   private fun stopAllInternal() {
     pendingReverseJobs.values.forEach { it.cancel() }
     pendingReverseJobs.clear()
@@ -1062,11 +1322,14 @@ class SoundPadAudioEngine(
     for (id in ids) {
       releaseSlot(id)
     }
+    mixerBus.clearAllSlots()
   }
 
+  @OptIn(UnstableApi::class)
   private fun releaseSlot(padId: String) {
     pendingReverseJobs.remove(padId)?.cancel()
     val slot = activeSlots.remove(padId) ?: return
+    slot.tapProcessor?.setRouteViaMixerBus(false)
     runCatching { slot.player.removeListener(slot.listener) }
     runCatching { slot.player.stop() }
     runCatching { slot.player.release() }
@@ -1194,6 +1457,7 @@ class SoundPadAudioEngine(
     } else {
       tickerJob?.cancel()
       tickerJob = null
+      _hasPendingBufferRebuild.value = false
       releaseWakeLock()
       SoundPadPlaybackService.updateForegroundState(context, 0, null)
     }

@@ -2,6 +2,8 @@ package com.example.ui
 
 import android.app.Application
 import android.content.Intent
+import android.media.AudioDeviceCallback
+import android.media.AudioDeviceInfo
 import android.net.Uri
 import androidx.compose.runtime.Immutable
 import androidx.documentfile.provider.DocumentFile
@@ -9,6 +11,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.example.BuildConfig
+import com.example.R
 import com.example.SoundPadApplication
 import com.example.audio.AudioOutputRouter
 import com.example.audio.AudioWaveformAndCutEngine
@@ -53,6 +56,8 @@ import com.example.domain.model.GlobalSettings
 import com.example.domain.model.GridConfig
 import com.example.domain.model.GridPreset
 import com.example.domain.model.HapticIntensity
+import com.example.domain.model.LatencyTestReport
+import com.example.domain.model.MasterRecordFormat
 import com.example.domain.model.MasterRecordSampleRate
 import com.example.domain.model.MasterRecordState
 import com.example.domain.model.MidiCcMapping
@@ -79,6 +84,7 @@ import com.example.domain.model.ThemeMode
 import com.example.domain.model.WaveformData
 import com.example.error.CrashLogManager
 import com.example.midi.BleMidiCandidate
+import com.example.midi.BleReconnectStatus
 import com.example.midi.MidiEvent
 import com.example.midi.MidiMessageParser
 import kotlinx.coroutines.Dispatchers
@@ -139,6 +145,7 @@ data class SoundPadUiState(
   val midiDevices: List<MidiDeviceSummary> = emptyList(),
   val discoveredBleDevices: List<BleMidiCandidate> = emptyList(),
   val isScanningBleMidi: Boolean = false,
+  val bleReconnectStatus: BleReconnectStatus = BleReconnectStatus(),
   val lastMidiActivity: String? = null,
   val midiCcMappings: List<MidiCcMapping> = emptyList(),
   val isMidiLearnMode: Boolean = false,
@@ -149,6 +156,9 @@ data class SoundPadUiState(
   val selectedMainOutputId: Int? = null,
   val selectedCueOutputId: Int? = null,
   val cuePreviewPadId: String? = null,
+  val hasPendingBufferRebuild: Boolean = false,
+  val isRunningLatencyTest: Boolean = false,
+  val latencyTestReport: LatencyTestReport? = null,
   val isNormalizingAll: Boolean = false,
   val canUndoEdit: Boolean = false,
   val canRedoEdit: Boolean = false,
@@ -181,6 +191,9 @@ data class SoundPadUiState(
 
   val activeProfile: PadProfile?
     get() = profiles.firstOrNull { it.id == settings.activeProfileId }
+
+  val effectiveFocusModeMidiNote: Int?
+    get() = if (activeProfile != null) activeProfile?.focusModeMidiNote else settings.focusModeMidiNote
 
   val activeBankNames: Map<Int, String>
     get() = activeProfile?.bankNames ?: emptyMap()
@@ -279,6 +292,7 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
   private var lastLoadedProfileId: String? = null
   private var didAttemptInitialDemoSeed = false
   private var didApplyStartupFocus = false
+  private var audioDeviceCallback: AudioDeviceCallback? = null
   private val undoStack = ArrayDeque<List<SoundPad>>()
   private val redoStack = ArrayDeque<List<SoundPad>>()
   private val initialPadSlotsByProfile = mutableMapOf<String, Map<String, Pair<Int, Int>>>()
@@ -292,6 +306,18 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
   init {
     AppHolder.application = application
     refreshOutputDevices()
+    val callback = object : AudioDeviceCallback() {
+      override fun onAudioDevicesAdded(addedDevices: Array<out AudioDeviceInfo>?) {
+        refreshOutputDevicesAndAutoReconnect(showReconnectStatus = true)
+      }
+
+      override fun onAudioDevicesRemoved(removedDevices: Array<out AudioDeviceInfo>?) {
+        refreshOutputDevicesAndAutoReconnect(showReconnectStatus = false)
+      }
+    }
+    if (AudioOutputRouter.registerDeviceCallback(app, callback)) {
+      audioDeviceCallback = callback
+    }
 
     audioEngine.onPlaybackError = { pad, errorType, message, stackTrace ->
       recordPlaybackError(pad, errorType, message, stackTrace)
@@ -398,6 +424,7 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
             createdAtMs = entity.createdAtMs,
             updatedAtMs = entity.updatedAtMs,
             isActive = entity.isActive,
+            focusModeMidiNote = entity.focusModeMidiNote,
             previewColorArgbs = profilePads.take(16).map { it.colorArgb }
           )
         }
@@ -426,6 +453,13 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
             state.copy(settings = settings)
           }
         }
+
+        reconcileSavedOutputDevices(settings = settings, showReconnectStatus = false)
+        midiController.configureAutoReconnect(
+          address = settings.lastBleMidiAddress,
+          name = settings.lastBleMidiName,
+          enabled = settings.bleAutoReconnectEnabled
+        )
 
         val profileChanged = settings.activeProfileId != lastLoadedProfileId
         val folderChanged = settings.folderUri != null && settings.folderUri != lastObservedFolderUri
@@ -471,6 +505,24 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
     viewModelScope.launch {
       audioEngine.cuePreviewPadId.collect { cueId ->
         _uiState.update { it.copy(cuePreviewPadId = cueId) }
+      }
+    }
+
+    viewModelScope.launch {
+      audioEngine.hasPendingBufferRebuild.collect { pending ->
+        _uiState.update { it.copy(hasPendingBufferRebuild = pending) }
+      }
+    }
+
+    viewModelScope.launch {
+      audioEngine.isRunningLatencyTest.collect { running ->
+        _uiState.update { it.copy(isRunningLatencyTest = running) }
+      }
+    }
+
+    viewModelScope.launch {
+      audioEngine.latencyTestReport.collect { report ->
+        _uiState.update { it.copy(latencyTestReport = report) }
       }
     }
 
@@ -522,6 +574,18 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
           _uiState.update { it.copy(statusMessage = msg) }
           midiController.clearBleMessage()
         }
+      }
+    }
+
+    midiController.onBleDeviceConnected = { address, name ->
+      viewModelScope.launch {
+        settingsRepo.setLastBleMidiDevice(address, name)
+      }
+    }
+
+    viewModelScope.launch {
+      midiController.bleReconnectStatus.collect { status ->
+        _uiState.update { it.copy(bleReconnectStatus = status) }
       }
     }
 
@@ -1199,14 +1263,16 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
     ) {
       recordEditSnapshot(_uiState.value.pads)
     }
-    val shouldPrepareReverse = newSettings.isReversed &&
-      existingPad != null &&
-      ReverseAudioCacheManager.getCachedReversedFileIfReady(
-        context = app,
-        uriString = existingPad.uriString,
-        trimStartMs = newSettings.trimStartMs,
-        trimEndMs = newSettings.trimEndMs
-      ) == null
+    val reverseSourcePad = existingPad?.takeIf {
+      newSettings.isReversed &&
+        ReverseAudioCacheManager.getCachedReversedFileIfReady(
+          context = app,
+          uriString = it.uriString,
+          trimStartMs = newSettings.trimStartMs,
+          trimEndMs = newSettings.trimEndMs
+        ) == null
+    }
+    val shouldPrepareReverse = reverseSourcePad != null
 
     viewModelScope.launch {
       dao.upsertPadSetting(newSettings.toEntity(padId))
@@ -1230,10 +1296,10 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
       }
       updatedTarget?.let { audioEngine.updateActivePadParameters(it) }
 
-      if (shouldPrepareReverse && existingPad != null) {
+      if (reverseSourcePad != null) {
         val result = ReverseAudioCacheManager.getOrBuildReversedWav(
           context = app,
-          uriString = existingPad.uriString,
+          uriString = reverseSourcePad.uriString,
           trimStartMs = newSettings.trimStartMs,
           trimEndMs = newSettings.trimEndMs
         )
@@ -1241,10 +1307,10 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
           if (state.isPreparingReversePadId == padId) state.copy(isPreparingReversePadId = null) else state
         }
         result.onFailure { err ->
-          val msg = "Gagal membalik audio \"${existingPad.displayName}\": ${err.localizedMessage ?: err.javaClass.simpleName}"
+          val msg = "Gagal membalik audio \"${reverseSourcePad.displayName}\": ${err.localizedMessage ?: err.javaClass.simpleName}"
           logErrorInternal(
-            fileName = existingPad.fileName,
-            uriString = existingPad.uriString,
+            fileName = reverseSourcePad.fileName,
+            uriString = reverseSourcePad.uriString,
             type = PadErrorType.PLAYBACK_ERROR,
             message = msg,
             suggestion = PadErrorType.PLAYBACK_ERROR.defaultSuggestion,
@@ -1863,7 +1929,8 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
         masterEqBandsJson = ProfileJsonSerializer.encodeEqBandsString(state.settings.masterEqBandsDb),
         createdAtMs = now,
         updatedAtMs = now,
-        isActive = true
+        isActive = true,
+        focusModeMidiNote = state.effectiveFocusModeMidiNote
       )
 
       val idMap = state.pads.associate { it.id to "pad_${UUID.randomUUID()}" }
@@ -1921,6 +1988,7 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
       lastLoadedProfileId = profileId
       initialPadSlotsByProfile.remove(profileId)
       settingsRepo.setActiveProfileId(profileId)
+      settingsRepo.setFocusModeMidiNote(profile.focusModeMidiNote)
       loadProfilePads(profileId, _uiState.value.settings.preloadShortAudio)
       _uiState.update { it.copy(statusMessage = "Loaded profile \"${profile.name}\"") }
     }
@@ -1958,6 +2026,12 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
           sourceCc.map { cc ->
             cc.copy(id = "cc_${newProfileId}_${cc.target}", profileId = newProfileId)
           }
+        )
+      }
+      val sourcePc = dao.getMidiPcMappingsOnce(profileId)
+      sourcePc.forEach { pc ->
+        dao.upsertMidiPcMapping(
+          pc.copy(id = "pc_${newProfileId}_${pc.bankIndex}", profileId = newProfileId)
         )
       }
       lastLoadedProfileId = newProfileId
@@ -2026,19 +2100,41 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
       defaultPadColorArgb = gs.defaultPadColorArgb,
       createdAtMs = profileEntity?.createdAtMs ?: System.currentTimeMillis(),
       updatedAtMs = profileEntity?.updatedAtMs ?: System.currentTimeMillis(),
-      isActive = profileEntity?.isActive ?: true
+      isActive = profileEntity?.isActive ?: true,
+      focusModeMidiNote = profileEntity?.focusModeMidiNote
     )
 
     val domainPads = padEntities.map { entity ->
       entityToDomain(entity, settingEntities[entity.id].toDomain())
     }
     val ccMappings = dao.getMidiCcMappingsOnce(profileId).toDomainMappings()
-    return ExportedProfileBundle(profile = profile, pads = domainPads, ccMappings = ccMappings)
+    val pcMappings = dao.getMidiPcMappingsOnce(profileId).map { entity ->
+      MidiProgramBankMapping(
+        id = entity.id,
+        profileId = entity.profileId,
+        programNumber = entity.programNumber,
+        bankIndex = entity.bankIndex,
+        channel = entity.channel
+      )
+    }
+    return ExportedProfileBundle(
+      profile = profile,
+      pads = domainPads,
+      ccMappings = ccMappings,
+      pcMappings = pcMappings,
+      focusModeMidiNote = profileEntity?.focusModeMidiNote
+    )
   }
 
   suspend fun buildExportJsonForProfile(profileId: String): String = withContext(Dispatchers.IO) {
     val bundle = buildExportBundleForProfile(profileId)
-    ProfileJsonSerializer.exportToJson(bundle.profile, bundle.pads, bundle.ccMappings)
+    ProfileJsonSerializer.exportToJson(
+      profile = bundle.profile,
+      pads = bundle.pads,
+      ccMappings = bundle.ccMappings,
+      pcMappings = bundle.pcMappings,
+      focusModeMidiNote = bundle.focusModeMidiNote
+    )
   }
 
   fun exportProfileToUri(profileId: String, targetUri: Uri) {
@@ -2067,6 +2163,7 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
         }
         val bundle = ProfileJsonSerializer.importFromJson(jsonText)
         val profile = bundle.profile
+        val importedFocusNote = bundle.focusModeMidiNote ?: profile.focusModeMidiNote
         val profileEntity = PadProfileEntity(
           id = profile.id,
           name = profile.name,
@@ -2082,11 +2179,13 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
           masterEqBandsJson = ProfileJsonSerializer.encodeEqBandsString(profile.masterEqBandsDb),
           createdAtMs = profile.createdAtMs,
           updatedAtMs = profile.updatedAtMs,
-          isActive = true
+          isActive = true,
+          focusModeMidiNote = importedFocusNote
         )
         val padEntities = bundle.pads.map { pad -> pad.toPadEntity(profile.id) }
         val settingEntities = bundle.pads.map { pad -> pad.settings.toEntity(pad.id) }
         dao.saveCompleteProfile(profileEntity, padEntities, settingEntities)
+        dao.deleteMidiCcMappingsForProfile(profile.id)
         if (bundle.ccMappings.isNotEmpty()) {
           dao.upsertMidiCcMappings(
             bundle.ccMappings.map { mapping ->
@@ -2100,6 +2199,19 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
             }
           )
         }
+        dao.deleteMidiPcMappingsForProfile(profile.id)
+        bundle.pcMappings.forEach { pc ->
+          dao.upsertMidiPcMapping(
+            MidiPcBankMappingEntity(
+              id = "pc_${profile.id}_${pc.bankIndex}",
+              profileId = profile.id,
+              programNumber = pc.programNumber,
+              bankIndex = pc.bankIndex,
+              channel = pc.channel
+            )
+          )
+        }
+        settingsRepo.setFocusModeMidiNote(importedFocusNote)
 
         settingsRepo.setGridConfig(profile.gridConfig)
         settingsRepo.setMasterEq(profile.masterEqEnabled, profile.masterEqPreset, profile.masterEqBandsDb)
@@ -2187,7 +2299,8 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
             masterEqBandsJson = ProfileJsonSerializer.encodeEqBandsString(profile.masterEqBandsDb),
             createdAtMs = profile.createdAtMs,
             updatedAtMs = profile.updatedAtMs,
-            isActive = isTargetActive
+            isActive = isTargetActive,
+            focusModeMidiNote = profile.focusModeMidiNote ?: bundle.focusModeMidiNote
           )
           val idPrefix = profile.id
           val padEntities = bundle.pads.mapIndexed { idx, pad ->
@@ -2211,6 +2324,18 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
                   channel = mapping.channel
                 )
               }
+            )
+          }
+          dao.deleteMidiPcMappingsForProfile(profile.id)
+          bundle.pcMappings.forEach { pc ->
+            dao.upsertMidiPcMapping(
+              MidiPcBankMappingEntity(
+                id = "pc_${profile.id}_${pc.bankIndex}",
+                profileId = profile.id,
+                programNumber = pc.programNumber,
+                bankIndex = pc.bankIndex,
+                channel = pc.channel
+              )
             )
           }
         }
@@ -2262,7 +2387,31 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
         settingsRepo.setFocusMode(gs.isFocusMode)
         settingsRepo.setStartInFocusMode(gs.startInFocusMode)
         settingsRepo.setFocusCornerPanicEnabled(gs.focusCornerPanicEnabled)
-        settingsRepo.setFocusModeMidiNote(gs.focusModeMidiNote)
+        val restoredActiveBundle = payload.profiles.firstOrNull { it.profile.id == restoredActiveId }
+        val restoredActiveFocusNote = restoredActiveBundle?.profile?.focusModeMidiNote
+          ?: restoredActiveBundle?.focusModeMidiNote
+          ?: gs.focusModeMidiNote
+        settingsRepo.setFocusModeMidiNote(restoredActiveFocusNote)
+        settingsRepo.setLastBleMidiDevice(gs.lastBleMidiAddress, gs.lastBleMidiName)
+        settingsRepo.setBleAutoReconnectEnabled(gs.bleAutoReconnectEnabled)
+        settingsRepo.setCueVolume(gs.cueVolume)
+        audioEngine.setCueVolume(gs.cueVolume)
+        settingsRepo.setAudioBufferSizeMs(gs.audioBufferSizeMs)
+        audioEngine.setAudioBufferSizeMs(gs.audioBufferSizeMs)
+        settingsRepo.setPreferredMainOutput(
+          gs.preferredMainOutputId,
+          gs.preferredMainOutputName,
+          gs.preferredMainOutputProductName,
+          gs.preferredMainOutputType,
+          gs.preferredMainOutputAddress
+        )
+        settingsRepo.setPreferredCueOutput(
+          gs.preferredCueOutputId,
+          gs.preferredCueOutputName,
+          gs.preferredCueOutputProductName,
+          gs.preferredCueOutputType,
+          gs.preferredCueOutputAddress
+        )
 
         if (gs.folderUri != null) {
           settingsRepo.setSelectedFolder(gs.folderUri, gs.folderName ?: "Restored Folder")
@@ -2333,9 +2482,12 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
   }
 
   fun clearFocusModeMidiNote() {
+    val profileId = _uiState.value.settings.activeProfileId
     viewModelScope.launch {
+      dao.updateProfileFocusModeMidiNote(profileId, null, System.currentTimeMillis())
       settingsRepo.setFocusModeMidiNote(null)
-      _uiState.update { it.copy(statusMessage = "Mapping MIDI Note Fokus Mode dihapus") }
+      persistentConfigManager.notifyConfigDirty("clear_focus_midi")
+      _uiState.update { it.copy(statusMessage = "Mapping MIDI Note Fokus Mode profil dihapus") }
     }
   }
 
@@ -2385,6 +2537,30 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
 
   fun connectBleMidiDevice(address: String) {
     midiController.connectBleDevice(address)
+  }
+
+  fun setBleAutoReconnectEnabled(enabled: Boolean) {
+    viewModelScope.launch {
+      settingsRepo.setBleAutoReconnectEnabled(enabled)
+      val curSettings = _uiState.value.settings
+      midiController.configureAutoReconnect(
+        address = curSettings.lastBleMidiAddress,
+        name = curSettings.lastBleMidiName,
+        enabled = enabled
+      )
+    }
+  }
+
+  fun triggerBleReconnectNow() {
+    midiController.triggerAutoReconnectNow()
+  }
+
+  fun forgetSavedBleMidiDevice() {
+    viewModelScope.launch {
+      midiController.forgetSavedBleDevice()
+      settingsRepo.setLastBleMidiDevice(null, null)
+      _uiState.update { it.copy(statusMessage = "Perangkat BLE MIDI tersimpan dilupakan") }
+    }
   }
 
   private fun handleIncomingMidiEvent(event: MidiEvent) {
@@ -2488,12 +2664,15 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
         }
         learnTarget is MidiLearnTarget.FocusModeNote && event is MidiEvent.NoteOn -> {
           val note = event.note
+          val profileId = state.settings.activeProfileId
           viewModelScope.launch {
+            dao.updateProfileFocusModeMidiNote(profileId, note, System.currentTimeMillis())
             settingsRepo.setFocusModeMidiNote(note)
+            persistentConfigManager.notifyConfigDirty("learn_focus_midi")
             _uiState.update { cur ->
               cur.copy(
                 midiLearnTarget = null,
-                statusMessage = "Mapped ${MidiMessageParser.formatNoteName(note)} → Toggle Fokus Mode"
+                statusMessage = "Mapped ${MidiMessageParser.formatNoteName(note)} → Toggle Fokus Mode (Profil)"
               )
             }
           }
@@ -2504,7 +2683,7 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
 
     when (event) {
       is MidiEvent.NoteOn -> {
-        if (state.settings.focusModeMidiNote == event.note) {
+        if (state.effectiveFocusModeMidiNote == event.note) {
           toggleFocusMode()
         }
         val matchingPads = state.pads.filter { it.midiNote == event.note }
@@ -2617,6 +2796,13 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
     }
   }
 
+  fun setMasterRecordFormat(format: MasterRecordFormat) {
+    if (_uiState.value.masterRecordState.isRecording) return
+    _uiState.update {
+      it.copy(masterRecordState = it.masterRecordState.copy(format = format))
+    }
+  }
+
   fun setMasterRecordOutputFolder(folderUri: Uri) {
     val name = scanner.resolveFolderDisplayName(folderUri)
     _uiState.update {
@@ -2640,7 +2826,8 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
     val recState = _uiState.value.masterRecordState
     val result = masterRecorder.startRecording(
       sampleRateHz = recState.sampleRateHz,
-      safFolderUri = recState.outputFolderUri
+      safFolderUri = recState.outputFolderUri,
+      format = recState.format
     )
     result.onFailure { err ->
       _uiState.update { it.copy(errorMessage = "Gagal mulai rekam master: ${err.localizedMessage}") }
@@ -2659,7 +2846,8 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
         it.copy(
           masterRecordState = it.masterRecordState.copy(
             lastSavedUriString = saved.uriString,
-            lastSavedName = saved.displayName
+            lastSavedName = saved.displayName,
+            lastSavedExtension = saved.format.extension
           )
         )
       }
@@ -2671,7 +2859,7 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
           uriString = saved.uriString,
           fileName = saved.fileName,
           displayName = saved.displayName,
-          extension = "wav",
+          extension = saved.format.extension,
           durationMs = saved.durationMs,
           sizeBytes = saved.sizeBytes,
           positionIndex = PadGridSlotManager.findFirstEmptySlot(
@@ -2703,12 +2891,16 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
 
   fun saveScheduledTask(task: ScheduledPadTask) {
     viewModelScope.launch {
-      val nextMs = if (task.enabled) PadSchedulerManager.scheduleTask(app, task) else 0L
-      val finalized = task.copy(nextTriggerAtMs = nextMs)
-      dao.upsertScheduledTask(finalized.toEntity())
-      if (!task.enabled) {
-        PadSchedulerManager.cancelTask(app, task.id)
+      val assignedEntity = dao.upsertScheduledTaskAssigningRequestCode(task.toEntity())
+      val assignedDomain = assignedEntity.toDomain()
+      val nextMs = if (assignedDomain.enabled) {
+        PadSchedulerManager.scheduleTask(app, assignedDomain)
+      } else {
+        PadSchedulerManager.cancelTask(app, assignedDomain.id, assignedDomain.requestCode)
+        0L
       }
+      val finalized = assignedDomain.copy(nextTriggerAtMs = nextMs)
+      dao.upsertScheduledTask(finalized.toEntity())
       _uiState.update {
         it.copy(statusMessage = "Jadwal \"${finalized.title}\" disimpan")
       }
@@ -2721,7 +2913,8 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
 
   fun deleteScheduledTask(taskId: String) {
     viewModelScope.launch {
-      PadSchedulerManager.cancelTask(app, taskId)
+      val existing = dao.getScheduledTaskById(taskId)
+      PadSchedulerManager.cancelTask(app, taskId, existing?.requestCode ?: 0)
       dao.deleteScheduledTaskById(taskId)
       _uiState.update { it.copy(statusMessage = "Jadwal dihapus") }
     }
@@ -2746,6 +2939,9 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
         setMasterVolume(task.volume)
         sequencerEngine.startPlaylist(pl)
       }
+    }
+    if (task.autoStopMinutes > 0) {
+      PadSchedulerManager.scheduleAutoStop(app, task)
     }
     _uiState.update { it.copy(statusMessage = "Menjalankan jadwal \"${task.title}\"") }
   }
@@ -3440,21 +3636,155 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
   }
 
   fun refreshOutputDevices() {
-    _uiState.update { it.copy(outputDevices = AudioOutputRouter.listOutputDevices(app)) }
+    refreshOutputDevicesAndAutoReconnect(showReconnectStatus = false)
+  }
+
+  private fun refreshOutputDevicesAndAutoReconnect(showReconnectStatus: Boolean) {
+    val devices = AudioOutputRouter.listOutputDevices(app)
+    _uiState.update { it.copy(outputDevices = devices) }
+    reconcileSavedOutputDevices(
+      settings = _uiState.value.settings,
+      devices = devices,
+      showReconnectStatus = showReconnectStatus
+    )
+  }
+
+  private fun reconcileSavedOutputDevices(
+    settings: GlobalSettings,
+    devices: List<AudioOutputDeviceUi> = _uiState.value.outputDevices,
+    showReconnectStatus: Boolean = false
+  ) {
+    val hasSavedMain = settings.preferredMainOutputId != null ||
+      !settings.preferredMainOutputProductName.isNullOrBlank() ||
+      !settings.preferredMainOutputAddress.isNullOrBlank() ||
+      settings.preferredMainOutputType != null
+
+    val matchedMain = if (hasSavedMain) {
+      AudioOutputRouter.findBestMatchingOutputDevice(
+        devices = devices,
+        preferredId = settings.preferredMainOutputId,
+        preferredProductName = settings.preferredMainOutputProductName,
+        preferredType = settings.preferredMainOutputType,
+        preferredAddress = settings.preferredMainOutputAddress
+      )
+    } else null
+
+    val hasSavedCue = settings.preferredCueOutputId != null ||
+      !settings.preferredCueOutputProductName.isNullOrBlank() ||
+      !settings.preferredCueOutputAddress.isNullOrBlank() ||
+      settings.preferredCueOutputType != null
+
+    val matchedCue = if (hasSavedCue) {
+      AudioOutputRouter.findBestMatchingOutputDevice(
+        devices = devices,
+        preferredId = settings.preferredCueOutputId,
+        preferredProductName = settings.preferredCueOutputProductName,
+        preferredType = settings.preferredCueOutputType,
+        preferredAddress = settings.preferredCueOutputAddress
+      )
+    } else null
+
+    val targetMainId = matchedMain?.id
+    val targetCueId = matchedCue?.id
+
+    audioEngine.setPreferredOutputDeviceId(targetMainId)
+    audioEngine.setCueOutputDeviceId(targetCueId)
+
+    val reconnectStatus = when {
+      showReconnectStatus && matchedMain != null && matchedMain.id != settings.preferredMainOutputId ->
+        app.getString(R.string.output_device_reconnected, matchedMain.name)
+      showReconnectStatus && matchedCue != null && matchedCue.id != settings.preferredCueOutputId ->
+        app.getString(R.string.cue_device_reconnected, matchedCue.name)
+      else -> null
+    }
+
+    _uiState.update { state ->
+      state.copy(
+        selectedMainOutputId = targetMainId,
+        selectedCueOutputId = targetCueId,
+        statusMessage = reconnectStatus ?: state.statusMessage
+      )
+    }
+
+    if (matchedMain != null &&
+      (matchedMain.id != settings.preferredMainOutputId ||
+        settings.preferredMainOutputProductName.isNullOrBlank() && matchedMain.productName.isNotBlank() ||
+        settings.preferredMainOutputAddress.isNullOrBlank() && matchedMain.address.isNotBlank() ||
+        settings.preferredMainOutputType == null)
+    ) {
+      viewModelScope.launch {
+        settingsRepo.setPreferredMainOutput(
+          deviceId = matchedMain.id,
+          deviceName = matchedMain.name,
+          productName = matchedMain.productName,
+          deviceType = matchedMain.deviceType,
+          address = matchedMain.address
+        )
+      }
+    }
+
+    if (matchedCue != null &&
+      (matchedCue.id != settings.preferredCueOutputId ||
+        settings.preferredCueOutputProductName.isNullOrBlank() && matchedCue.productName.isNotBlank() ||
+        settings.preferredCueOutputAddress.isNullOrBlank() && matchedCue.address.isNotBlank() ||
+        settings.preferredCueOutputType == null)
+    ) {
+      viewModelScope.launch {
+        settingsRepo.setPreferredCueOutput(
+          deviceId = matchedCue.id,
+          deviceName = matchedCue.name,
+          productName = matchedCue.productName,
+          deviceType = matchedCue.deviceType,
+          address = matchedCue.address
+        )
+      }
+    }
   }
 
   fun selectMainOutputDevice(deviceId: Int?) {
     audioEngine.setPreferredOutputDeviceId(deviceId)
     _uiState.update { it.copy(selectedMainOutputId = deviceId) }
-    val devName = _uiState.value.outputDevices.firstOrNull { it.id == deviceId }?.name
-    viewModelScope.launch { settingsRepo.setPreferredMainOutput(deviceId, devName) }
+    val dev = _uiState.value.outputDevices.firstOrNull { it.id == deviceId }
+    viewModelScope.launch {
+      settingsRepo.setPreferredMainOutput(
+        deviceId = deviceId,
+        deviceName = dev?.name,
+        productName = dev?.productName,
+        deviceType = dev?.deviceType,
+        address = dev?.address
+      )
+    }
   }
 
   fun selectCueOutputDevice(deviceId: Int?) {
     audioEngine.setCueOutputDeviceId(deviceId)
     _uiState.update { it.copy(selectedCueOutputId = deviceId) }
-    val devName = _uiState.value.outputDevices.firstOrNull { it.id == deviceId }?.name
-    viewModelScope.launch { settingsRepo.setPreferredCueOutput(deviceId, devName) }
+    val dev = _uiState.value.outputDevices.firstOrNull { it.id == deviceId }
+    viewModelScope.launch {
+      settingsRepo.setPreferredCueOutput(
+        deviceId = deviceId,
+        deviceName = dev?.name,
+        productName = dev?.productName,
+        deviceType = dev?.deviceType,
+        address = dev?.address
+      )
+    }
+  }
+
+  fun setCueVolume(volume: Float) {
+    val clamped = volume.coerceIn(0f, 1f)
+    audioEngine.setCueVolume(clamped)
+    viewModelScope.launch { settingsRepo.setCueVolume(clamped) }
+  }
+
+  fun setAudioBufferSizeMs(bufferMs: Int) {
+    val clamped = bufferMs.coerceIn(20, 500)
+    audioEngine.setAudioBufferSizeMs(clamped)
+    viewModelScope.launch { settingsRepo.setAudioBufferSizeMs(clamped) }
+  }
+
+  fun runAudioLatencyTest() {
+    audioEngine.runLatencyTest()
   }
 
   fun toggleCuePreview(pad: SoundPad) {
@@ -4583,20 +4913,25 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
     val existingProfile = dao.getProfileById(profileId)
     val grid = _uiState.value.settings.gridConfig
     val existingBankNames = ProfileJsonSerializer.decodeBankNamesString(existingProfile?.bankNamesJson)
-    val finalBankNames = if (result.hasSubfolderBanks) {
-      result.bankNames.toMutableMap().apply {
-        existingBankNames.forEach { (k, v) -> if (k in result.bankNames && v.isNotBlank()) put(k, v) }
-      }
-    } else {
-      existingBankNames
-    }
-    val finalBankOrder = if (result.hasSubfolderBanks) {
-      val existingOrder = ProfileJsonSerializer.decodeBankOrderString(existingProfile?.bankOrderJson)
-        .filter { it in result.bankNames.keys }
-      (existingOrder + result.bankNames.keys.sorted()).distinct()
-    } else {
-      emptyList()
-    }
+    val existingBankOrder = ProfileJsonSerializer.decodeBankOrderString(existingProfile?.bankOrderJson)
+    val previousSubfolderKeys = ProfileJsonSerializer.decodeBankFolderUrisString(existingProfile?.bankFolderUrisJson).keys
+    val padBankKeys = normalized.mapTo(mutableSetOf()) { it.bankIndex.coerceAtLeast(0) }
+
+    val finalBankNames = PadGridSlotManager.resolveBankNamesAfterScan(
+      hasSubfolderBanks = result.hasSubfolderBanks,
+      scannedBankNames = result.bankNames,
+      existingBankNames = existingBankNames,
+      padBankKeys = padBankKeys,
+      previousSubfolderKeys = previousSubfolderKeys
+    )
+    val finalBankOrder = PadGridSlotManager.resolveBankOrderAfterScan(
+      existingOrder = existingBankOrder,
+      hasSubfolderBanks = result.hasSubfolderBanks,
+      scannedBankKeys = result.bankNames.keys,
+      padBankKeys = padBankKeys,
+      existingBankNames = existingBankNames,
+      previousSubfolderKeys = previousSubfolderKeys
+    )
     val gs = _uiState.value.settings
     val profile = PadProfileEntity(
       id = profileId,
@@ -4614,7 +4949,8 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
         ?: ProfileJsonSerializer.encodeEqBandsString(gs.masterEqBandsDb),
       createdAtMs = existingProfile?.createdAtMs ?: now,
       updatedAtMs = now,
-      isActive = true
+      isActive = true,
+      focusModeMidiNote = existingProfile?.focusModeMidiNote
     )
     val entities = normalized.map { it.toPadEntity(profileId) }
     dao.syncProfilePadsPreservingSettings(profile, entities)
@@ -4817,6 +5153,14 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
         channel = entity.channel
       )
     }
+  }
+
+  override fun onCleared() {
+    audioDeviceCallback?.let { cb ->
+      AudioOutputRouter.unregisterDeviceCallback(app, cb)
+      audioDeviceCallback = null
+    }
+    super.onCleared()
   }
 
   object AppHolder {

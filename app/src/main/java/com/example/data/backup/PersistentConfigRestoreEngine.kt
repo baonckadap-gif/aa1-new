@@ -23,6 +23,7 @@ import com.example.domain.model.SoundPad
 import com.example.scheduler.PadSchedulerManager
 import com.example.scheduler.toEntity
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.io.File
@@ -880,6 +881,15 @@ object PersistentConfigRestoreEngine {
                 )
               )
             }
+            val isActiveTarget = pBundle.profile.id == bundle.settings.settings.activeProfileId ||
+              pBundle.profile.isActive
+            if (pBundle.profile.focusModeMidiNote == null && isActiveTarget && bundle.midiMapping.focusModeMidiNote != null) {
+              dao.updateProfileFocusModeMidiNote(
+                pBundle.profile.id,
+                bundle.midiMapping.focusModeMidiNote,
+                System.currentTimeMillis()
+              )
+            }
           }
         }
 
@@ -920,16 +930,25 @@ object PersistentConfigRestoreEngine {
             )
           )
         }
+        val activeId = settingsRepo.settingsFlow.first().activeProfileId
+        dao.updateProfileFocusModeMidiNote(
+          activeId,
+          bundle.midiMapping.focusModeMidiNote,
+          System.currentTimeMillis()
+        )
         settingsRepo.setFocusModeMidiNote(bundle.midiMapping.focusModeMidiNote)
       } else if (options.restoreMidiMapping) {
-        settingsRepo.setFocusModeMidiNote(bundle.midiMapping.focusModeMidiNote)
+        val activeProfileNote = targetProfiles.firstOrNull {
+          it.profile.id == bundle.settings.settings.activeProfileId || it.profile.isActive
+        }?.profile?.focusModeMidiNote ?: bundle.midiMapping.focusModeMidiNote
+        settingsRepo.setFocusModeMidiNote(activeProfileNote)
       }
 
       if (options.restoreSchedulerAndSequencer) {
         onProgress(0.84f, "Memulihkan Scheduler & Sequencer…")
         dao.deleteAllScheduledTasks()
         bundle.scheduler.tasks.forEach { task ->
-          dao.upsertScheduledTask(task.toEntity())
+          dao.upsertScheduledTaskAssigningRequestCode(task.toEntity())
         }
         dao.deleteAllSequencerPlaylists()
         bundle.sequencer.playlists.forEach { pl ->
@@ -1007,7 +1026,8 @@ object PersistentConfigRestoreEngine {
     masterEqBandsJson = ProfileJsonSerializer.encodeEqBandsString(masterEqBandsDb),
     createdAtMs = createdAtMs,
     updatedAtMs = updatedAtMs,
-    isActive = isActive
+    isActive = isActive,
+    focusModeMidiNote = focusModeMidiNote
   )
 
   private fun SoundPad.toBackupPadEntity(profileId: String): SoundPadEntity = SoundPadEntity(

@@ -19,8 +19,10 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bluetooth
+import androidx.compose.material.icons.filled.BluetoothConnected
 import androidx.compose.material.icons.filled.BluetoothSearching
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.LinkOff
@@ -31,9 +33,11 @@ import androidx.compose.material.icons.filled.Sensors
 import androidx.compose.material.icons.filled.StopCircle
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Usb
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledIconButton
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -44,6 +48,7 @@ import androidx.compose.material3.OutlinedIconButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
@@ -52,9 +57,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.example.R
 import com.example.domain.model.MidiCcMapping
 import com.example.domain.model.MidiCcTarget
 import com.example.domain.model.MidiDeviceSummary
@@ -62,6 +69,8 @@ import com.example.domain.model.MidiLearnTarget
 import com.example.domain.model.MidiProgramBankMapping
 import com.example.domain.model.SoundPad
 import com.example.midi.BleMidiCandidate
+import com.example.midi.BleReconnectPhase
+import com.example.midi.BleReconnectStatus
 import com.example.midi.MidiMessageParser
 import com.example.ui.BankPageUi
 import com.example.ui.theme.SoundPadTheme
@@ -92,6 +101,11 @@ fun MidiControllerSheet(
   onArmBankPcLearn: (Int, String) -> Unit = { _, _ -> },
   onClearBankPcMapping: (Int) -> Unit = {},
   focusModeMidiNote: Int? = null,
+  activeProfileName: String? = null,
+  bleReconnectStatus: BleReconnectStatus = BleReconnectStatus(),
+  onToggleBleAutoReconnect: (Boolean) -> Unit = {},
+  onTriggerBleReconnectNow: () -> Unit = {},
+  onForgetSavedBleDevice: () -> Unit = {},
   onArmFocusModeLearn: () -> Unit = {},
   onClearFocusModeNote: () -> Unit = {},
   onDismiss: () -> Unit
@@ -368,6 +382,138 @@ fun MidiControllerSheet(
                   style = MaterialTheme.typography.labelSmall,
                   color = MaterialTheme.colorScheme.primary
                 )
+              }
+            }
+
+            // BLE Auto-Reconnect Status Card
+            Surface(
+              shape = RoundedCornerShape(10.dp),
+              color = MaterialTheme.colorScheme.surface,
+              border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+            ) {
+              Column(
+                modifier = Modifier
+                  .fillMaxWidth()
+                  .padding(horizontal = 10.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+              ) {
+                Row(
+                  modifier = Modifier.fillMaxWidth(),
+                  horizontalArrangement = Arrangement.SpaceBetween,
+                  verticalAlignment = Alignment.CenterVertically
+                ) {
+                  Row(
+                    modifier = Modifier.weight(1f),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                  ) {
+                    Icon(
+                      imageVector = if (bleReconnectStatus.phase == BleReconnectPhase.CONNECTED) {
+                        Icons.Filled.BluetoothConnected
+                      } else {
+                        Icons.Filled.Bluetooth
+                      },
+                      contentDescription = null,
+                      tint = when (bleReconnectStatus.phase) {
+                        BleReconnectPhase.CONNECTED -> SoundPadTheme.colors.ramEmerald
+                        BleReconnectPhase.EXHAUSTED, BleReconnectPhase.WAITING_BLUETOOTH -> MaterialTheme.colorScheme.error
+                        BleReconnectPhase.SCANNING, BleReconnectPhase.CONNECTING, BleReconnectPhase.WAITING_BACKOFF -> MaterialTheme.colorScheme.primary
+                        BleReconnectPhase.IDLE -> MaterialTheme.colorScheme.onSurfaceVariant
+                      },
+                      modifier = Modifier.size(18.dp)
+                    )
+                    Column {
+                      Text(
+                        text = stringResource(R.string.ble_auto_reconnect_title),
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurface
+                      )
+                      Text(
+                        text = bleReconnectStatus.savedName?.let {
+                          "$it (${bleReconnectStatus.savedAddress ?: ""})"
+                        } ?: stringResource(R.string.ble_auto_reconnect_none_saved),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                      )
+                    }
+                  }
+                  Switch(
+                    checked = bleReconnectStatus.autoReconnectEnabled,
+                    onCheckedChange = onToggleBleAutoReconnect,
+                    modifier = Modifier.testTag("ble_auto_reconnect_toggle")
+                  )
+                }
+
+                if (!bleReconnectStatus.detailMessage.isNullOrBlank() || bleReconnectStatus.savedAddress != null) {
+                  val statusTint = when (bleReconnectStatus.phase) {
+                    BleReconnectPhase.CONNECTED -> SoundPadTheme.colors.ramEmerald
+                    BleReconnectPhase.EXHAUSTED, BleReconnectPhase.WAITING_BLUETOOTH -> MaterialTheme.colorScheme.error
+                    BleReconnectPhase.SCANNING, BleReconnectPhase.CONNECTING, BleReconnectPhase.WAITING_BACKOFF -> MaterialTheme.colorScheme.primary
+                    BleReconnectPhase.IDLE -> MaterialTheme.colorScheme.onSurfaceVariant
+                  }
+                  Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                  ) {
+                    if (bleReconnectStatus.phase == BleReconnectPhase.SCANNING ||
+                      bleReconnectStatus.phase == BleReconnectPhase.CONNECTING
+                    ) {
+                      CircularProgressIndicator(modifier = Modifier.size(12.dp), strokeWidth = 1.8.dp)
+                    }
+                    Text(
+                      text = bleReconnectStatus.detailMessage
+                        ?: stringResource(R.string.ble_auto_reconnect_ready),
+                      style = MaterialTheme.typography.labelSmall,
+                      color = statusTint,
+                      modifier = Modifier.weight(1f)
+                    )
+                  }
+                }
+
+                if (bleReconnectStatus.savedAddress != null) {
+                  Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End,
+                    verticalAlignment = Alignment.CenterVertically
+                  ) {
+                    TextButton(
+                      onClick = onForgetSavedBleDevice,
+                      colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                      modifier = Modifier
+                        .minimumInteractiveComponentSize()
+                        .testTag("ble_forget_device_button")
+                    ) {
+                      Icon(
+                        imageVector = Icons.Filled.DeleteOutline,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp)
+                      )
+                      Spacer(modifier = Modifier.width(4.dp))
+                      Text(stringResource(R.string.ble_forget_device))
+                    }
+                    if (bleReconnectStatus.phase != BleReconnectPhase.CONNECTED) {
+                      Spacer(modifier = Modifier.width(6.dp))
+                      FilledTonalButton(
+                        onClick = onTriggerBleReconnectNow,
+                        modifier = Modifier
+                          .minimumInteractiveComponentSize()
+                          .testTag("ble_reconnect_now_button")
+                      ) {
+                        Icon(
+                          imageVector = Icons.Filled.Refresh,
+                          contentDescription = null,
+                          modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(stringResource(R.string.ble_reconnect_now))
+                      }
+                    }
+                  }
+                }
               }
             }
 
@@ -734,10 +880,16 @@ fun MidiControllerSheet(
           ) {
             Column(modifier = Modifier.weight(1f)) {
               Text(
-                text = "Toggle Fokus Mode (MIDI Note)",
+                text = if (!activeProfileName.isNullOrBlank()) {
+                  "Toggle Fokus Mode · Profil $activeProfileName"
+                } else {
+                  "Toggle Fokus Mode (MIDI Note · Per Profil)"
+                },
                 style = MaterialTheme.typography.bodyMedium,
                 fontWeight = FontWeight.Medium,
-                color = MaterialTheme.colorScheme.onSurface
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
               )
               Text(
                 text = when {
