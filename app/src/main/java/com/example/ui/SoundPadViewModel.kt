@@ -2,6 +2,7 @@ package com.example.ui
 
 import android.app.Application
 import android.net.Uri
+import androidx.compose.runtime.Immutable
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
@@ -77,6 +78,7 @@ import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.UUID
 
+@Immutable
 data class BankPageUi(
   val bankKey: Int,
   val title: String,
@@ -84,6 +86,7 @@ data class BankPageUi(
   val canRescanSubfolder: Boolean
 )
 
+@Immutable
 data class SoundPadUiState(
   val settings: GlobalSettings = GlobalSettings(),
   val profiles: List<PadProfile> = emptyList(),
@@ -162,7 +165,7 @@ data class SoundPadUiState(
     get() = activeProfile?.bankFolderUris ?: emptyMap()
 
   val isBankExplicitMode: Boolean
-    get() = activeBankFolderUris.isNotEmpty() || pads.any { it.subfolderName.isNotBlank() || it.bankIndex > 0 }
+    get() = activeBankFolderUris.isNotEmpty() || activeBankOrder.isNotEmpty() || pads.any { it.subfolderName.isNotBlank() || it.bankIndex > 0 }
 
   val availableCategoryTags: List<String>
     get() = pads.mapNotNull { it.categoryTag.trim().takeIf(String::isNotEmpty) }.distinct().sorted()
@@ -213,7 +216,7 @@ data class SoundPadUiState(
         if (isFiltered) {
           grouped[key]?.isNotEmpty() == true
         } else {
-          grouped[key]?.isNotEmpty() == true || activeBankFolderUris.containsKey(key)
+          grouped[key]?.isNotEmpty() == true || activeBankFolderUris.containsKey(key) || key in activeBankOrder
         }
       }
 
@@ -222,7 +225,7 @@ data class SoundPadUiState(
         val padsInBank = grouped[key].orEmpty()
         val baseTitle = activeBankNames[key]?.takeIf { it.isNotBlank() }
           ?: padsInBank.firstOrNull { it.subfolderName.isNotBlank() }?.subfolderName
-          ?: "Bank ${key + 1}"
+          ?: "B${key + 1}"
         val canRescan = activeBankFolderUris.containsKey(key)
         if (padsInBank.isEmpty()) {
           pages.add(BankPageUi(bankKey = key, title = baseTitle, pads = emptyList(), canRescanSubfolder = canRescan))
@@ -1784,6 +1787,8 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
         audioEngine.setMasterEq(gs.masterEqEnabled, gs.masterEqBandsDb)
         settingsRepo.setMiniWaveformEnabled(gs.miniWaveformEnabled)
         settingsRepo.setPreloadShortAudio(gs.preloadShortAudio)
+        settingsRepo.setAudioEffectsEnabled(gs.audioEffectsEnabled)
+        settingsRepo.setVisualEffectsEnabled(gs.visualEffectsEnabled)
         settingsRepo.setKeepScreenOn(gs.keepScreenOn)
         settingsRepo.setThemeMode(gs.themeMode)
         settingsRepo.setUseDynamicColor(gs.useDynamicColor)
@@ -2652,8 +2657,82 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
         map[bankIndex] = trimmed
       }
       dao.updateProfileBankNames(profileId, ProfileJsonSerializer.encodeBankNamesString(map))
-      _uiState.update {
-        it.copy(statusMessage = if (trimmed.isEmpty()) "Reset Bank ${bankIndex + 1} name" else "Bank ${bankIndex + 1} renamed to \"$trimmed\"")
+      _uiState.update { cur ->
+        cur.copy(
+          profiles = cur.profiles.map { p ->
+            if (p.id == profileId) p.copy(bankNames = map) else p
+          },
+          statusMessage = if (trimmed.isEmpty()) "Reset Bank ${bankIndex + 1} name" else "Bank ${bankIndex + 1} renamed to \"$trimmed\""
+        )
+      }
+    }
+  }
+
+  fun addNewBank() {
+    val state = _uiState.value
+    val profileId = state.settings.activeProfileId
+    val existingKeys = state.bankPages.map { it.bankKey }.distinct()
+    val maxExistingKey = (existingKeys + state.activeBankOrder + state.activeBankNames.keys + state.activeBankFolderUris.keys)
+      .maxOrNull() ?: -1
+    val newBankKey = maxExistingKey + 1
+    val newBankLabel = "B${newBankKey + 1}"
+
+    viewModelScope.launch {
+      val existing = dao.getProfileById(profileId) ?: return@launch
+      val map = ProfileJsonSerializer.decodeBankNamesString(existing.bankNamesJson).toMutableMap()
+      if (!map.containsKey(newBankKey)) {
+        map[newBankKey] = newBankLabel
+      }
+
+      if (!state.isBankExplicitMode && state.pads.isNotEmpty()) {
+        val perBank = state.settings.gridConfig.padsPerBank.coerceAtLeast(1)
+        val promoted = state.pads.mapIndexed { idx, p -> p.copy(bankIndex = idx / perBank) }
+        promoted.forEach { dao.updatePadBankIndex(it.id, it.bankIndex, it.subfolderName) }
+        val promotedKeys = promoted.map { it.bankIndex }.distinct().sorted().ifEmpty { listOf(0) }
+        val updatedOrder = (promotedKeys + newBankKey).distinct()
+        dao.updateProfileBankConfig(
+          profileId = profileId,
+          bankNamesJson = ProfileJsonSerializer.encodeBankNamesString(map),
+          bankOrderJson = ProfileJsonSerializer.encodeBankOrderString(updatedOrder),
+          bankFolderUrisJson = existing.bankFolderUrisJson
+        )
+        _uiState.update { cur ->
+          val updatedProfiles = cur.profiles.map { p ->
+            if (p.id == profileId) p.copy(bankNames = map, bankOrder = updatedOrder) else p
+          }
+          val tempState = cur.copy(pads = promoted, profiles = updatedProfiles)
+          val targetIdx = tempState.bankPages.indexOfFirst { it.bankKey == newBankKey }
+            .takeIf { it >= 0 } ?: (tempState.bankPages.size - 1).coerceAtLeast(0)
+          tempState.copy(
+            requestedBankPageIndex = targetIdx,
+            statusMessage = "Bank \"$newBankLabel\" ditambahkan"
+          )
+        }
+      } else {
+        val baseOrder = if (state.activeBankOrder.isNotEmpty()) {
+          state.activeBankOrder
+        } else {
+          existingKeys.ifEmpty { listOf(0) }
+        }
+        val updatedOrder = (baseOrder + newBankKey).distinct()
+        dao.updateProfileBankConfig(
+          profileId = profileId,
+          bankNamesJson = ProfileJsonSerializer.encodeBankNamesString(map),
+          bankOrderJson = ProfileJsonSerializer.encodeBankOrderString(updatedOrder),
+          bankFolderUrisJson = existing.bankFolderUrisJson
+        )
+        _uiState.update { cur ->
+          val updatedProfiles = cur.profiles.map { p ->
+            if (p.id == profileId) p.copy(bankNames = map, bankOrder = updatedOrder) else p
+          }
+          val tempState = cur.copy(profiles = updatedProfiles)
+          val targetIdx = tempState.bankPages.indexOfFirst { it.bankKey == newBankKey }
+            .takeIf { it >= 0 } ?: (tempState.bankPages.size - 1).coerceAtLeast(0)
+          tempState.copy(
+            requestedBankPageIndex = targetIdx,
+            statusMessage = "Bank \"$newBankLabel\" ditambahkan"
+          )
+        }
       }
     }
   }
@@ -3165,6 +3244,14 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
 
   fun setAppLanguage(language: AppLanguage) {
     viewModelScope.launch { settingsRepo.setAppLanguage(language) }
+  }
+
+  fun setAudioEffectsEnabled(enabled: Boolean) {
+    viewModelScope.launch { settingsRepo.setAudioEffectsEnabled(enabled) }
+  }
+
+  fun setVisualEffectsEnabled(enabled: Boolean) {
+    viewModelScope.launch { settingsRepo.setVisualEffectsEnabled(enabled) }
   }
 
   fun setAppAccentColor(colorArgb: Long) {

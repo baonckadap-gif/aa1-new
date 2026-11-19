@@ -43,6 +43,8 @@ object FullBackupSerializer {
       put("masterEqBandsDb", ProfileJsonSerializer.encodeEqBandsToJsonArray(settings.masterEqBandsDb))
       put("miniWaveformEnabled", settings.miniWaveformEnabled)
       put("preloadShortAudio", settings.preloadShortAudio)
+      put("audioEffectsEnabled", settings.audioEffectsEnabled)
+      put("visualEffectsEnabled", settings.visualEffectsEnabled)
       put("keepScreenOn", settings.keepScreenOn)
       put("themeMode", settings.themeMode.name)
       put("useDynamicColor", settings.useDynamicColor)
@@ -119,6 +121,8 @@ object FullBackupSerializer {
       masterEqBandsDb = ProfileJsonSerializer.decodeEqBandsJsonArray(s.optJSONArray("masterEqBandsDb")),
       miniWaveformEnabled = s.optBoolean("miniWaveformEnabled", true),
       preloadShortAudio = s.optBoolean("preloadShortAudio", true),
+      audioEffectsEnabled = s.optBoolean("audioEffectsEnabled", true),
+      visualEffectsEnabled = s.optBoolean("visualEffectsEnabled", true),
       keepScreenOn = s.optBoolean("keepScreenOn", true),
       themeMode = runCatching { ThemeMode.valueOf(s.optString("themeMode", ThemeMode.DARK.name)) }
         .getOrDefault(ThemeMode.DARK),

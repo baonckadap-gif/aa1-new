@@ -21,7 +21,9 @@ import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.example.domain.model.ThemeMode
 
 @Immutable
@@ -36,16 +38,139 @@ data class SoundPadSpacing(
 )
 
 @Immutable
+data class SoundPadPadTokens(
+  val standardCornerDp: Dp = 14.dp,
+  val compactCornerDp: Dp = 8.dp,
+  val microCornerDp: Dp = 4.dp,
+  val minCornerDp: Float = 2f,
+  val maxCornerDp: Float = 28f,
+  val compactCornerScale: Float = 0.58f,
+  val dashLengthDp: Dp = 6.dp,
+  val dashGapDp: Dp = 4.dp,
+  val emptyWellBorderDp: Dp = 1.25.dp,
+  val emptyWellBorderCompactDp: Dp = 1.dp,
+  val emptyIconStandardDp: Dp = 24.dp,
+  val emptyIconCompactDp: Dp = 16.dp,
+  val emptyIconMicroDp: Dp = 10.dp,
+  val metaMinAlpha: Float = 0.85f,
+  val waveformIdleAlpha: Float = 0.68f,
+  val waveformPlayedAlpha: Float = 1.0f,
+  val waveformDimAlpha: Float = 0.24f,
+  val waveformHeightDp: Dp = 12.dp,
+  val playheadAlpha: Float = 0.92f,
+  val playingBorderMinDp: Float = 2.6f,
+  val playingBorderExtraDp: Float = 1.35f,
+  val playingGlowHaloStrokeDp: Dp = 4.dp,
+  val playingGlowHaloAlpha: Float = 0.28f,
+  val maxStatusIcons: Int = 3,
+  val statusDotDp: Dp = 7.dp,
+  val statusIconDp: Dp = 11.dp,
+  val statusSpinnerDp: Dp = 12.dp,
+  val actionIconDp: Dp = 14.dp,
+  val playingEqBoxDp: Dp = 16.dp,
+  val playingEqIconDp: Dp = 9.dp,
+  val bottomProgressStandardDp: Dp = 3.dp,
+  val bottomProgressMicroDp: Dp = 2.dp,
+  val padHorizontalPaddingDp: Dp = 8.dp,
+  val padVerticalPaddingDp: Dp = 6.dp,
+  val statusBadgeRadiusDp: Dp = 4.dp
+)
+
+@Immutable
+data class SoundPadTopBarTokens(
+  val horizontalPaddingDp: Dp = 10.dp,
+  val verticalPaddingDp: Dp = 6.dp,
+  val contentSpacingDp: Dp = 6.dp,
+  val titleSpacingDp: Dp = 8.dp,
+  val subtitleDimAlpha: Float = 0.72f,
+  val disabledAlpha: Float = 0.45f,
+  val iconGroupSpacingDp: Dp = 2.dp,
+  val iconSizeDp: Dp = 22.dp,
+  val spinnerSizeDp: Dp = 18.dp,
+  val spinnerStrokeDp: Dp = 2.dp,
+  val badgeDotDp: Dp = 8.dp,
+  val playModeHeightDp: Dp = 40.dp,
+  val playModeIconDp: Dp = 16.dp,
+  val bankTabRowHorizontalPaddingDp: Dp = 8.dp,
+  val bankTabHeightDp: Dp = 38.dp,
+  val bankTabHorizontalPaddingDp: Dp = 12.dp,
+  val bankTabIndicatorHeightDp: Dp = 2.5.dp,
+  val bankTabDividerDp: Dp = 1.dp,
+  val bankActiveDotDp: Dp = 6.dp,
+  val bankAddButtonDp: Dp = 38.dp,
+  val bankAddIconDp: Dp = 18.dp,
+  val pagerDotActiveWidthDp: Dp = 16.dp,
+  val pagerDotInactiveWidthDp: Dp = 6.dp,
+  val pagerDotHeightDp: Dp = 6.dp,
+  val pagerDotSpacingDp: Dp = 3.dp,
+  val pagerDotsVerticalPaddingDp: Dp = 4.dp,
+  val maxPagerDots: Int = 12
+)
+
+@Immutable
+data class SoundPadBottomBarTokens(
+  val tonalElevationDp: Dp = 4.dp,
+  val borderThicknessDp: Dp = 1.dp,
+  val horizontalPaddingDp: Dp = 8.dp,
+  val verticalPaddingDp: Dp = 4.dp,
+  val rowSpacingDp: Dp = 4.dp,
+  val row1HeightDp: Dp = 40.dp,
+  val row1ItemSpacingDp: Dp = 6.dp,
+  val row2HeightDp: Dp = 52.dp,
+  val row2ItemSpacingDp: Dp = 4.dp,
+  val actionGroupSpacingDp: Dp = 3.dp,
+  val maxContentHeightDp: Dp = 112.dp,
+  val volumeIconDp: Dp = 18.dp,
+  val sliderHeightDp: Dp = 32.dp,
+  val sliderThumbDp: Dp = 16.dp,
+  val sliderTrackHeightDp: Dp = 4.dp,
+  val sliderTrackGapDp: Dp = 0.dp,
+  val sliderThumbBorderDp: Dp = 1.5.dp,
+  val percentMinWidthDp: Dp = 34.dp,
+  val badgeCornerDp: Dp = 6.dp,
+  val badgeHorizontalPadDp: Dp = 6.dp,
+  val badgeVerticalPadDp: Dp = 3.dp,
+  val chevronButtonDp: Dp = 36.dp,
+  val chevronIconDp: Dp = 20.dp,
+  val stopWidthFraction: Float = 0.30f,
+  val actionsWidthFraction: Float = 0.70f,
+  val stopCornerDp: Dp = 10.dp,
+  val stopIconDp: Dp = 18.dp,
+  val stopIdleAlpha: Float = 0.85f,
+  val actionCornerDp: Dp = 10.dp,
+  val actionIconDp: Dp = 17.dp,
+  val actionActiveBgAlpha: Float = 0.20f,
+  val actionDisabledAlpha: Float = 0.42f,
+  val activeBorderDp: Dp = 1.5.dp,
+  val inactiveBorderDp: Dp = 1.dp,
+  val blinkMinAlpha: Float = 0.30f,
+  val blinkMaxAlpha: Float = 1.0f,
+  val blinkDurationMs: Int = 550,
+  val actionLabelFontSp: TextUnit = 10.sp,
+  val actionLabelLineHeightSp: TextUnit = 10.sp,
+  val stopLabelFontSp: TextUnit = 11.sp
+)
+
+@Immutable
 data class SoundPadExtendedColors(
   val favoriteGold: Color,
   val ramEmerald: Color,
   val cueMonitor: Color,
   val panicRed: Color,
+  val onPanicRed: Color,
   val warningAmber: Color,
+  val playModeActiveGreen: Color,
+  val onPlayModeActiveGreen: Color,
   val playheadWhite: Color,
   val padIdleWell: Color,
+  val padEmptyWellContainer: Color,
+  val padEmptyWellBorder: Color,
   val padDisabledContainer: Color,
   val padDisabledContent: Color,
+  val padProgressTrack: Color,
+  val padSheenHighlight: Color,
+  val padSheenShadow: Color,
+  val padStatusChipBg: Color,
   val isAmoled: Boolean,
   val isDark: Boolean
 )
@@ -55,37 +180,60 @@ private val DefaultDarkExtendedColors = SoundPadExtendedColors(
   ramEmerald = RamEmerald,
   cueMonitor = CueMonitorTeal,
   panicRed = PanicRed,
+  onPanicRed = OnPanicRed,
   warningAmber = WarningAmber,
-  playheadWhite = Color.White,
+  playModeActiveGreen = PlayModeActiveGreenDark,
+  onPlayModeActiveGreen = OnPlayModeActiveGreenDark,
+  playheadWhite = PadPlayheadDark,
   padIdleWell = PadWell,
-  padDisabledContainer = Color(0xFF141822),
+  padEmptyWellContainer = PadEmptyWellDark,
+  padEmptyWellBorder = HairlineBorder,
+  padDisabledContainer = PadDisabledContainerDark,
   padDisabledContent = TextMuted,
+  padProgressTrack = PadProgressTrackDark,
+  padSheenHighlight = PadSheenWhite,
+  padSheenShadow = PadSheenBlack,
+  padStatusChipBg = PadStatusChipDark,
   isAmoled = false,
   isDark = true
 )
 
 private val DefaultAmoledExtendedColors = DefaultDarkExtendedColors.copy(
   padIdleWell = AmoledPadWell,
+  padEmptyWellContainer = PadEmptyWellAmoled,
+  padEmptyWellBorder = AmoledBorder,
   padDisabledContainer = AmoledChassis,
   isAmoled = true
 )
 
 private val DefaultLightExtendedColors = SoundPadExtendedColors(
   favoriteGold = LightFavoriteGold,
-  ramEmerald = Color(0xFF059669),
+  ramEmerald = RamEmerald,
   cueMonitor = LightCueTeal,
   panicRed = LightCoralError,
+  onPanicRed = OnPanicRed,
   warningAmber = LightAmberSecondary,
-  playheadWhite = Color(0xFF0F1522),
+  playModeActiveGreen = PlayModeActiveGreenLight,
+  onPlayModeActiveGreen = OnPlayModeActiveGreenLight,
+  playheadWhite = PadPlayheadLight,
   padIdleWell = LightPadWell,
-  padDisabledContainer = Color(0xFFE4E9F2),
-  padDisabledContent = Color(0xFF6B768C),
+  padEmptyWellContainer = PadEmptyWellLight,
+  padEmptyWellBorder = LightBorder,
+  padDisabledContainer = PadDisabledContainerLight,
+  padDisabledContent = PadDisabledContentLight,
+  padProgressTrack = PadProgressTrackLight,
+  padSheenHighlight = PadSheenWhite,
+  padSheenShadow = PadSheenBlack,
+  padStatusChipBg = PadStatusChipLight,
   isAmoled = false,
   isDark = false
 )
 
 val LocalSoundPadSpacing = staticCompositionLocalOf { SoundPadSpacing() }
 val LocalSoundPadColors = staticCompositionLocalOf { DefaultDarkExtendedColors }
+val LocalSoundPadTokens = staticCompositionLocalOf { SoundPadPadTokens() }
+val LocalSoundPadTopBarTokens = staticCompositionLocalOf { SoundPadTopBarTokens() }
+val LocalSoundPadBottomBarTokens = staticCompositionLocalOf { SoundPadBottomBarTokens() }
 
 val SoundPadShapes = Shapes(
   extraSmall = RoundedCornerShape(6.dp),
@@ -105,6 +253,21 @@ object SoundPadTheme {
     @Composable
     @ReadOnlyComposable
     get() = LocalSoundPadSpacing.current
+
+  val padTokens: SoundPadPadTokens
+    @Composable
+    @ReadOnlyComposable
+    get() = LocalSoundPadTokens.current
+
+  val topBarTokens: SoundPadTopBarTokens
+    @Composable
+    @ReadOnlyComposable
+    get() = LocalSoundPadTopBarTokens.current
+
+  val bottomBarTokens: SoundPadBottomBarTokens
+    @Composable
+    @ReadOnlyComposable
+    get() = LocalSoundPadBottomBarTokens.current
 }
 
 @Composable
@@ -160,7 +323,10 @@ fun SoundPadProTheme(
 
   CompositionLocalProvider(
     LocalSoundPadColors provides extendedColors,
-    LocalSoundPadSpacing provides SoundPadSpacing()
+    LocalSoundPadSpacing provides SoundPadSpacing(),
+    LocalSoundPadTokens provides SoundPadPadTokens(),
+    LocalSoundPadTopBarTokens provides SoundPadTopBarTokens(),
+    LocalSoundPadBottomBarTokens provides SoundPadBottomBarTokens()
   ) {
     MaterialTheme(
       colorScheme = colorScheme,

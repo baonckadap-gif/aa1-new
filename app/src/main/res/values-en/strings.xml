@@ -135,4 +135,58 @@
     <string name="sequencer_title">Sequencer &amp; Pad Playlists</string>
     <string name="sequencer_new_playlist">New Playlist</string>
     <string name="sequencer_empty">No playlists yet. Create one and reorder pads with drag &amp; drop.</string>
+
+    <!-- Global Effects Toggles -->
+    <string name="settings_audio_effects_title">Global Audio Effects (Reverb, Echo &amp; EQ)</string>
+    <string name="settings_audio_effects_subtitle">Enable DSP audio effects processing; turn off for minimum tap latency</string>
+    <string name="settings_visual_effects_title">Pad Visual Effects (Glow &amp; Animations)</string>
+    <string name="settings_visual_effects_subtitle">Render corner glow, gradient sheen, and button motion; turn off for lag-free taps</string>
+
+    <!-- Pad Cell -->
+    <string name="cd_empty_pad_add">Add audio file or folder to empty pad</string>
+    <string name="pad_loading_label">Loading...</string>
+
+    <!-- Stage (b): Top Bar, Play Mode & Bank Bar -->
+    <string name="cd_overflow_menu">More options menu</string>
+    <string name="cd_add_bank">Add new bank</string>
+    <string name="cd_clear_search">Clear search</string>
+    <string name="search_pads_placeholder">Search pads by name, tag, or format...</string>
+    <string name="play_mode_single_short">SINGLE</string>
+    <string name="play_mode_multi_short">MULTI</string>
+    <string name="play_mode_cont_short">CONT</string>
+    <string name="tooltip_folder">Select Folder</string>
+    <string name="tooltip_bank_profiles">Bank &amp; Profiles</string>
+    <string name="tooltip_search">Search Pads</string>
+    <string name="tooltip_rescan">Rescan</string>
+    <string name="tooltip_cue">Audio Output &amp; Cue</string>
+    <string name="tooltip_menu">More Options</string>
+    <string name="tooltip_add_bank">Add New Bank</string>
+    <string name="menu_rescan_folder">Rescan Folder</string>
+    <string name="menu_rescan_bank">Rescan Current Bank</string>
+    <string name="menu_swap_banks">Swap Bank Order</string>
+    <string name="menu_rename_bank">Rename Current Bank</string>
+    <string name="menu_playlist_sequencer">Playlist &amp; Sequencer</string>
+    <string name="menu_scheduler">Playback Scheduler</string>
+    <string name="menu_crossfade">Global Crossfade</string>
+    <string name="menu_midi">MIDI Controller</string>
+    <string name="menu_grid_settings">Grid &amp; Studio Settings</string>
+    <string name="menu_stage_lock">Stage Lock</string>
+    <string name="menu_stage_unlock_hint">Locked (Hold Banner)</string>
+    <string name="menu_fullscreen">Fullscreen</string>
+    <string name="menu_exit_fullscreen">Exit Fullscreen</string>
+    <string name="menu_error_logs">Error Logs &amp; Diagnostics</string>
+    <string name="menu_miui_guide">HyperOS / MIUI Guide</string>
+
+    <!-- Stage (c): Bottom Bar -->
+    <string name="cd_master_volume_slider">Master volume slider</string>
+    <string name="cd_collapse_bottom_bar">Collapse bottom bar to 1 row</string>
+    <string name="cd_expand_bottom_bar">Expand bottom bar</string>
+    <string name="bottom_action_stop">STOP</string>
+    <string name="bottom_action_fade_out">Fade Out</string>
+    <string name="bottom_action_cue">Cue</string>
+    <string name="bottom_action_rec_mic">Rec Mic</string>
+    <string name="bottom_action_rec_master">REC Master</string>
+    <string name="bottom_action_theme">Theme</string>
+    <string name="bottom_action_edit">Edit Mode</string>
+    <string name="bottom_action_done">Done</string>
 </resources>

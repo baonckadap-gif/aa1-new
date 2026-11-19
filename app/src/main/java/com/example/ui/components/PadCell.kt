@@ -1,5 +1,6 @@
 package com.example.ui.components
 
+import android.os.SystemClock
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.Spring
@@ -9,10 +10,10 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.awaitEachGesture
@@ -22,9 +23,12 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -35,6 +39,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.CompareArrows
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AutoGraph
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.CheckCircle
@@ -55,8 +60,10 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.ripple
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -64,28 +71,34 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawOutline
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedback
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.LocalViewConfiguration
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -101,9 +114,11 @@ import com.example.domain.model.PadSurfaceFinish
 import com.example.domain.model.PadTriggerMode
 import com.example.domain.model.SoundPad
 import com.example.domain.model.ThemeMode
+import com.example.ui.theme.SoundPadColorPalette
 import com.example.ui.theme.SoundPadProTheme
 import com.example.ui.theme.SoundPadTheme
 import com.example.ui.theme.padMetaStyleForGrid
+import com.example.ui.theme.padTitleMinFontSizeSp
 import com.example.ui.theme.padTitleStyleForGrid
 import java.util.Locale
 import kotlin.math.abs
@@ -113,6 +128,37 @@ enum class PadDensity {
   STANDARD,
   COMPACT,
   MICRO
+}
+
+@Stable
+data class PadUiState(
+  val pad: SoundPad?,
+  val slotNumber: Int,
+  val playbackState: PadPlaybackState? = null,
+  val density: PadDensity = PadDensity.STANDARD,
+  val isEditMode: Boolean = false,
+  val isMultiSelectMode: Boolean = false,
+  val isSelected: Boolean = false,
+  val isMidiLearnMode: Boolean = false,
+  val isMidiLearnArmed: Boolean = false,
+  val isCuePlaying: Boolean = false,
+  val isDragging: Boolean = false,
+  val isDropTarget: Boolean = false,
+  val isLoading: Boolean = false,
+  val isEnabled: Boolean = true
+)
+
+private sealed interface PadStatusBadge {
+  data class VectorIcon(
+    val icon: ImageVector,
+    val description: String,
+    val tint: Color
+  ) : PadStatusBadge
+
+  data class ShortTag(
+    val label: String,
+    val tint: Color
+  ) : PadStatusBadge
 }
 
 fun performPadHaptic(
@@ -151,10 +197,12 @@ fun PadCell(
   gridRows: Int = 4,
   gridCols: Int = 4,
   reduceMotion: Boolean = false,
+  visualEffectsEnabled: Boolean = true,
   hapticIntensity: HapticIntensity = HapticIntensity.SOFT,
   swipePadVolumeEnabled: Boolean = false,
   doubleTapToStopEnabled: Boolean = true,
   onClick: (SoundPad) -> Unit,
+  onEmptyClick: () -> Unit = {},
   onDoubleTapStop: (SoundPad) -> Unit = {},
   onSwipeVolumeChange: (SoundPad, Float, Boolean) -> Unit = { _, _, _ -> },
   onCustomizeClick: (SoundPad) -> Unit = {},
@@ -163,10 +211,21 @@ fun PadCell(
   modifier: Modifier = Modifier
 ) {
   if (pad == null) {
-    EmptyPadWell(density = density, style = defaultPadShape, modifier = modifier)
+    EmptyPadWell(
+      slotNumber = slotNumber,
+      density = density,
+      style = defaultPadShape,
+      hapticIntensity = hapticIntensity,
+      onClick = onEmptyClick,
+      modifier = modifier
+    )
     return
   }
 
+  val padTokens = SoundPadTheme.padTokens
+  val spacing = SoundPadTheme.spacing
+  val extColors = SoundPadTheme.colors
+  val effectsActive = visualEffectsEnabled && !reduceMotion
   val hasError = pad.errorMessage != null
   val isPlaying = playbackState?.isPlaying == true && !hasError && isEnabled
   val isFadingOut = playbackState?.isFadingOut == true
@@ -174,32 +233,55 @@ fun PadCell(
   val interactionSource = remember { MutableInteractionSource() }
   val isPressed by interactionSource.collectIsPressedAsState()
   val haptic = LocalHapticFeedback.current
-  val extColors = SoundPadTheme.colors
+  val viewConfig = LocalViewConfiguration.current
 
   var isSwipingVolume by remember(pad.id) { mutableStateOf(false) }
   var swipedVolume by remember(pad.id, pad.settings.volume) { mutableFloatStateOf(pad.settings.volume) }
+  var lastTapElapsedMs by remember(pad.id) { mutableLongStateOf(0L) }
+  var wasPlayingAtLastTap by remember(pad.id) { mutableStateOf(false) }
 
   val customTint = pad.colorArgb?.let { Color(it.toInt()) }
   val accentColor = customTint ?: MaterialTheme.colorScheme.primary
   val cornerGlowColor = pad.glowColorArgb?.let { Color(it.toInt()) } ?: defaultCornerGlowColor
-  val glowFactor = if (isEnabled) pad.glowIntensity.coerceIn(0f, 1.8f) else 0f
+  val glowFactor = if (isEnabled && effectsActive) pad.glowIntensity.coerceIn(0f, 1.8f) else 0f
   val activeShapeStyle = pad.shapeStyle ?: defaultPadShape
   val customBorderTint = pad.borderColorArgb?.let { Color(it.toInt()) }
   val customTextColor = pad.textColorArgb?.let { Color(it.toInt()) }
 
   val targetScale = when {
-    !isEnabled || reduceMotion -> 1f
+    !isEnabled || !effectsActive -> 1f
     isDragging -> 1.04f
     isPressed -> 0.94f
     else -> 1f
   }
-  val scale by animateFloatAsState(
-    targetValue = targetScale,
-    animationSpec = spring(stiffness = Spring.StiffnessHigh),
-    label = "pad_scale"
-  )
+  val scale = if (effectsActive) {
+    val animatedScale by animateFloatAsState(
+      targetValue = targetScale,
+      animationSpec = spring(stiffness = Spring.StiffnessHigh),
+      label = "pad_scale"
+    )
+    animatedScale
+  } else {
+    1f
+  }
 
-  val shouldWiggle = isEditMode && !reduceMotion && !isDragging && !isMultiSelectMode && density != PadDensity.MICRO
+  val playingGlowPulse = if (isPlaying && effectsActive) {
+    val pulseTransition = rememberInfiniteTransition(label = "pad_playing_glow_pulse")
+    val pulse by pulseTransition.animateFloat(
+      initialValue = 0.78f,
+      targetValue = 1.18f,
+      animationSpec = infiniteRepeatable(
+        animation = tween(durationMillis = 900),
+        repeatMode = RepeatMode.Reverse
+      ),
+      label = "pad_glow_alpha_pulse"
+    )
+    pulse
+  } else {
+    1f
+  }
+
+  val shouldWiggle = isEditMode && effectsActive && !isDragging && !isMultiSelectMode && density != PadDensity.MICRO
   val wiggleRotation = if (shouldWiggle) {
     val wiggleTransition = rememberInfiniteTransition(label = "pad_edit_wiggle")
     val phaseShift = if (slotNumber % 2 == 0) 1 else -1
@@ -217,24 +299,27 @@ fun PadCell(
     0f
   }
 
-  val borderColor by animateColorAsState(
-    targetValue = when {
-      !isEnabled -> MaterialTheme.colorScheme.outlineVariant
-      hasError -> MaterialTheme.colorScheme.error
-      isMultiSelectMode && isSelected -> MaterialTheme.colorScheme.primary
-      isLoading -> MaterialTheme.colorScheme.primary
-      isMidiLearnArmed -> MaterialTheme.colorScheme.secondary
-      isCuePlaying -> extColors.cueMonitor
-      isDropTarget -> MaterialTheme.colorScheme.secondary
-      isFadingOut -> MaterialTheme.colorScheme.secondary
-      isPlaying -> cornerGlowColor
-      isEditMode || isMidiLearnMode -> MaterialTheme.colorScheme.secondary.copy(alpha = 0.82f)
-      customBorderTint != null -> customBorderTint
-      customTint != null -> customTint.copy(alpha = 0.82f)
-      else -> cornerGlowColor.copy(alpha = 0.58f)
-    },
-    label = "pad_border"
-  )
+  val targetBorderColor = when {
+    !isEnabled -> MaterialTheme.colorScheme.outlineVariant
+    hasError -> MaterialTheme.colorScheme.error
+    isMultiSelectMode && isSelected -> MaterialTheme.colorScheme.primary
+    isLoading -> MaterialTheme.colorScheme.primary
+    isMidiLearnArmed -> MaterialTheme.colorScheme.secondary
+    isCuePlaying -> extColors.cueMonitor
+    isDropTarget -> MaterialTheme.colorScheme.secondary
+    isFadingOut -> MaterialTheme.colorScheme.secondary
+    isPlaying -> cornerGlowColor
+    isEditMode || isMidiLearnMode -> MaterialTheme.colorScheme.secondary.copy(alpha = 0.85f)
+    customBorderTint != null -> customBorderTint
+    customTint != null -> customTint.copy(alpha = 0.84f)
+    else -> cornerGlowColor.copy(alpha = 0.60f)
+  }
+  val borderColor = if (effectsActive) {
+    val animatedBorder by animateColorAsState(targetValue = targetBorderColor, label = "pad_border")
+    animatedBorder
+  } else {
+    targetBorderColor
+  }
 
   val idleContainer = when {
     !isEnabled -> extColors.padDisabledContainer
@@ -250,17 +335,23 @@ fun PadCell(
     else -> MaterialTheme.colorScheme.primaryContainer
   }
 
-  val containerColor by animateColorAsState(
-    targetValue = if (isPlaying) activeContainer else idleContainer,
-    label = "pad_bg"
-  )
+  val targetContainerColor = if (isPlaying) activeContainer else idleContainer
+  val containerColor = if (effectsActive) {
+    val animatedBg by animateColorAsState(targetValue = targetContainerColor, label = "pad_bg")
+    animatedBg
+  } else {
+    targetContainerColor
+  }
 
   val cornerRadius: Dp = when (density) {
-    PadDensity.STANDARD -> pad.cornerRadiusDp.coerceIn(2f, 28f).dp
-    PadDensity.COMPACT -> (pad.cornerRadiusDp * 0.58f).coerceIn(2f, 16f).dp
-    PadDensity.MICRO -> 4.dp
+    PadDensity.STANDARD -> pad.cornerRadiusDp.coerceIn(padTokens.minCornerDp, padTokens.maxCornerDp).dp
+    PadDensity.COMPACT -> (pad.cornerRadiusDp * padTokens.compactCornerScale)
+      .coerceIn(padTokens.minCornerDp, padTokens.compactCornerDp.value * 2f).dp
+    PadDensity.MICRO -> padTokens.microCornerDp
   }
-  val shape = padComposeShape(activeShapeStyle, cornerRadius)
+  val shape = remember(activeShapeStyle, cornerRadius) {
+    padComposeShape(activeShapeStyle, cornerRadius)
+  }
 
   val padDescription = when {
     !isEnabled -> "Pad $slotNumber, ${pad.displayName}, disabled"
@@ -348,24 +439,26 @@ fun PadCell(
       }
     }
     else -> {
+      // Never set onDoubleClick on combinedClickable: non-null onDoubleClick forces a ~300ms delay on every single tap!
       Modifier.combinedClickable(
         interactionSource = interactionSource,
         indication = ripple(color = accentColor),
         onClick = {
+          val now = SystemClock.elapsedRealtime()
+          val withinTimeout = lastTapElapsedMs > 0L && (now - lastTapElapsedMs) <= viewConfig.doubleTapTimeoutMillis
+          val isDoubleTapStop = doubleTapToStopEnabled && isPlaying && wasPlayingAtLastTap && withinTimeout
           performPadHaptic(haptic, hapticIntensity)
-          onClick(pad)
-        },
-        onDoubleClick = if (doubleTapToStopEnabled) {
-          {
-            if (isPlaying) {
-              performPadHaptic(haptic, hapticIntensity)
-              onDoubleTapStop(pad)
-            } else {
-              performPadHaptic(haptic, hapticIntensity)
-              onClick(pad)
-            }
+          if (isDoubleTapStop) {
+            lastTapElapsedMs = 0L
+            wasPlayingAtLastTap = false
+            onDoubleTapStop(pad)
+          } else {
+            lastTapElapsedMs = now
+            wasPlayingAtLastTap = isPlaying
+            onClick(pad)
           }
-        } else null,
+        },
+        onDoubleClick = null,
         onLongClick = {
           performPadHaptic(haptic, hapticIntensity)
           onCustomizeClick(pad)
@@ -382,69 +475,60 @@ fun PadCell(
     isLoading -> 1.8.dp
     isMidiLearnArmed -> (baseBorderWidth + 1.4f).coerceAtLeast(2.6f).dp
     isDropTarget -> 2.4.dp
-    isPlaying -> (baseBorderWidth + 0.85f).coerceAtLeast(1.9f).dp
+    isPlaying -> (baseBorderWidth + padTokens.playingBorderExtraDp).coerceAtLeast(padTokens.playingBorderMinDp).dp
     isEditMode || isMidiLearnMode -> (baseBorderWidth + 0.35f).coerceAtLeast(1.4f).dp
     else -> baseBorderWidth.dp
   }
 
-  val surfaceSheenBrush = when (pad.surfaceFinish) {
-    PadSurfaceFinish.CLASSIC -> Brush.verticalGradient(
-      colors = listOf(
-        Color.White.copy(alpha = if (isPlaying) 0.14f else 0.06f),
-        Color.Transparent,
-        Color.Black.copy(alpha = if (extColors.isDark) 0.24f else 0.08f)
+  val sheenHighlight = extColors.padSheenHighlight
+  val sheenShadow = extColors.padSheenShadow
+  val surfaceSheenBrush = remember(
+    effectsActive,
+    pad.surfaceFinish,
+    accentColor,
+    cornerGlowColor,
+    isPlaying,
+    extColors.isDark,
+    sheenHighlight,
+    sheenShadow
+  ) {
+    if (!effectsActive) null else when (pad.surfaceFinish) {
+      PadSurfaceFinish.CLASSIC -> Brush.verticalGradient(
+        colors = listOf(
+          sheenHighlight.copy(alpha = if (isPlaying) 0.14f else 0.06f),
+          Color.Transparent,
+          sheenShadow.copy(alpha = if (extColors.isDark) 0.24f else 0.08f)
+        )
       )
-    )
-    PadSurfaceFinish.NEON_GRADIENT -> Brush.linearGradient(
-      colors = listOf(
-        accentColor.copy(alpha = if (isPlaying) 0.42f else 0.22f),
-        Color.Transparent,
-        cornerGlowColor.copy(alpha = if (isPlaying) 0.48f else 0.26f)
+      PadSurfaceFinish.NEON_GRADIENT -> Brush.linearGradient(
+        colors = listOf(
+          accentColor.copy(alpha = if (isPlaying) 0.42f else 0.22f),
+          Color.Transparent,
+          cornerGlowColor.copy(alpha = if (isPlaying) 0.48f else 0.26f)
+        )
       )
-    )
-    PadSurfaceFinish.GLASS -> Brush.linearGradient(
-      colors = listOf(
-        Color.White.copy(alpha = if (isPlaying) 0.28f else 0.18f),
-        Color.White.copy(alpha = 0.04f),
-        cornerGlowColor.copy(alpha = if (isPlaying) 0.22f else 0.10f)
+      PadSurfaceFinish.GLASS -> Brush.linearGradient(
+        colors = listOf(
+          sheenHighlight.copy(alpha = if (isPlaying) 0.28f else 0.18f),
+          sheenHighlight.copy(alpha = 0.04f),
+          cornerGlowColor.copy(alpha = if (isPlaying) 0.22f else 0.10f)
+        )
       )
-    )
-    PadSurfaceFinish.MATTE -> Brush.verticalGradient(
-      colors = listOf(
-        Color.Black.copy(alpha = 0.04f),
-        Color.Black.copy(alpha = if (extColors.isDark) 0.12f else 0.04f)
+      PadSurfaceFinish.MATTE -> Brush.verticalGradient(
+        colors = listOf(
+          sheenShadow.copy(alpha = 0.04f),
+          sheenShadow.copy(alpha = if (extColors.isDark) 0.12f else 0.04f)
+        )
       )
-    )
+    }
   }
 
   Box(
     modifier = modifier
-      .scale(scale)
-      .graphicsLayer { rotationZ = wiggleRotation }
+      .defaultMinSize(minWidth = spacing.minTouchTarget, minHeight = spacing.minTouchTarget)
+      .let { m -> if (effectsActive && scale != 1f) m.scale(scale) else m }
+      .let { m -> if (wiggleRotation != 0f) m.graphicsLayer { rotationZ = wiggleRotation } else m }
       .alpha(if (isEnabled) 1f else 0.46f)
-      .drawBehind {
-        if (!reduceMotion && isEnabled && !hasError && density != PadDensity.MICRO && glowFactor > 0.02f) {
-          val vertices = padCornerGlowVertices(activeShapeStyle, size)
-          val radiusScale = if (isPlaying) 0.44f else 0.28f
-          val haloRadius = (minOf(size.width, size.height) * radiusScale * glowFactor.coerceAtLeast(0.4f)).coerceAtLeast(8f)
-          val haloAlpha = ((if (isPlaying) 0.50f else 0.22f) * glowFactor).coerceIn(0f, 0.90f)
-          vertices.forEach { v ->
-            drawCircle(
-              brush = Brush.radialGradient(
-                colors = listOf(
-                  cornerGlowColor.copy(alpha = haloAlpha),
-                  cornerGlowColor.copy(alpha = haloAlpha * 0.35f),
-                  Color.Transparent
-                ),
-                center = v,
-                radius = haloRadius
-              ),
-              radius = haloRadius,
-              center = v
-            )
-          }
-        }
-      }
       .clip(shape)
       .testTag("pad_item_${pad.positionIndex}")
       .semantics { contentDescription = padDescription }
@@ -455,10 +539,10 @@ fun PadCell(
       modifier = Modifier.fillMaxSize(),
       shape = shape,
       color = containerColor,
-      tonalElevation = if (isPlaying || isDragging) 6.dp else 1.dp
+      tonalElevation = if (effectsActive && (isPlaying || isDragging)) 6.dp else 1.dp
     ) {
       Box(modifier = Modifier.fillMaxSize()) {
-        if (isEnabled) {
+        if (isEnabled && surfaceSheenBrush != null) {
           Box(
             modifier = Modifier
               .fillMaxSize()
@@ -471,50 +555,73 @@ fun PadCell(
             modifier = Modifier
               .fillMaxWidth(progress.coerceIn(0f, 1f))
               .fillMaxHeight()
-              .background(accentColor.copy(alpha = if (isFadingOut) 0.14f else 0.24f))
+              .background(accentColor.copy(alpha = if (isFadingOut) 0.14f else 0.22f))
           )
         }
 
-        Canvas(modifier = Modifier.fillMaxSize()) {
-          val outline = shape.createOutline(size, layoutDirection, this)
-          if (!reduceMotion && isEnabled && !hasError && density != PadDensity.MICRO && glowFactor > 0.02f) {
-            val vertices = padCornerGlowVertices(activeShapeStyle, size)
-            val cornerRadiusPx = (minOf(size.width, size.height) * (if (isPlaying) 0.44f else 0.30f) * glowFactor.coerceAtLeast(0.4f)).coerceAtLeast(8f)
-            val cornerAlpha = ((if (isPlaying) 0.62f else 0.32f) * glowFactor).coerceIn(0f, 0.92f)
-            vertices.forEach { vertex ->
-              drawCircle(
-                brush = Brush.radialGradient(
-                  colors = listOf(
-                    cornerGlowColor.copy(alpha = cornerAlpha),
-                    cornerGlowColor.copy(alpha = cornerAlpha * 0.24f),
-                    Color.Transparent
+        val drawCornerGlow = effectsActive &&
+          isEnabled &&
+          !hasError &&
+          glowFactor > 0.02f &&
+          (density == PadDensity.STANDARD || (density == PadDensity.COMPACT && isPlaying))
+
+        if (drawCornerGlow || borderWidthDp.value > 0.05f) {
+          Canvas(modifier = Modifier.fillMaxSize()) {
+            if (drawCornerGlow) {
+              val vertices = padCornerGlowVertices(activeShapeStyle, size)
+              val radiusScale = if (isPlaying) 0.46f * playingGlowPulse else 0.30f
+              val cornerRadiusPx = (minOf(size.width, size.height) * radiusScale * glowFactor.coerceAtLeast(0.4f)).coerceAtLeast(8f)
+              val baseAlpha = if (isPlaying) 0.56f * playingGlowPulse else 0.30f
+              val cornerAlpha = (baseAlpha * glowFactor).coerceIn(0f, 0.92f)
+              vertices.forEach { vertex ->
+                drawCircle(
+                  brush = Brush.radialGradient(
+                    colors = listOf(
+                      cornerGlowColor.copy(alpha = cornerAlpha),
+                      cornerGlowColor.copy(alpha = cornerAlpha * 0.24f),
+                      Color.Transparent
+                    ),
+                    center = vertex,
+                    radius = cornerRadiusPx
                   ),
-                  center = vertex,
-                  radius = cornerRadiusPx
-                ),
-                radius = cornerRadiusPx,
-                center = vertex
+                  radius = cornerRadiusPx,
+                  center = vertex
+                )
+              }
+            }
+
+            val outline = shape.createOutline(size, layoutDirection, this)
+            if (isPlaying && effectsActive) {
+              val haloAlpha = (padTokens.playingGlowHaloAlpha * playingGlowPulse).coerceIn(0.12f, 0.55f)
+              drawOutline(
+                outline = outline,
+                color = borderColor.copy(alpha = haloAlpha),
+                style = Stroke(
+                  width = (borderWidthDp + padTokens.playingGlowHaloStrokeDp).toPx(),
+                  cap = StrokeCap.Round,
+                  join = StrokeJoin.Round
+                )
               )
             }
-          }
 
-          if (borderWidthDp.value > 0.05f) {
-            drawOutline(
-              outline = outline,
-              color = borderColor,
-              style = Stroke(
-                width = borderWidthDp.toPx(),
-                cap = StrokeCap.Round,
-                join = StrokeJoin.Round
+            if (borderWidthDp.value > 0.05f) {
+              drawOutline(
+                outline = outline,
+                color = borderColor,
+                style = Stroke(
+                  width = borderWidthDp.toPx(),
+                  cap = StrokeCap.Round,
+                  join = StrokeJoin.Round
+                )
               )
-            )
+            }
           }
         }
 
         val contentPadding = when (activeShapeStyle) {
-          PadShapeStyle.TRIANGLE -> Modifier.padding(top = 12.dp, bottom = 2.dp, start = 10.dp, end = 10.dp)
-          PadShapeStyle.STAR -> Modifier.padding(horizontal = 10.dp, vertical = 10.dp)
-          PadShapeStyle.PRISM -> Modifier.padding(horizontal = 8.dp, vertical = 6.dp)
+          PadShapeStyle.TRIANGLE -> Modifier.padding(top = spacing.md, bottom = spacing.xxs, start = spacing.sm, end = spacing.sm)
+          PadShapeStyle.STAR -> Modifier.padding(horizontal = spacing.sm, vertical = spacing.sm)
+          PadShapeStyle.PRISM -> Modifier.padding(horizontal = spacing.sm, vertical = spacing.xs)
           PadShapeStyle.SQUARE -> Modifier
         }
 
@@ -563,10 +670,10 @@ fun PadCell(
           Box(
             modifier = Modifier
               .align(Alignment.TopEnd)
-              .padding(4.dp)
+              .padding(spacing.xs)
               .size(if (density == PadDensity.MICRO) 14.dp else 20.dp)
               .clip(CircleShape)
-              .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.85f)),
+              .background(MaterialTheme.colorScheme.surface.copy(alpha = padTokens.metaMinAlpha)),
             contentAlignment = Alignment.Center
           ) {
             Icon(
@@ -581,15 +688,15 @@ fun PadCell(
         if (isSwipingVolume) {
           Surface(
             modifier = Modifier.align(Alignment.Center),
-            shape = RoundedCornerShape(8.dp),
+            shape = MaterialTheme.shapes.small,
             color = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
-            border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.primary)
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary)
           ) {
             Text(
               text = "VOL ${(swipedVolume * 100f).roundToInt()}%",
               style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
               color = MaterialTheme.colorScheme.primary,
-              modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+              modifier = Modifier.padding(horizontal = spacing.sm, vertical = spacing.xs)
             )
           }
         }
@@ -599,8 +706,8 @@ fun PadCell(
             modifier = Modifier
               .align(Alignment.BottomStart)
               .fillMaxWidth()
-              .height(if (density == PadDensity.MICRO) 2.dp else 3.dp)
-              .background(Color.Black.copy(alpha = 0.35f))
+              .height(if (density == PadDensity.MICRO) padTokens.bottomProgressMicroDp else padTokens.bottomProgressStandardDp)
+              .background(extColors.padProgressTrack)
           ) {
             Box(
               modifier = Modifier
@@ -634,6 +741,8 @@ private fun StandardPadContent(
   playbackState: PadPlaybackState?
 ) {
   val extColors = SoundPadTheme.colors
+  val spacing = SoundPadTheme.spacing
+  val padTokens = SoundPadTheme.padTokens
   val hasError = pad.errorMessage != null
   val isLooping = pad.settings.isLooping || pad.settings.triggerMode == PadTriggerMode.LOOP
   val hasFade = pad.settings.fadeInMs > 0L || pad.settings.fadeOutMs > 0L
@@ -641,24 +750,101 @@ private fun StandardPadContent(
   val showCrossfadeIcon = globalCrossfadeEnabled && pad.settings.crossfadeEnabled
   val isPanned = abs(pad.settings.pan) >= 0.04f
   val showWaveform = miniWaveformEnabled && pad.miniWaveform.isNotEmpty() && !hasError
+
   val titleColor = if (!isEnabled) {
     extColors.padDisabledContent
   } else {
     customTextColor ?: MaterialTheme.colorScheme.onSurface
   }
-  val secondaryTextColor = if (!isEnabled) {
+  val metaTextColor = if (!isEnabled) {
     extColors.padDisabledContent
   } else {
-    customTextColor?.copy(alpha = 0.78f) ?: MaterialTheme.colorScheme.onSurfaceVariant
+    (customTextColor ?: MaterialTheme.colorScheme.onSurface).copy(alpha = padTokens.metaMinAlpha)
   }
+
   val badgeVector = padBadgeVector(pad.badgeIcon)
   val titleStyle = padTitleStyleForGrid(gridRows, gridCols, isPlaying)
+  val minTitleFontSizeSp = padTitleMinFontSizeSp(gridRows, gridCols)
   val metaStyle = padMetaStyleForGrid(gridRows, gridCols)
+
+  val loopContentDesc = stringResource(R.string.cd_loop_enabled)
+  val cueContentDesc = stringResource(R.string.cd_cue_preview)
+
+  val secondaryColor = MaterialTheme.colorScheme.secondary
+  val primaryColor = MaterialTheme.colorScheme.primary
+  val activeStatusBadges = remember(
+    isCuePlaying,
+    isLooping,
+    pad.settings.isReversed,
+    hasFade,
+    pad.settings.eqEnabled,
+    badgeVector,
+    pad.settings.isDuckingSource,
+    isTrimmed,
+    showCrossfadeIcon,
+    pad.settings.speed,
+    isPanned,
+    pad.settings.pan,
+    pad.settings.echoEnabled,
+    pad.settings.reverbEnabled,
+    pad.midiNote,
+    pad.isPreloadedInRam,
+    accentColor,
+    customTextColor,
+    secondaryColor,
+    primaryColor,
+    extColors
+  ) {
+    buildList {
+      if (isLooping) {
+        add(PadStatusBadge.VectorIcon(Icons.Filled.Repeat, loopContentDesc, secondaryColor))
+      }
+      if (pad.settings.isReversed) {
+        add(PadStatusBadge.ShortTag("REV", secondaryColor))
+      }
+      if (hasFade) {
+        add(PadStatusBadge.VectorIcon(Icons.Filled.AutoGraph, "Fade envelope active", primaryColor))
+      }
+      if (pad.settings.eqEnabled) {
+        add(PadStatusBadge.ShortTag("EQ", primaryColor))
+      }
+      if (isCuePlaying) {
+        add(PadStatusBadge.VectorIcon(Icons.Filled.Headphones, cueContentDesc, extColors.cueMonitor))
+      }
+      if (badgeVector != null) {
+        add(PadStatusBadge.VectorIcon(badgeVector, pad.badgeIcon.label, customTextColor ?: accentColor))
+      }
+      if (pad.settings.echoEnabled || pad.settings.reverbEnabled) {
+        add(PadStatusBadge.ShortTag("FX", extColors.cueMonitor))
+      }
+      if (isTrimmed) {
+        add(PadStatusBadge.VectorIcon(Icons.Filled.ContentCut, "Non-destructive cut active", accentColor))
+      }
+      if (pad.settings.isDuckingSource) {
+        add(PadStatusBadge.VectorIcon(Icons.Filled.RecordVoiceOver, "Ducking source", secondaryColor))
+      }
+      if (showCrossfadeIcon) {
+        add(PadStatusBadge.VectorIcon(Icons.AutoMirrored.Filled.CompareArrows, "Crossfade enabled", primaryColor.copy(alpha = padTokens.metaMinAlpha)))
+      }
+      if (pad.settings.speed != 1.0f) {
+        add(PadStatusBadge.ShortTag(String.format(Locale.US, "%.1fx", pad.settings.speed), secondaryColor))
+      }
+      if (isPanned) {
+        add(PadStatusBadge.ShortTag(StereoPanMath.formatPanLabel(pad.settings.pan).replace(" ", ""), extColors.cueMonitor))
+      }
+      if (pad.midiNote != null) {
+        add(PadStatusBadge.ShortTag("N${pad.midiNote}", accentColor))
+      }
+      if (pad.isPreloadedInRam) {
+        add(PadStatusBadge.VectorIcon(Icons.Filled.Bolt, "RAM Preloaded", extColors.ramEmerald))
+      }
+    }
+  }
 
   Column(
     modifier = Modifier
       .fillMaxSize()
-      .padding(horizontal = SoundPadTheme.spacing.sm, vertical = 6.dp),
+      .padding(horizontal = padTokens.padHorizontalPaddingDp, vertical = padTokens.padVerticalPaddingDp),
     verticalArrangement = Arrangement.SpaceBetween
   ) {
     Row(
@@ -668,11 +854,11 @@ private fun StandardPadContent(
     ) {
       Row(
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(4.dp)
+        horizontalArrangement = Arrangement.spacedBy(spacing.xs)
       ) {
         Box(
           modifier = Modifier
-            .size(7.dp)
+            .size(padTokens.statusDotDp)
             .clip(CircleShape)
             .background(
               when {
@@ -682,7 +868,7 @@ private fun StandardPadContent(
                 isCuePlaying -> extColors.cueMonitor
                 isFadingOut -> MaterialTheme.colorScheme.secondary
                 isPlaying -> accentColor
-                else -> accentColor.copy(alpha = 0.55f)
+                else -> accentColor.copy(alpha = 0.65f)
               }
             )
         )
@@ -690,7 +876,7 @@ private fun StandardPadContent(
           Text(
             text = String.format(Locale.US, "%02d", slotNumber),
             style = metaStyle,
-            color = if (isPlaying) accentColor else secondaryTextColor
+            color = if (isPlaying) accentColor else metaTextColor
           )
         }
         if (pad.isFavorite) {
@@ -698,13 +884,13 @@ private fun StandardPadContent(
             imageVector = Icons.Filled.Star,
             contentDescription = stringResource(R.string.cd_favorite_pad),
             tint = extColors.favoriteGold,
-            modifier = Modifier.size(11.dp)
+            modifier = Modifier.size(padTokens.statusIconDp)
           )
         }
         if (pad.isClone) {
           Text(
             text = "DUP",
-            style = metaStyle.copy(fontSize = 7.sp, fontWeight = FontWeight.Bold),
+            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
             color = MaterialTheme.colorScheme.secondary
           )
         }
@@ -712,134 +898,69 @@ private fun StandardPadContent(
 
       Row(
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(3.dp)
+        horizontalArrangement = Arrangement.spacedBy(spacing.xxs)
       ) {
-        if (hasError) {
-          Icon(
-            imageVector = Icons.Filled.Warning,
-            contentDescription = "File bermasalah",
-            tint = MaterialTheme.colorScheme.error,
-            modifier = Modifier.size(14.dp)
-          )
-        } else if (isLoading) {
-          CircularProgressIndicator(
-            modifier = Modifier.size(12.dp),
-            strokeWidth = 1.8.dp,
-            color = MaterialTheme.colorScheme.primary
-          )
-        } else if (isEditMode) {
-          Icon(
-            imageVector = Icons.Filled.DragIndicator,
-            contentDescription = "Drag to reorder",
-            tint = MaterialTheme.colorScheme.secondary,
-            modifier = Modifier.size(13.dp)
-          )
-        } else {
-          if (isCuePlaying) {
+        when {
+          hasError -> {
             Icon(
-              imageVector = Icons.Filled.Headphones,
-              contentDescription = "Cue headphone preview active",
-              tint = extColors.cueMonitor,
-              modifier = Modifier.size(12.dp)
+              imageVector = Icons.Filled.Warning,
+              contentDescription = "Error",
+              tint = MaterialTheme.colorScheme.error,
+              modifier = Modifier.size(padTokens.actionIconDp)
             )
           }
-          if (badgeVector != null) {
-            Icon(
-              imageVector = badgeVector,
-              contentDescription = pad.badgeIcon.label,
-              tint = customTextColor ?: accentColor,
-              modifier = Modifier.size(12.dp)
-            )
-          }
-          if (pad.settings.isDuckingSource) {
-            Icon(
-              imageVector = Icons.Filled.RecordVoiceOver,
-              contentDescription = "Ducking source",
-              tint = MaterialTheme.colorScheme.secondary,
-              modifier = Modifier.size(11.dp)
-            )
-          }
-          if (isLooping) {
-            Icon(
-              imageVector = Icons.Filled.Repeat,
-              contentDescription = stringResource(R.string.cd_loop_enabled),
-              tint = MaterialTheme.colorScheme.secondary,
-              modifier = Modifier.size(11.dp)
-            )
-          }
-          if (isTrimmed) {
-            Icon(
-              imageVector = Icons.Filled.ContentCut,
-              contentDescription = "Non-destructive cut active",
-              tint = accentColor,
-              modifier = Modifier.size(11.dp)
-            )
-          }
-          if (hasFade) {
-            Icon(
-              imageVector = Icons.Filled.AutoGraph,
-              contentDescription = "Fade envelope active",
-              tint = MaterialTheme.colorScheme.primary,
-              modifier = Modifier.size(11.dp)
-            )
-          }
-          if (showCrossfadeIcon) {
-            Icon(
-              imageVector = Icons.AutoMirrored.Filled.CompareArrows,
-              contentDescription = "Crossfade enabled",
-              tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.85f),
-              modifier = Modifier.size(11.dp)
-            )
-          }
-          if (pad.settings.speed != 1.0f) {
-            Text(
-              text = String.format(Locale.US, "%.1fx", pad.settings.speed),
-              style = metaStyle.copy(fontSize = 8.sp),
-              color = MaterialTheme.colorScheme.secondary
-            )
-          }
-          if (isPanned) {
-            Text(
-              text = StereoPanMath.formatPanLabel(pad.settings.pan).replace(" ", ""),
-              style = metaStyle.copy(fontSize = 8.sp, fontWeight = FontWeight.Bold),
-              color = extColors.cueMonitor
-            )
-          }
-          if (pad.settings.isReversed) {
-            Text(
-              text = "REV",
-              style = metaStyle.copy(fontSize = 8.sp, fontWeight = FontWeight.Bold),
-              color = MaterialTheme.colorScheme.secondary
-            )
-          }
-          if (pad.settings.eqEnabled) {
-            Text(
-              text = "EQ",
-              style = metaStyle.copy(fontSize = 8.sp, fontWeight = FontWeight.Bold),
+          isLoading -> {
+            CircularProgressIndicator(
+              modifier = Modifier.size(padTokens.statusSpinnerDp),
+              strokeWidth = 1.8.dp,
               color = MaterialTheme.colorScheme.primary
             )
           }
-          if (pad.settings.echoEnabled || pad.settings.reverbEnabled) {
-            Text(
-              text = "FX",
-              style = metaStyle.copy(fontSize = 8.sp, fontWeight = FontWeight.Bold),
-              color = extColors.cueMonitor
-            )
-          }
-          if (pad.midiNote != null) {
-            Text(
-              text = "N${pad.midiNote}",
-              style = metaStyle.copy(fontSize = 8.sp, fontWeight = FontWeight.Bold),
-              color = accentColor
-            )
-          }
-          if (pad.isPreloadedInRam) {
+          isEditMode -> {
             Icon(
-              imageVector = Icons.Filled.Bolt,
-              contentDescription = "RAM Preloaded",
-              tint = extColors.ramEmerald,
-              modifier = Modifier.size(11.dp)
+              imageVector = Icons.Filled.DragIndicator,
+              contentDescription = "Drag to reorder",
+              tint = MaterialTheme.colorScheme.secondary,
+              modifier = Modifier.size(padTokens.actionIconDp)
             )
+          }
+          else -> {
+            val visibleBadges = activeStatusBadges.take(padTokens.maxStatusIcons)
+            val overflowCount = (activeStatusBadges.size - visibleBadges.size).coerceAtLeast(0)
+            visibleBadges.forEach { badge ->
+              when (badge) {
+                is PadStatusBadge.VectorIcon -> {
+                  Icon(
+                    imageVector = badge.icon,
+                    contentDescription = badge.description,
+                    tint = badge.tint,
+                    modifier = Modifier.size(padTokens.statusIconDp)
+                  )
+                }
+                is PadStatusBadge.ShortTag -> {
+                  Text(
+                    text = badge.label,
+                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                    color = badge.tint
+                  )
+                }
+              }
+            }
+            if (overflowCount > 0) {
+              Box(
+                modifier = Modifier
+                  .clip(RoundedCornerShape(padTokens.statusBadgeRadiusDp))
+                  .background(extColors.padStatusChipBg)
+                  .padding(horizontal = spacing.xxs, vertical = 1.dp),
+                contentAlignment = Alignment.Center
+              ) {
+                Text(
+                  text = "+$overflowCount",
+                  style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                  color = metaTextColor
+                )
+              }
+            }
           }
         }
       }
@@ -847,27 +968,35 @@ private fun StandardPadContent(
 
     Column(
       modifier = Modifier.fillMaxWidth(),
-      verticalArrangement = Arrangement.spacedBy(3.dp)
+      verticalArrangement = Arrangement.spacedBy(spacing.xxs)
     ) {
-      Text(
+      AutoSizePadTitle(
         text = pad.displayName,
         style = titleStyle,
+        minFontSizeSp = minTitleFontSizeSp,
         color = if (hasError) MaterialTheme.colorScheme.error else titleColor,
-        maxLines = if (showWaveform) 1 else 2,
-        overflow = TextOverflow.Ellipsis
+        maxLines = 2,
+        modifier = Modifier.fillMaxWidth()
       )
 
       if (showWaveform) {
+        val baseIdleWave = lerp(
+          customTextColor ?: MaterialTheme.colorScheme.onSurface,
+          accentColor,
+          0.25f
+        ).copy(alpha = padTokens.waveformIdleAlpha)
+
         MiniWaveformStrip(
           bars = pad.miniWaveform,
           progress = if (isPlaying) (playbackState?.progress ?: 0f) else 0f,
           isPlaying = isPlaying,
-          activeColor = accentColor,
-          idleColor = (customTextColor ?: MaterialTheme.colorScheme.onSurfaceVariant).copy(alpha = 0.36f),
-          playheadColor = extColors.playheadWhite,
+          playedColor = accentColor.copy(alpha = padTokens.waveformPlayedAlpha),
+          unplayedPlayingColor = accentColor.copy(alpha = padTokens.waveformDimAlpha),
+          idleColor = baseIdleWave,
+          playheadColor = extColors.playheadWhite.copy(alpha = padTokens.playheadAlpha),
           modifier = Modifier
             .fillMaxWidth()
-            .height(14.dp)
+            .height(padTokens.waveformHeightDp)
         )
       }
     }
@@ -878,8 +1007,9 @@ private fun StandardPadContent(
       verticalAlignment = Alignment.CenterVertically
     ) {
       Row(
+        modifier = Modifier.weight(1f),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(4.dp)
+        horizontalArrangement = Arrangement.spacedBy(spacing.xs)
       ) {
         when {
           hasError -> {
@@ -893,7 +1023,7 @@ private fun StandardPadContent(
           }
           isLoading -> {
             Text(
-              text = "Memuat...",
+              text = stringResource(R.string.pad_loading_label),
               style = metaStyle,
               color = MaterialTheme.colorScheme.primary,
               maxLines = 1
@@ -914,14 +1044,15 @@ private fun StandardPadContent(
               }
               Text(
                 text = displayTime,
-                style = metaStyle,
-                color = if (isPlaying) accentColor else secondaryTextColor
+                style = if (isPlaying) metaStyle.copy(fontWeight = FontWeight.Bold) else metaStyle,
+                color = if (isPlaying) accentColor else metaTextColor,
+                maxLines = 1
               )
             }
             if (pad.categoryTag.isNotBlank()) {
               Text(
                 text = pad.categoryTag,
-                style = metaStyle.copy(fontSize = 8.sp),
+                style = metaStyle,
                 color = accentColor,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
@@ -933,19 +1064,19 @@ private fun StandardPadContent(
 
       when {
         isPlaying && playbackState != null -> {
-          Box(contentAlignment = Alignment.Center, modifier = Modifier.size(16.dp)) {
+          Box(contentAlignment = Alignment.Center, modifier = Modifier.size(padTokens.playingEqBoxDp)) {
             CircularProgressIndicator(
               progress = { playbackState.progress.coerceIn(0f, 1f) },
               modifier = Modifier.fillMaxSize(),
               strokeWidth = 2.dp,
               color = accentColor,
-              trackColor = accentColor.copy(alpha = 0.22f)
+              trackColor = accentColor.copy(alpha = padTokens.waveformDimAlpha)
             )
             Icon(
               imageVector = Icons.Filled.GraphicEq,
               contentDescription = null,
               tint = accentColor,
-              modifier = Modifier.size(9.dp)
+              modifier = Modifier.size(padTokens.playingEqIconDp)
             )
           }
         }
@@ -960,9 +1091,9 @@ private fun StandardPadContent(
             tint = when {
               hasError -> MaterialTheme.colorScheme.error
               isCuePlaying -> extColors.cueMonitor
-              else -> secondaryTextColor.copy(alpha = 0.65f)
+              else -> metaTextColor
             },
-            modifier = Modifier.size(14.dp)
+            modifier = Modifier.size(padTokens.actionIconDp)
           )
         }
       }
@@ -971,11 +1102,64 @@ private fun StandardPadContent(
 }
 
 @Composable
+private fun AutoSizePadTitle(
+  text: String,
+  style: TextStyle,
+  minFontSizeSp: Float,
+  color: Color,
+  maxLines: Int,
+  modifier: Modifier = Modifier
+) {
+  val textMeasurer = rememberTextMeasurer()
+  val density = LocalDensity.current
+
+  BoxWithConstraints(modifier = modifier) {
+    val maxWidthPx = with(density) { maxWidth.roundToPx() }.coerceAtLeast(1)
+    val startSizeSp = style.fontSize.value
+    val resolvedStyle = remember(text, style, minFontSizeSp, maxLines, maxWidthPx) {
+      var candidateSp = startSizeSp
+      var matchedStyle = style
+      while (candidateSp > minFontSizeSp) {
+        val lineHeightSp = (candidateSp * 1.18f).sp
+        val testStyle = style.copy(fontSize = candidateSp.sp, lineHeight = lineHeightSp)
+        val result = textMeasurer.measure(
+          text = text,
+          style = testStyle,
+          overflow = TextOverflow.Clip,
+          softWrap = true,
+          maxLines = maxLines,
+          constraints = Constraints(maxWidth = maxWidthPx)
+        )
+        if (!result.hasVisualOverflow && result.lineCount <= maxLines) {
+          matchedStyle = testStyle
+          break
+        }
+        candidateSp = (candidateSp - 0.5f).coerceAtLeast(minFontSizeSp)
+        matchedStyle = style.copy(
+          fontSize = candidateSp.sp,
+          lineHeight = (candidateSp * 1.18f).sp
+        )
+      }
+      matchedStyle
+    }
+
+    Text(
+      text = text,
+      style = resolvedStyle,
+      color = color,
+      maxLines = maxLines,
+      overflow = TextOverflow.Ellipsis
+    )
+  }
+}
+
+@Composable
 private fun MiniWaveformStrip(
   bars: List<Float>,
   progress: Float,
   isPlaying: Boolean,
-  activeColor: Color,
+  playedColor: Color,
+  unplayedPlayingColor: Color,
   idleColor: Color,
   playheadColor: Color,
   modifier: Modifier = Modifier
@@ -995,7 +1179,11 @@ private fun MiniWaveformStrip(
       val x = i * slotW + gap
       val y = (size.height - barH) * 0.5f
       val barProgress = (i + 0.5f) / count.toFloat()
-      val barColor = if (isPlaying && barProgress <= clampedProgress) activeColor else idleColor
+      val barColor = when {
+        !isPlaying -> idleColor
+        barProgress <= clampedProgress -> playedColor
+        else -> unplayedPlayingColor
+      }
       drawLine(
         color = barColor,
         start = Offset(x + barW * 0.5f, y),
@@ -1007,7 +1195,7 @@ private fun MiniWaveformStrip(
 
     if (isPlaying) {
       drawLine(
-        color = playheadColor.copy(alpha = 0.90f),
+        color = playheadColor,
         start = Offset(playheadX, 0f),
         end = Offset(playheadX, size.height),
         strokeWidth = 2f,
@@ -1028,17 +1216,20 @@ private fun CompactPadContent(
   accentColor: Color,
   customTextColor: Color?
 ) {
+  val spacing = SoundPadTheme.spacing
+  val padTokens = SoundPadTheme.padTokens
   val hasError = pad.errorMessage != null
   val titleColor = if (hasError) MaterialTheme.colorScheme.error else (customTextColor ?: MaterialTheme.colorScheme.onSurface)
-  val secondaryColor = customTextColor?.copy(alpha = 0.78f) ?: MaterialTheme.colorScheme.onSurfaceVariant
+  val secondaryColor = (customTextColor ?: MaterialTheme.colorScheme.onSurface).copy(alpha = padTokens.metaMinAlpha)
   val badgeVector = padBadgeVector(pad.badgeIcon)
   val titleStyle = padTitleStyleForGrid(gridRows, gridCols, isPlaying)
+  val minTitleFontSizeSp = padTitleMinFontSizeSp(gridRows, gridCols)
   val metaStyle = padMetaStyleForGrid(gridRows, gridCols)
 
   Column(
     modifier = Modifier
       .fillMaxSize()
-      .padding(horizontal = 4.dp, vertical = 3.dp),
+      .padding(horizontal = spacing.xs, vertical = spacing.xs),
     verticalArrangement = Arrangement.SpaceBetween
   ) {
     Row(
@@ -1050,7 +1241,7 @@ private fun CompactPadContent(
         hasError -> {
           Icon(
             imageVector = Icons.Filled.Warning,
-            contentDescription = "File bermasalah",
+            contentDescription = "Error",
             tint = MaterialTheme.colorScheme.error,
             modifier = Modifier.size(9.dp)
           )
@@ -1068,14 +1259,14 @@ private fun CompactPadContent(
               .size(5.dp)
               .clip(CircleShape)
               .background(
-                if (isPlaying) accentColor else accentColor.copy(alpha = 0.45f)
+                if (isPlaying) accentColor else accentColor.copy(alpha = 0.55f)
               )
           )
         }
       }
       Row(
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(2.dp)
+        horizontalArrangement = Arrangement.spacedBy(spacing.xxs)
       ) {
         if (badgeVector != null && !hasError) {
           Icon(
@@ -1098,14 +1289,15 @@ private fun CompactPadContent(
         }
       }
     }
-    Text(
+    AutoSizePadTitle(
       text = pad.displayName,
       style = titleStyle,
+      minFontSizeSp = minTitleFontSizeSp,
       color = titleColor,
       maxLines = 2,
-      overflow = TextOverflow.Ellipsis
+      modifier = Modifier.fillMaxWidth()
     )
-    Spacer(modifier = Modifier.height(2.dp))
+    Spacer(modifier = Modifier.height(spacing.xxs))
   }
 }
 
@@ -1120,6 +1312,7 @@ private fun MicroPadContent(
   accentColor: Color
 ) {
   val metaStyle = padMetaStyleForGrid(gridRows, gridCols)
+  val padTokens = SoundPadTheme.padTokens
   Box(
     modifier = Modifier.fillMaxSize(),
     contentAlignment = Alignment.Center
@@ -1137,7 +1330,7 @@ private fun MicroPadContent(
         color = when {
           hasError -> MaterialTheme.colorScheme.error
           isPlaying -> accentColor
-          else -> MaterialTheme.colorScheme.onSurfaceVariant
+          else -> MaterialTheme.colorScheme.onSurface.copy(alpha = padTokens.metaMinAlpha)
         }
       )
     }
@@ -1146,26 +1339,73 @@ private fun MicroPadContent(
 
 @Composable
 private fun EmptyPadWell(
+  slotNumber: Int,
   density: PadDensity,
   style: PadShapeStyle,
+  hapticIntensity: HapticIntensity,
+  onClick: () -> Unit,
   modifier: Modifier = Modifier
 ) {
+  val padTokens = SoundPadTheme.padTokens
+  val spacing = SoundPadTheme.spacing
+  val extColors = SoundPadTheme.colors
+  val haptic = LocalHapticFeedback.current
+  val interactionSource = remember { MutableInteractionSource() }
+
   val cornerRadius = when (density) {
-    PadDensity.STANDARD -> 14.dp
-    PadDensity.COMPACT -> 8.dp
-    PadDensity.MICRO -> 4.dp
+    PadDensity.STANDARD -> padTokens.standardCornerDp
+    PadDensity.COMPACT -> padTokens.compactCornerDp
+    PadDensity.MICRO -> padTokens.microCornerDp
   }
-  val shape = padComposeShape(style, cornerRadius)
+  val shape = remember(style, cornerRadius) { padComposeShape(style, cornerRadius) }
+  val outlineColor = extColors.padEmptyWellBorder.copy(alpha = padTokens.metaMinAlpha)
+  val outlineStrokeWidth = if (density == PadDensity.STANDARD) padTokens.emptyWellBorderDp else padTokens.emptyWellBorderCompactDp
+  val plusIconSize = when (density) {
+    PadDensity.STANDARD -> padTokens.emptyIconStandardDp
+    PadDensity.COMPACT -> padTokens.emptyIconCompactDp
+    PadDensity.MICRO -> padTokens.emptyIconMicroDp
+  }
+  val addDescription = stringResource(R.string.cd_empty_pad_add)
+
   Box(
     modifier = modifier
+      .defaultMinSize(minWidth = spacing.minTouchTarget, minHeight = spacing.minTouchTarget)
       .clip(shape)
-      .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.45f))
-      .border(
-        width = 0.75.dp,
-        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.65f),
-        shape = shape
+      .background(extColors.padEmptyWellContainer)
+      .testTag("empty_pad_well_$slotNumber")
+      .semantics { contentDescription = "$addDescription ($slotNumber)" }
+      .clickable(
+        interactionSource = interactionSource,
+        indication = ripple(color = MaterialTheme.colorScheme.primary)
+      ) {
+        performPadHaptic(haptic, hapticIntensity)
+        onClick()
+      },
+    contentAlignment = Alignment.Center
+  ) {
+    Canvas(modifier = Modifier.fillMaxSize()) {
+      val dashLenPx = padTokens.dashLengthDp.toPx()
+      val dashGapPx = padTokens.dashGapDp.toPx()
+      val outline = shape.createOutline(size, layoutDirection, this)
+      drawOutline(
+        outline = outline,
+        color = outlineColor,
+        style = Stroke(
+          width = outlineStrokeWidth.toPx(),
+          cap = StrokeCap.Round,
+          join = StrokeJoin.Round,
+          pathEffect = PathEffect.dashPathEffect(floatArrayOf(dashLenPx, dashGapPx), 0f)
+        )
       )
-  )
+    }
+
+    Icon(
+      imageVector = Icons.Filled.Add,
+      contentDescription = addDescription,
+      tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = padTokens.metaMinAlpha),
+      modifier = Modifier.size(plusIconSize)
+    )
+  }
 }
 
 fun formatDuration(durationMs: Long): String {
@@ -1176,28 +1416,31 @@ fun formatDuration(durationMs: Long): String {
   return String.format(Locale.US, "%d:%02d", minutes, seconds)
 }
 
-@Preview(showBackground = true, backgroundColor = 0xFF000000)
+@Preview(showBackground = true)
 @Composable
 private fun PadCellStatesPreview() {
   SoundPadProTheme(themeMode = ThemeMode.AMOLED) {
+    val spacing = SoundPadTheme.spacing
+    val cyanPreset = SoundPadColorPalette.PAD_PRESETS_12[0].argb
+    val amberPreset = SoundPadColorPalette.PAD_PRESETS_12[1].argb
     val sampleIdle = SoundPad(
       id = "p1",
       uriString = "file:///kick.wav",
       fileName = "kick.wav",
-      displayName = "Kick & Sub",
+      displayName = "Kick & Sub Bass Layer Ultra Long Track Title",
       extension = "WAV",
       durationMs = 18_000L,
       sizeBytes = 500_000L,
       positionIndex = 0,
-      colorArgb = 0xFF00E5FFL,
+      colorArgb = cyanPreset,
       isFavorite = true,
       miniWaveform = listOf(0.2f, 0.8f, 0.5f, 0.9f, 0.4f, 0.7f, 0.3f, 0.6f),
-      settings = PadSettings(isLooping = true, eqEnabled = true)
+      settings = PadSettings(isLooping = true, eqEnabled = true, isReversed = true, fadeInMs = 300L, echoEnabled = true)
     )
     val samplePlay = sampleIdle.copy(
       id = "p2",
       displayName = "Vocal Chorus Hook",
-      colorArgb = 0xFFFFB300L,
+      colorArgb = amberPreset,
       isClone = true,
       positionIndex = 1,
       settings = PadSettings(isReversed = true, reverbEnabled = true, fadeInMs = 300L)
@@ -1209,8 +1452,8 @@ private fun PadCellStatesPreview() {
       errorMessage = "Header rusak",
       positionIndex = 2
     )
-    Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-      Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+    Column(modifier = Modifier.padding(spacing.md), verticalArrangement = Arrangement.spacedBy(spacing.sm)) {
+      Row(horizontalArrangement = Arrangement.spacedBy(spacing.sm)) {
         PadCell(
           pad = sampleIdle,
           slotNumber = 1,
@@ -1221,11 +1464,11 @@ private fun PadCellStatesPreview() {
           isDropTarget = false,
           globalCrossfadeEnabled = true,
           defaultPadShape = PadShapeStyle.SQUARE,
-          defaultCornerGlowColor = Color(0xFF00E5FF),
+          defaultCornerGlowColor = MaterialTheme.colorScheme.primary,
           onClick = {},
           onHoldStart = {},
           onHoldRelease = {},
-          modifier = Modifier.size(116.dp, 96.dp)
+          modifier = Modifier.size(104.dp).aspectRatio(1f)
         )
         PadCell(
           pad = samplePlay,
@@ -1237,14 +1480,14 @@ private fun PadCellStatesPreview() {
           isDropTarget = false,
           globalCrossfadeEnabled = false,
           defaultPadShape = PadShapeStyle.SQUARE,
-          defaultCornerGlowColor = Color(0xFFFFB300),
+          defaultCornerGlowColor = Color(amberPreset.toInt()),
           onClick = {},
           onHoldStart = {},
           onHoldRelease = {},
-          modifier = Modifier.size(116.dp, 96.dp)
+          modifier = Modifier.size(104.dp).aspectRatio(1f)
         )
       }
-      Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+      Row(horizontalArrangement = Arrangement.spacedBy(spacing.sm)) {
         PadCell(
           pad = sampleError,
           slotNumber = 3,
@@ -1255,14 +1498,14 @@ private fun PadCellStatesPreview() {
           isDropTarget = false,
           globalCrossfadeEnabled = false,
           defaultPadShape = PadShapeStyle.SQUARE,
-          defaultCornerGlowColor = Color(0xFF00E5FF),
+          defaultCornerGlowColor = MaterialTheme.colorScheme.primary,
           onClick = {},
           onHoldStart = {},
           onHoldRelease = {},
-          modifier = Modifier.size(116.dp, 96.dp)
+          modifier = Modifier.size(104.dp).aspectRatio(1f)
         )
         PadCell(
-          pad = sampleIdle,
+          pad = null,
           slotNumber = 4,
           playbackState = null,
           density = PadDensity.STANDARD,
@@ -1271,13 +1514,11 @@ private fun PadCellStatesPreview() {
           isDropTarget = false,
           globalCrossfadeEnabled = false,
           defaultPadShape = PadShapeStyle.SQUARE,
-          defaultCornerGlowColor = Color(0xFF00E5FF),
-          isLoading = true,
-          isEnabled = false,
+          defaultCornerGlowColor = MaterialTheme.colorScheme.primary,
           onClick = {},
           onHoldStart = {},
           onHoldRelease = {},
-          modifier = Modifier.size(116.dp, 96.dp)
+          modifier = Modifier.size(104.dp).aspectRatio(1f)
         )
       }
     }

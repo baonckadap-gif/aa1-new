@@ -50,6 +50,31 @@ val LightCoralError = Color(0xFFC81E3E)
 val LightFavoriteGold = Color(0xFFB45309)
 val LightCueTeal = Color(0xFF0F766E)
 
+// Pad Surface & Track Tokens (used by Theme.kt to prevent hardcoded colors in Composables)
+val PadEmptyWellDark = Color(0x73141822)
+val PadEmptyWellAmoled = Color(0x7305070B)
+val PadEmptyWellLight = Color(0x99FFFFFF)
+val PadProgressTrackDark = Color(0x59000000)
+val PadProgressTrackLight = Color(0x2E0F1522)
+val PadSheenWhite = Color(0xFFFFFFFF)
+val PadSheenBlack = Color(0xFF000000)
+val PadPlayheadDark = Color(0xFFFFFFFF)
+val PadPlayheadLight = Color(0xFF0F1522)
+val PadDisabledContainerDark = Color(0xFF141822)
+val PadDisabledContainerLight = Color(0xFFE4E9F2)
+val PadDisabledContentLight = Color(0xFF6B768C)
+val PadStatusChipDark = Color(0x33FFFFFF)
+val PadStatusChipLight = Color(0x1F0F1522)
+
+// Play Mode Segmented Bar Tokens
+val PlayModeActiveGreenDark = RamEmerald
+val PlayModeActiveGreenLight = Color(0xFF059669)
+val OnPlayModeActiveGreenDark = ObsidianChassis
+val OnPlayModeActiveGreenLight = Color(0xFFFFFFFF)
+
+// Bottom Console Bar Tokens
+val OnPanicRed = Color(0xFFFFFFFF)
+
 data class PadColorPreset(
   val name: String,
   val argb: Long

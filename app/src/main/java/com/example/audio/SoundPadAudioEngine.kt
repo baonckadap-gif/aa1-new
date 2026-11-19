@@ -1,6 +1,7 @@
 package com.example.audio
 
 import android.content.Context
+import android.media.AudioDeviceInfo
 import android.net.Uri
 import android.os.PowerManager
 import android.os.SystemClock
@@ -11,7 +12,9 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.PlaybackParameters
 import androidx.media3.common.Player
+import androidx.media3.common.audio.AudioProcessor
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.audio.AudioSink
@@ -72,7 +75,8 @@ class SoundPadAudioEngine(
 
   companion object {
     const val MAX_PLAYER_POOL = 16
-    private const val ENVELOPE_TICK_MS = 16L // ~60fps smooth fade envelopes
+    private const val ENVELOPE_TICK_MS = 16L // ~60fps smooth fade envelopes when fades are active
+    private const val UI_PROGRESS_PUBLISH_MS = 33L // ~30fps UI progress updates ONLY for currently playing pads
   }
 
   var onPlaybackError: ((pad: SoundPad, errorType: PadErrorType, message: String, stackTrace: String) -> Unit)? = null
@@ -124,10 +128,21 @@ class SoundPadAudioEngine(
 
   private var preferredOutputDeviceId: Int? = null
   private var cueOutputDeviceId: Int? = null
+  private var cachedMainOutputDevice: AudioDeviceInfo? = null
+  private var cachedCueOutputDevice: AudioDeviceInfo? = null
+  private var lastUiPublishElapsedMs: Long = 0L
   private var isVoiceDuckingActive: Boolean = false
   private val _cuePreviewPadId = MutableStateFlow<String?>(null)
   val cuePreviewPadId: StateFlow<String?> = _cuePreviewPadId.asStateFlow()
   private var cuePlayer: ExoPlayer? = null
+
+  @OptIn(UnstableApi::class)
+  private val lowLatencyLoadControl: DefaultLoadControl by lazy {
+    DefaultLoadControl.Builder()
+      .setBufferDurationsMs(1000, 4000, 50, 150)
+      .setPrioritizeTimeOverSizeThresholds(true)
+      .build()
+  }
 
   private val wakeLock: PowerManager.WakeLock by lazy {
     val pm = context.getSystemService(Context.POWER_SERVICE) as PowerManager
@@ -197,11 +212,12 @@ class SoundPadAudioEngine(
       masterEqBandsDb = bandsDb
     )
     scope.launch {
+      val fxActive = currentSettings.audioEffectsEnabled
       activeSlots.values.forEach { slot ->
         slot.eqProcessor.setCombinedEq(
-          masterEnabled = enabled,
+          masterEnabled = fxActive && enabled,
           masterBandsDb = bandsDb,
-          padEnabled = slot.pad.settings.eqEnabled,
+          padEnabled = fxActive && slot.pad.settings.eqEnabled,
           padBandsDb = slot.pad.settings.eqBandsDb
         )
       }
@@ -220,6 +236,7 @@ class SoundPadAudioEngine(
     preferredOutputDeviceId = deviceId
     scope.launch {
       val info = AudioOutputRouter.findOutputDeviceById(context, deviceId)
+      cachedMainOutputDevice = info
       activeSlots.values.forEach { slot ->
         runCatching { slot.player.setPreferredAudioDevice(info) }
       }
@@ -231,6 +248,7 @@ class SoundPadAudioEngine(
     cueOutputDeviceId = deviceId
     scope.launch {
       val info = AudioOutputRouter.findOutputDeviceById(context, deviceId)
+      cachedCueOutputDevice = info
       runCatching { cuePlayer?.setPreferredAudioDevice(info) }
       runCatching { previewPlayer?.setPreferredAudioDevice(info) }
     }
@@ -457,10 +475,14 @@ class SoundPadAudioEngine(
           eqProcessor = eqProcessor,
           fxProcessor = fxProcessor,
           panProcessor = panProcessor,
+          includeAudioEffects = currentSettings.audioEffectsEnabled,
           handleAudioFocus = false
         )
 
-        AudioOutputRouter.findOutputDeviceById(context, cueOutputDeviceId)?.let { info ->
+        val cueDevice = cachedCueOutputDevice ?: if (cueOutputDeviceId != null) {
+          AudioOutputRouter.findOutputDeviceById(context, cueOutputDeviceId).also { cachedCueOutputDevice = it }
+        } else null
+        cueDevice?.let { info ->
           runCatching { player.setPreferredAudioDevice(info) }
         }
 
@@ -522,9 +544,14 @@ class SoundPadAudioEngine(
         val mediaSourceFactory = DefaultMediaSourceFactory(ramCache.createDataSourceFactory())
         val player = ExoPlayer.Builder(context)
           .setMediaSourceFactory(mediaSourceFactory)
+          .setLoadControl(lowLatencyLoadControl)
           .build()
 
-        AudioOutputRouter.findOutputDeviceById(context, cueOutputDeviceId ?: preferredOutputDeviceId)?.let { info ->
+        val previewDevice = cachedCueOutputDevice ?: cachedMainOutputDevice ?: run {
+          val targetId = cueOutputDeviceId ?: preferredOutputDeviceId
+          if (targetId != null) AudioOutputRouter.findOutputDeviceById(context, targetId) else null
+        }
+        previewDevice?.let { info ->
           runCatching { player.setPreferredAudioDevice(info) }
         }
 
@@ -658,23 +685,28 @@ class SoundPadAudioEngine(
     pad: SoundPad,
     settings: GlobalSettings
   ) {
+    val fxActive = settings.audioEffectsEnabled
     eqProcessor.setCombinedEq(
-      masterEnabled = settings.masterEqEnabled,
+      masterEnabled = fxActive && settings.masterEqEnabled,
       masterBandsDb = settings.masterEqBandsDb,
-      padEnabled = pad.settings.eqEnabled,
+      padEnabled = fxActive && pad.settings.eqEnabled,
       padBandsDb = pad.settings.eqBandsDb
     )
     fxProcessor.setParams(
-      ReverbEchoParams(
-        echoEnabled = pad.settings.echoEnabled,
-        echoDelayMs = pad.settings.echoDelayMs,
-        echoFeedback = pad.settings.echoFeedback,
-        echoMix = pad.settings.echoMix,
-        reverbEnabled = pad.settings.reverbEnabled,
-        reverbRoomSize = pad.settings.reverbRoomSize,
-        reverbDamping = pad.settings.reverbDamping,
-        reverbMix = pad.settings.reverbMix
-      )
+      if (fxActive) {
+        ReverbEchoParams(
+          echoEnabled = pad.settings.echoEnabled,
+          echoDelayMs = pad.settings.echoDelayMs,
+          echoFeedback = pad.settings.echoFeedback,
+          echoMix = pad.settings.echoMix,
+          reverbEnabled = pad.settings.reverbEnabled,
+          reverbRoomSize = pad.settings.reverbRoomSize,
+          reverbDamping = pad.settings.reverbDamping,
+          reverbMix = pad.settings.reverbMix
+        )
+      } else {
+        ReverbEchoParams()
+      }
     )
     panProcessor.setPan(StereoPanMath.combinePan(settings.masterPan, pad.settings.pan))
   }
@@ -705,6 +737,7 @@ class SoundPadAudioEngine(
     fxProcessor: ReverbEchoAudioProcessor,
     panProcessor: StereoPanAudioProcessor,
     tapProcessor: MasterTapAudioProcessor? = null,
+    includeAudioEffects: Boolean = true,
     handleAudioFocus: Boolean = false
   ): ExoPlayer {
     val mediaSourceFactory = DefaultMediaSourceFactory(ramCache.createDataSourceFactory())
@@ -712,11 +745,17 @@ class SoundPadAudioEngine(
       .setUsage(C.USAGE_MEDIA)
       .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
       .build()
-    val processors = if (tapProcessor != null) {
-      arrayOf(eqProcessor, fxProcessor, panProcessor, tapProcessor)
-    } else {
-      arrayOf(eqProcessor, fxProcessor, panProcessor)
+    val processorList = buildList<AudioProcessor> {
+      if (includeAudioEffects) {
+        add(eqProcessor)
+        add(fxProcessor)
+      }
+      add(panProcessor)
+      if (tapProcessor != null) {
+        add(tapProcessor)
+      }
     }
+    val processors = processorList.toTypedArray()
     val renderersFactory = object : DefaultRenderersFactory(context) {
       override fun buildAudioSink(
         context: Context,
@@ -732,6 +771,7 @@ class SoundPadAudioEngine(
     }
     return ExoPlayer.Builder(context, renderersFactory)
       .setMediaSourceFactory(mediaSourceFactory)
+      .setLoadControl(lowLatencyLoadControl)
       .setAudioAttributes(audioAttributes, handleAudioFocus)
       .build()
   }
@@ -821,10 +861,14 @@ class SoundPadAudioEngine(
         fxProcessor = fxProcessor,
         panProcessor = panProcessor,
         tapProcessor = tapProcessor,
+        includeAudioEffects = currentSettings.audioEffectsEnabled,
         handleAudioFocus = false
       )
 
-      AudioOutputRouter.findOutputDeviceById(context, preferredOutputDeviceId)?.let { info ->
+      val mainDevice = cachedMainOutputDevice ?: if (preferredOutputDeviceId != null) {
+        AudioOutputRouter.findOutputDeviceById(context, preferredOutputDeviceId).also { cachedMainOutputDevice = it }
+      } else null
+      mainDevice?.let { info ->
         runCatching { player.setPreferredAudioDevice(info) }
       }
 
@@ -1029,12 +1073,24 @@ class SoundPadAudioEngine(
     runCatching { slot.player.release() }
   }
 
+  private fun hasActiveEnvelopeFade(): Boolean {
+    val now = SystemClock.elapsedRealtime()
+    for (slot in activeSlots.values) {
+      if (slot.isFadingOut) return true
+      if (slot.fadeInDurationMs > 0L && (now - slot.fadeInStartElapsedMs) < slot.fadeInDurationMs) return true
+      if (effectiveFadeOutMs(slot.pad) > 0L) return true
+      if (currentSettings.playMode == PlayMode.CONTINUOUS && currentSettings.globalCrossfadeEnabled) return true
+    }
+    return false
+  }
+
   private fun ensureTicker() {
     if (tickerJob?.isActive == true) return
     tickerJob = scope.launch {
       while (isActive && activeSlots.isNotEmpty()) {
         processEnvelopesAndPublish()
-        delay(ENVELOPE_TICK_MS)
+        val tickInterval = if (hasActiveEnvelopeFade()) ENVELOPE_TICK_MS else UI_PROGRESS_PUBLISH_MS
+        delay(tickInterval)
       }
       publishPlaybackStates()
     }
@@ -1124,7 +1180,9 @@ class SoundPadAudioEngine(
       return
     }
 
-    publishPlaybackStates()
+    if ((now - lastUiPublishElapsedMs) >= UI_PROGRESS_PUBLISH_MS) {
+      publishPlaybackStates()
+    }
   }
 
   private fun syncStateAndService() {
@@ -1143,8 +1201,11 @@ class SoundPadAudioEngine(
   }
 
   private fun publishPlaybackStates() {
+    lastUiPublishElapsedMs = SystemClock.elapsedRealtime()
     if (activeSlots.isEmpty()) {
-      _playbackStates.value = emptyMap()
+      if (_playbackStates.value.isNotEmpty()) {
+        _playbackStates.value = emptyMap()
+      }
       return
     }
     val nextMap = HashMap<String, PadPlaybackState>(activeSlots.size)

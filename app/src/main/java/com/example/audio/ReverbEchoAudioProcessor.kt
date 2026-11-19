@@ -36,6 +36,10 @@ class ReverbEchoAudioProcessor : BaseAudioProcessor() {
 
   private var sampleRate = 44100
   private var channels = 2
+  private var buffersAllocated = false
+  private var allocatedSampleRate = 0
+
+  internal fun hasAllocatedBuffers(): Boolean = buffersAllocated
 
   // Echo stereo delay lines
   private var echoBufL = FloatArray(1)
@@ -75,7 +79,12 @@ class ReverbEchoAudioProcessor : BaseAudioProcessor() {
     }
     sampleRate = inputAudioFormat.sampleRate.coerceAtLeast(8000)
     channels = inputAudioFormat.channelCount
-    allocateBuffers(sampleRate)
+    if (sampleRate != allocatedSampleRate) {
+      buffersAllocated = false
+    }
+    if (!params.isBypassed && !buffersAllocated) {
+      allocateBuffers(sampleRate)
+    }
     return inputAudioFormat
   }
 
@@ -105,6 +114,8 @@ class ReverbEchoAudioProcessor : BaseAudioProcessor() {
       allpassIdxL[i] = 0
       allpassIdxR[i] = 0
     }
+    allocatedSampleRate = sr
+    buffersAllocated = true
   }
 
   override fun onFlush() {
@@ -116,6 +127,7 @@ class ReverbEchoAudioProcessor : BaseAudioProcessor() {
   }
 
   private fun clearBuffers() {
+    if (!buffersAllocated) return
     echoBufL.fill(0f)
     echoBufR.fill(0f)
     echoIdx = 0
@@ -145,6 +157,9 @@ class ReverbEchoAudioProcessor : BaseAudioProcessor() {
       outBuffer.put(inputBuffer)
       outBuffer.flip()
       return
+    }
+    if (!buffersAllocated || allocatedSampleRate != sampleRate) {
+      allocateBuffers(sampleRate)
     }
 
     val encoding = inputAudioFormat.encoding

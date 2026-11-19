@@ -95,6 +95,8 @@ fun GridSettingsSheet(
   onLoadDemoTracks: () -> Unit,
   onExportDemoToMusicFolder: () -> Unit,
   onPreloadToggle: (Boolean) -> Unit,
+  onAudioEffectsToggle: (Boolean) -> Unit = {},
+  onVisualEffectsToggle: (Boolean) -> Unit = {},
   onKeepScreenOnToggle: (Boolean) -> Unit,
   onGlobalCrossfadeToggle: (Boolean) -> Unit,
   onCrossfadeDurationChange: (Long) -> Unit,
@@ -440,6 +442,30 @@ fun GridSettingsSheet(
           ) {
             Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
               Text(
+                text = stringResource(R.string.settings_visual_effects_title),
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.onSurface
+              )
+              Text(
+                text = stringResource(R.string.settings_visual_effects_subtitle),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+              )
+            }
+            Switch(
+              checked = settings.visualEffectsEnabled,
+              onCheckedChange = onVisualEffectsToggle,
+              modifier = Modifier.testTag("settings_visual_effects_switch")
+            )
+          }
+
+          Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+          ) {
+            Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
+              Text(
                 text = "Show Bottom Console Bar",
                 style = MaterialTheme.typography.titleSmall,
                 color = MaterialTheme.colorScheme.onSurface
@@ -460,6 +486,40 @@ fun GridSettingsSheet(
 
         1 -> {
           // ---- TAB 1: AUDIO ----
+          Surface(
+            shape = RoundedCornerShape(12.dp),
+            color = MaterialTheme.colorScheme.surfaceContainer,
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+          ) {
+            Row(
+              modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+              horizontalArrangement = Arrangement.SpaceBetween,
+              verticalAlignment = Alignment.CenterVertically
+            ) {
+              Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
+                Text(
+                  text = stringResource(R.string.settings_audio_effects_title),
+                  style = MaterialTheme.typography.titleSmall,
+                  color = MaterialTheme.colorScheme.onSurface
+                )
+                Text(
+                  text = stringResource(R.string.settings_audio_effects_subtitle),
+                  style = MaterialTheme.typography.bodySmall,
+                  color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+              }
+              Switch(
+                checked = settings.audioEffectsEnabled,
+                onCheckedChange = onAudioEffectsToggle,
+                modifier = Modifier.testTag("settings_audio_effects_switch")
+              )
+            }
+          }
+
+          HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+
           Text(
             text = "GLOBAL CROSSFADE",
             style = MaterialTheme.typography.labelMedium,

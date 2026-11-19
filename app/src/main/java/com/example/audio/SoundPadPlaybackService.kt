@@ -52,23 +52,39 @@ class SoundPadPlaybackService : Service() {
     @Volatile
     private var lastRecordingActive = false
 
+    @Volatile
+    private var isForegroundPlaybackActive = false
+
     fun updateForegroundState(context: Context, activeCount: Int, activeLabel: String?) {
-      lastActiveCount = activeCount
-      lastActiveLabel = activeLabel ?: ""
+      val normalizedLabel = activeLabel ?: ""
       if (activeCount <= 0 && !lastRecordingActive) {
-        val stopIntent = Intent(context, SoundPadPlaybackService::class.java).apply {
-          action = ACTION_STOP_SERVICE
+        val wasActive = isForegroundPlaybackActive || lastActiveCount > 0
+        lastActiveCount = 0
+        lastActiveLabel = ""
+        isForegroundPlaybackActive = false
+        if (wasActive) {
+          val stopIntent = Intent(context, SoundPadPlaybackService::class.java).apply {
+            action = ACTION_STOP_SERVICE
+          }
+          runCatching { context.startService(stopIntent) }
         }
-        runCatching { context.startService(stopIntent) }
         return
       }
       if (activeCount <= 0 && lastRecordingActive) {
+        lastActiveCount = 0
+        lastActiveLabel = ""
         return
       }
+      if (isForegroundPlaybackActive && lastActiveCount == activeCount && lastActiveLabel == normalizedLabel) {
+        return
+      }
+      lastActiveCount = activeCount
+      lastActiveLabel = normalizedLabel
+      isForegroundPlaybackActive = true
       val intent = Intent(context, SoundPadPlaybackService::class.java).apply {
         action = ACTION_START_OR_UPDATE
         putExtra(EXTRA_ACTIVE_COUNT, activeCount)
-        putExtra(EXTRA_ACTIVE_LABEL, activeLabel ?: "")
+        putExtra(EXTRA_ACTIVE_LABEL, normalizedLabel)
       }
       runCatching {
         context.startForegroundService(intent)
@@ -115,6 +131,7 @@ class SoundPadPlaybackService : Service() {
       ACTION_STOP_ALL -> {
         onStopAllRequested?.invoke()
         if (!lastRecordingActive) {
+          isForegroundPlaybackActive = false
           stopForeground(STOP_FOREGROUND_REMOVE)
           stopSelf()
         }
@@ -124,12 +141,14 @@ class SoundPadPlaybackService : Service() {
         lastRecordingActive = false
         getSystemService(NotificationManager::class.java)?.cancel(RECORD_NOTIFICATION_ID)
         if (lastActiveCount <= 0) {
+          isForegroundPlaybackActive = false
           stopForeground(STOP_FOREGROUND_REMOVE)
           stopSelf()
         }
       }
       ACTION_STOP_SERVICE -> {
         if (!lastRecordingActive) {
+          isForegroundPlaybackActive = false
           stopForeground(STOP_FOREGROUND_REMOVE)
           stopSelf()
         }

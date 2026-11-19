@@ -48,8 +48,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.example.R
 import com.example.domain.model.AudioOutputDeviceUi
 import com.example.domain.model.EqPreset
 import com.example.domain.model.GlobalSettings
@@ -67,6 +69,7 @@ fun AudioOutputSheet(
   onRefreshDevices: () -> Unit,
   onSelectMainDevice: (Int?) -> Unit,
   onSelectCueDevice: (Int?) -> Unit,
+  onAudioEffectsToggle: (Boolean) -> Unit = {},
   onMasterLimiterToggle: (Boolean) -> Unit,
   onDuckingToggle: (Boolean) -> Unit,
   onDuckingAttenuationChange: (Float) -> Unit,
@@ -140,6 +143,35 @@ fun AudioOutputSheet(
               .padding(12.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)
           ) {
+            Row(
+              modifier = Modifier.fillMaxWidth(),
+              horizontalArrangement = Arrangement.SpaceBetween,
+              verticalAlignment = Alignment.CenterVertically
+            ) {
+              Row(
+                modifier = Modifier.weight(1f).padding(end = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+              ) {
+                Icon(Icons.Filled.AutoFixHigh, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                Column {
+                  Text(stringResource(R.string.settings_audio_effects_title), style = MaterialTheme.typography.titleSmall)
+                  Text(
+                    stringResource(R.string.settings_audio_effects_subtitle),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                  )
+                }
+              }
+              Switch(
+                checked = settings.audioEffectsEnabled,
+                onCheckedChange = onAudioEffectsToggle,
+                modifier = Modifier.testTag("mixer_audio_effects_switch")
+              )
+            }
+
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+
             Row(
               modifier = Modifier.fillMaxWidth(),
               horizontalArrangement = Arrangement.SpaceBetween,

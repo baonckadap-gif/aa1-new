@@ -1,5 +1,7 @@
 package com.example.domain.model
 
+import androidx.compose.runtime.Immutable
+
 enum class PlayMode(val label: String, val shortLabel: String) {
   SINGLE("Single Play", "SINGLE"),
   MULTI("Multi Play", "MULTI"),
@@ -72,6 +74,7 @@ enum class GridPreset(val rows: Int, val cols: Int, val label: String) {
   CUSTOM(6, 6, "Custom")
 }
 
+@Immutable
 data class GridConfig(
   val preset: GridPreset = GridPreset.GRID_4X4,
   val rows: Int = 4,
@@ -161,6 +164,7 @@ enum class FxPreset(
   CUSTOM("Custom", false, 220f, 0.30f, 0.25f, false, 0.35f, 0.45f, 0.25f)
 }
 
+@Immutable
 data class PadSettings(
   val volume: Float = 1.0f,
   val speed: Float = 1.0f,
@@ -192,6 +196,7 @@ data class PadSettings(
   val reverbMix: Float = 0.25f
 )
 
+@Immutable
 data class SoundPad(
   val id: String,
   val uriString: String,
@@ -226,6 +231,7 @@ data class SoundPad(
   val settings: PadSettings = PadSettings()
 )
 
+@Immutable
 data class PadVisualConfig(
   val displayName: String,
   val colorArgb: Long? = null,
@@ -258,6 +264,7 @@ fun SoundPad.toVisualConfig(): PadVisualConfig = PadVisualConfig(
   showDurationLabel = showDurationLabel
 )
 
+@Immutable
 data class PadProfile(
   val id: String,
   val name: String,
@@ -282,6 +289,7 @@ data class PadProfile(
   val previewColorArgbs: List<Long?> = emptyList()
 )
 
+@Immutable
 data class PadPlaybackState(
   val padId: String,
   val isPlaying: Boolean,
@@ -307,6 +315,7 @@ data class WaveformData(
   val durationMs: Long
 )
 
+@Immutable
 data class GlobalSettings(
   val activeProfileId: String = "default_profile",
   val folderUri: String? = null,
@@ -320,6 +329,8 @@ data class GlobalSettings(
   val masterEqBandsDb: List<Float> = listOf(0f, 0f, 0f, 0f, 0f),
   val miniWaveformEnabled: Boolean = true,
   val preloadShortAudio: Boolean = true,
+  val audioEffectsEnabled: Boolean = true,
+  val visualEffectsEnabled: Boolean = true,
   val keepScreenOn: Boolean = true,
   val themeMode: ThemeMode = ThemeMode.DARK,
   val useDynamicColor: Boolean = false,

@@ -268,4 +268,75 @@ class SoundPadUnitTest {
     assertEquals(100.toShort(), out.short)
     assertEquals(200.toShort(), out.short)
   }
+
+  @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
+  @Test
+  fun `reverb echo processor skips buffer allocation while bypassed and allocates lazily when enabled`() {
+    val processor = com.example.audio.ReverbEchoAudioProcessor()
+    val format = androidx.media3.common.audio.AudioProcessor.AudioFormat(
+      44100,
+      2,
+      androidx.media3.common.C.ENCODING_PCM_16BIT
+    )
+    processor.configure(format)
+    processor.flush()
+
+    val silence = java.nio.ByteBuffer.allocate(64).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+    repeat(32) { silence.putShort(0) }
+    silence.flip()
+    processor.queueInput(silence)
+    assertTrue(!processor.hasAllocatedBuffers())
+
+    processor.setParams(com.example.audio.ReverbEchoParams(reverbEnabled = true, reverbMix = 0.4f))
+    val activeBuf = java.nio.ByteBuffer.allocate(64).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+    repeat(32) { activeBuf.putShort(1000) }
+    activeBuf.flip()
+    processor.queueInput(activeBuf)
+    assertTrue(processor.hasAllocatedBuffers())
+  }
+
+  @Test
+  fun `global effects settings default to enabled and toggle cleanly`() {
+    val defaults = com.example.domain.model.GlobalSettings()
+    assertTrue(defaults.audioEffectsEnabled)
+    assertTrue(defaults.visualEffectsEnabled)
+
+    val disabled = defaults.copy(
+      audioEffectsEnabled = false,
+      visualEffectsEnabled = false
+    )
+    assertTrue(!disabled.audioEffectsEnabled)
+    assertTrue(!disabled.visualEffectsEnabled)
+  }
+
+  @Test
+  fun `explicit bank order keeps newly added empty bank pages visible`() {
+    val profile = com.example.domain.model.PadProfile(
+      id = "default_profile",
+      name = "Default Session",
+      folderUri = null,
+      gridConfig = GridConfig(GridPreset.GRID_4X4, 4, 4),
+      padCount = 2,
+      createdAtMs = 1L,
+      updatedAtMs = 1L,
+      isActive = true,
+      bankNames = mapOf(0 to "Intro", 1 to "B2"),
+      bankOrder = listOf(0, 1)
+    )
+    val pads = listOf(
+      SoundPad("1", "u1", "a.wav", "A", "WAV", 1000L, 100L, 0, bankIndex = 0),
+      SoundPad("2", "u2", "b.wav", "B", "WAV", 1000L, 100L, 1, bankIndex = 0)
+    )
+    val state = SoundPadUiState(
+      settings = com.example.domain.model.GlobalSettings(activeProfileId = "default_profile"),
+      profiles = listOf(profile),
+      pads = pads
+    )
+    assertTrue(state.isBankExplicitMode)
+    assertEquals(2, state.bankPages.size)
+    assertEquals("Intro", state.bankPages[0].title)
+    assertEquals(2, state.bankPages[0].pads.size)
+    assertEquals("B2", state.bankPages[1].title)
+    assertEquals(0, state.bankPages[1].pads.size)
+  }
 }

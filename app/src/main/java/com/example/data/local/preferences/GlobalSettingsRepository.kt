@@ -45,6 +45,8 @@ class GlobalSettingsRepository(private val context: Context) {
     val MASTER_EQ_BANDS_JSON = stringPreferencesKey("master_eq_bands_json")
     val MINI_WAVEFORM_ENABLED = booleanPreferencesKey("mini_waveform_enabled")
     val PRELOAD_SHORT_AUDIO = booleanPreferencesKey("preload_short_audio")
+    val AUDIO_EFFECTS_ENABLED = booleanPreferencesKey("audio_effects_enabled")
+    val VISUAL_EFFECTS_ENABLED = booleanPreferencesKey("visual_effects_enabled")
     val KEEP_SCREEN_ON = booleanPreferencesKey("keep_screen_on")
     val THEME_MODE = stringPreferencesKey("theme_mode")
     val USE_DYNAMIC_COLOR = booleanPreferencesKey("use_dynamic_color")
@@ -128,6 +130,8 @@ class GlobalSettingsRepository(private val context: Context) {
       masterEqBandsDb = masterEqBands,
       miniWaveformEnabled = prefs[Keys.MINI_WAVEFORM_ENABLED] ?: true,
       preloadShortAudio = prefs[Keys.PRELOAD_SHORT_AUDIO] ?: true,
+      audioEffectsEnabled = prefs[Keys.AUDIO_EFFECTS_ENABLED] ?: true,
+      visualEffectsEnabled = prefs[Keys.VISUAL_EFFECTS_ENABLED] ?: true,
       keepScreenOn = prefs[Keys.KEEP_SCREEN_ON] ?: true,
       themeMode = themeMode,
       useDynamicColor = prefs[Keys.USE_DYNAMIC_COLOR] ?: false,
@@ -205,6 +209,14 @@ class GlobalSettingsRepository(private val context: Context) {
 
   suspend fun setPreloadShortAudio(enabled: Boolean) {
     context.soundPadDataStore.edit { prefs -> prefs[Keys.PRELOAD_SHORT_AUDIO] = enabled }
+  }
+
+  suspend fun setAudioEffectsEnabled(enabled: Boolean) {
+    context.soundPadDataStore.edit { prefs -> prefs[Keys.AUDIO_EFFECTS_ENABLED] = enabled }
+  }
+
+  suspend fun setVisualEffectsEnabled(enabled: Boolean) {
+    context.soundPadDataStore.edit { prefs -> prefs[Keys.VISUAL_EFFECTS_ENABLED] = enabled }
   }
 
   suspend fun setKeepScreenOn(enabled: Boolean) {

@@ -135,4 +135,58 @@
     <string name="sequencer_title">Sequencer &amp; Playlist Pad</string>
     <string name="sequencer_new_playlist">Buat Playlist</string>
     <string name="sequencer_empty">Belum ada playlist. Buat playlist dan urutkan pad dengan drag &amp; drop.</string>
+
+    <!-- Global Effects Toggles -->
+    <string name="settings_audio_effects_title">Efek Audio Global (Reverb, Echo &amp; EQ)</string>
+    <string name="settings_audio_effects_subtitle">Aktifkan pemrosesan DSP efek audio; matikan untuk latensi sentuh minimum</string>
+    <string name="settings_visual_effects_title">Efek Visual Pad (Glow &amp; Animasi)</string>
+    <string name="settings_visual_effects_subtitle">Tampilkan cahaya tepi, gradasi, dan animasi tombol; matikan agar klik pad super ringan</string>
+
+    <!-- Pad Cell -->
+    <string name="cd_empty_pad_add">Tambah file atau folder audio ke pad kosong</string>
+    <string name="pad_loading_label">Memuat...</string>
+
+    <!-- Stage (b): Top Bar, Play Mode & Bank Bar -->
+    <string name="cd_overflow_menu">Menu opsi lainnya</string>
+    <string name="cd_add_bank">Tambah bank baru</string>
+    <string name="cd_clear_search">Bersihkan pencarian</string>
+    <string name="search_pads_placeholder">Cari pad berdasarkan nama, tag, atau format...</string>
+    <string name="play_mode_single_short">SINGLE</string>
+    <string name="play_mode_multi_short">MULTI</string>
+    <string name="play_mode_cont_short">CONT</string>
+    <string name="tooltip_folder">Pilih Folder</string>
+    <string name="tooltip_bank_profiles">Bank &amp; Profil</string>
+    <string name="tooltip_search">Cari Pad</string>
+    <string name="tooltip_rescan">Pindai Ulang</string>
+    <string name="tooltip_cue">Output &amp; Cue</string>
+    <string name="tooltip_menu">Menu Lainnya</string>
+    <string name="tooltip_add_bank">Tambah Bank Baru</string>
+    <string name="menu_rescan_folder">Pindai Ulang Folder</string>
+    <string name="menu_rescan_bank">Pindai Ulang Bank Ini</string>
+    <string name="menu_swap_banks">Tukar Urutan Bank</string>
+    <string name="menu_rename_bank">Ubah Nama Bank</string>
+    <string name="menu_playlist_sequencer">Playlist &amp; Sequencer</string>
+    <string name="menu_scheduler">Jadwal Pemutaran</string>
+    <string name="menu_crossfade">Crossfade Global</string>
+    <string name="menu_midi">Pengontrol MIDI</string>
+    <string name="menu_grid_settings">Pengaturan Grid &amp; Studio</string>
+    <string name="menu_stage_lock">Kunci Panggung</string>
+    <string name="menu_stage_unlock_hint">Kunci Aktif (Tahan Banner)</string>
+    <string name="menu_fullscreen">Layar Penuh</string>
+    <string name="menu_exit_fullscreen">Keluar Layar Penuh</string>
+    <string name="menu_error_logs">Log Error &amp; Diagnostik</string>
+    <string name="menu_miui_guide">Panduan HyperOS / MIUI</string>
+
+    <!-- Stage (c): Bottom Bar -->
+    <string name="cd_master_volume_slider">Penggeser volume master</string>
+    <string name="cd_collapse_bottom_bar">Ciutkan bilah bawah jadi 1 baris</string>
+    <string name="cd_expand_bottom_bar">Bentangkan bilah bawah</string>
+    <string name="bottom_action_stop">STOP</string>
+    <string name="bottom_action_fade_out">Fade Out</string>
+    <string name="bottom_action_cue">Cue</string>
+    <string name="bottom_action_rec_mic">Rec Mic</string>
+    <string name="bottom_action_rec_master">REC Master</string>
+    <string name="bottom_action_theme">Warna</string>
+    <string name="bottom_action_edit">Edit Mode</string>
+    <string name="bottom_action_done">Selesai</string>
 </resources>

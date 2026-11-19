@@ -611,7 +611,9 @@ class ExampleRobolectricTest {
       activeProfileId = "prof_8b",
       masterEqEnabled = true,
       masterEqPreset = EqPreset.CUSTOM,
-      masterEqBandsDb = masterBands
+      masterEqBandsDb = masterBands,
+      audioEffectsEnabled = false,
+      visualEffectsEnabled = false
     )
     val profile = PadProfile(
       id = "prof_8b",
@@ -681,6 +683,8 @@ class ExampleRobolectricTest {
     assertTrue(restoredBackup.globalSettings.masterEqEnabled)
     assertEquals(EqPreset.CUSTOM, restoredBackup.globalSettings.masterEqPreset)
     assertEquals(masterBands, restoredBackup.globalSettings.masterEqBandsDb)
+    assertTrue(!restoredBackup.globalSettings.audioEffectsEnabled)
+    assertTrue(!restoredBackup.globalSettings.visualEffectsEnabled)
     assertTrue(restoredBackup.profiles.first().pads.first().settings.isReversed)
     assertTrue(restoredBackup.profiles.first().pads.first().settings.echoEnabled)
   }

@@ -113,15 +113,15 @@ fun padTitleStyleForGrid(rows: Int, cols: Int, isPlaying: Boolean): TextStyle {
     maxDim <= 6 -> TextStyle(
       fontFamily = SpaceGroteskFamily,
       fontWeight = weight,
-      fontSize = 11.sp,
-      lineHeight = 13.sp,
+      fontSize = 11.5.sp,
+      lineHeight = 14.sp,
       letterSpacing = 0.sp
     )
     maxDim <= 10 -> TextStyle(
       fontFamily = InterFamily,
       fontWeight = weight,
-      fontSize = 9.sp,
-      lineHeight = 11.sp,
+      fontSize = 9.5.sp,
+      lineHeight = 11.5.sp,
       letterSpacing = 0.1.sp
     )
     else -> TextStyle(
@@ -135,24 +135,38 @@ fun padTitleStyleForGrid(rows: Int, cols: Int, isPlaying: Boolean): TextStyle {
 }
 
 /**
+ * Minimum font size before AutoSizePadTitle falls back to ellipsis on 2 lines.
+ */
+fun padTitleMinFontSizeSp(rows: Int, cols: Int): Float {
+  val maxDim = maxOf(rows, cols)
+  return when {
+    maxDim <= 4 -> 9.5f
+    maxDim <= 6 -> 8.5f
+    maxDim <= 10 -> 7.5f
+    else -> 6.5f
+  }
+}
+
+/**
  * Scales slot numbers & time readouts to remain sharp on dense matrices.
+ * Uses at least 11.sp on standard 4x4 / 5x5 grids for legibility.
  */
 fun padMetaStyleForGrid(rows: Int, cols: Int): TextStyle {
   val maxDim = maxOf(rows, cols)
   return when {
     maxDim <= 5 -> TextStyle(
       fontFamily = JetBrainsMonoFamily,
-      fontWeight = FontWeight.Medium,
-      fontSize = 9.5.sp,
-      lineHeight = 12.sp,
-      letterSpacing = 0.3.sp
+      fontWeight = FontWeight.SemiBold,
+      fontSize = 11.sp,
+      lineHeight = 13.sp,
+      letterSpacing = 0.25.sp
     )
     maxDim <= 10 -> TextStyle(
       fontFamily = JetBrainsMonoFamily,
       fontWeight = FontWeight.Medium,
-      fontSize = 8.sp,
-      lineHeight = 10.sp,
-      letterSpacing = 0.2.sp
+      fontSize = 9.sp,
+      lineHeight = 11.sp,
+      letterSpacing = 0.15.sp
     )
     else -> TextStyle(
       fontFamily = JetBrainsMonoFamily,

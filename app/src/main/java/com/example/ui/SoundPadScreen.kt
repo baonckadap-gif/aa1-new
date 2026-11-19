@@ -1,17 +1,22 @@
 package com.example.ui
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -24,6 +29,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -87,6 +93,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedIconButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.PlainTooltip
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
@@ -95,8 +102,11 @@ import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.TooltipBox
+import androidx.compose.material3.TooltipDefaults
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.material3.rememberTooltipState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
@@ -208,6 +218,8 @@ fun SoundPadScreen(
   onToggleFullscreen: () -> Unit,
   onMasterVolumeChanged: (Float) -> Unit,
   onPreloadToggle: (Boolean) -> Unit,
+  onAudioEffectsToggle: (Boolean) -> Unit = {},
+  onVisualEffectsToggle: (Boolean) -> Unit = {},
   onKeepScreenOnToggle: (Boolean) -> Unit,
   onToggleEditMode: () -> Unit,
   onPadTapped: (SoundPad) -> Unit,
@@ -261,6 +273,7 @@ fun SoundPadScreen(
   onTogglePadFavorite: (String) -> Unit = {},
   onSetPadCategoryTag: (String, String) -> Unit = { _, _ -> },
   onRenameBank: (Int, String) -> Unit = { _, _ -> },
+  onAddBank: () -> Unit = {},
   onRefreshOutputDevices: () -> Unit = {},
   onSelectMainOutputDevice: (Int?) -> Unit = {},
   onSelectCueOutputDevice: (Int?) -> Unit = {},
@@ -391,15 +404,31 @@ fun SoundPadScreen(
     it.id == uiState.settings.activeProfileId
   }?.name ?: "Default Session"
 
-  val pageCount = uiState.bankPages.size.coerceAtLeast(1)
+  val memoizedFilteredPads = remember(
+    uiState.pads,
+    uiState.searchQuery,
+    uiState.showFavoritesOnly,
+    uiState.selectedCategoryTag
+  ) { uiState.filteredPads }
+
+  val memoizedBankPages = remember(
+    uiState.pads,
+    uiState.searchQuery,
+    uiState.showFavoritesOnly,
+    uiState.selectedCategoryTag,
+    uiState.settings.gridConfig,
+    uiState.activeProfile
+  ) { uiState.bankPages }
+
+  val pageCount = memoizedBankPages.size.coerceAtLeast(1)
   val sharedPagerState = rememberPagerState(pageCount = { pageCount })
   val rootCoroutineScope = rememberCoroutineScope()
 
-  LaunchedEffect(uiState.requestedBankPageIndex, uiState.bankPages.size) {
+  LaunchedEffect(uiState.requestedBankPageIndex, memoizedBankPages.size) {
     val targetIdx = uiState.requestedBankPageIndex
     if (targetIdx != null) {
-      if (uiState.bankPages.isNotEmpty()) {
-        val clamped = targetIdx.coerceIn(0, uiState.bankPages.lastIndex)
+      if (memoizedBankPages.isNotEmpty()) {
+        val clamped = targetIdx.coerceIn(0, memoizedBankPages.lastIndex)
         sharedPagerState.animateScrollToPage(clamped)
       }
       onConsumeBankSwitchRequest()
@@ -413,6 +442,8 @@ fun SoundPadScreen(
     snackbarHost = { SnackbarHost(hostState = snackbarHostState) },
     topBar = {
       val topMod = if (uiState.settings.isFullscreen) Modifier else Modifier.statusBarsPadding()
+      val currentBankPage = memoizedBankPages.getOrNull(sharedPagerState.currentPage)
+      val distinctBankCount = remember(memoizedBankPages) { memoizedBankPages.map { it.bankKey }.distinct().size }
       TopControlBar(
         activeProfileName = activeProfileName,
         folderName = uiState.settings.folderName,
@@ -425,14 +456,33 @@ fun SoundPadScreen(
         searchQuery = uiState.searchQuery,
         isFullscreen = uiState.settings.isFullscreen,
         isCrossfadeEnabled = uiState.settings.globalCrossfadeEnabled,
+        isGlobalCueEnabled = uiState.settings.isGlobalCueEnabled,
         isLocked = uiState.settings.isLocked,
         midiConnectedCount = uiState.midiDevices.size,
         isMidiLearnMode = uiState.isMidiLearnMode,
         errorLogCount = uiState.errorLogs.size,
         isSequencerPlaying = uiState.sequencerPlayback.isPlaying,
         activeSchedulesCount = uiState.scheduledTasks.count { it.enabled },
+        canRescanCurrentBank = currentBankPage?.canRescanSubfolder == true,
+        canReorderBanks = distinctBankCount > 1,
         onPickFolderClick = onPickFolderClick,
         onRescanClick = onRescanClick,
+        onRescanCurrentBank = {
+          val bankKey = currentBankPage?.bankKey
+          if (bankKey != null && currentBankPage.canRescanSubfolder) {
+            onRescanBank(bankKey)
+          } else {
+            onRescanClick()
+          }
+        },
+        onOpenReorderBanks = {
+          if (!uiState.settings.isLocked) showReorderBanksDialog = true
+        },
+        onOpenRenameCurrentBank = {
+          if (!uiState.settings.isLocked) {
+            renamingBankKey = currentBankPage?.bankKey ?: sharedPagerState.currentPage
+          }
+        },
         onToggleSearch = onToggleSearch,
         onSearchQueryChange = onSearchQueryChange,
         onPlayModeSelected = onPlayModeSelected,
@@ -492,7 +542,7 @@ fun SoundPadScreen(
       }
       val showBankSideRail = isLandscapeStage &&
         uiState.pads.isNotEmpty() &&
-        uiState.filteredPads.isNotEmpty()
+        memoizedFilteredPads.isNotEmpty()
       val showMixerSidePanel = (widthClass == AdaptiveWidthClass.EXPANDED || (isLandscapeStage && maxWidth >= 720.dp)) &&
         uiState.pads.isNotEmpty() &&
         !uiState.settings.isLocked
@@ -500,7 +550,7 @@ fun SoundPadScreen(
       Row(modifier = Modifier.fillMaxSize()) {
         if (showBankSideRail) {
           LandscapeBankRail(
-            bankPages = uiState.bankPages,
+            bankPages = memoizedBankPages,
             currentPageIndex = sharedPagerState.currentPage,
             playbackStates = uiState.playbackStates,
             playMode = uiState.settings.playMode,
@@ -1002,7 +1052,7 @@ fun SoundPadScreen(
             modifier = Modifier.weight(1f)
           )
         }
-        uiState.filteredPads.isEmpty() -> {
+        memoizedFilteredPads.isEmpty() -> {
           EmptySearchState(
             query = uiState.searchQuery.ifBlank {
               uiState.selectedCategoryTag ?: if (uiState.showFavoritesOnly) "Favorites" else ""
@@ -1098,7 +1148,7 @@ fun SoundPadScreen(
             }
           }
           BankedPadMatrix(
-            bankPages = uiState.bankPages,
+            bankPages = memoizedBankPages,
             pagerState = sharedPagerState,
             showInlineBankStrip = !showBankSideRail,
             gridConfig = uiState.settings.gridConfig,
@@ -1113,8 +1163,10 @@ fun SoundPadScreen(
             armedLearnPadId = uiState.armedLearnPadId,
             cuePreviewPadId = uiState.cuePreviewPadId,
             preparingReversePadId = uiState.isPreparingReversePadId,
+            isLocked = uiState.settings.isLocked,
             padGridSpacingDp = uiState.settings.padGridSpacingDp,
-            reduceMotion = isBatterySaver,
+            reduceMotion = isBatterySaver || !uiState.settings.visualEffectsEnabled,
+            visualEffectsEnabled = uiState.settings.visualEffectsEnabled,
             globalCrossfadeEnabled = uiState.settings.globalCrossfadeEnabled,
             miniWaveformEnabled = uiState.settings.miniWaveformEnabled,
             defaultPadShape = uiState.settings.defaultPadShape,
@@ -1122,11 +1174,8 @@ fun SoundPadScreen(
             onRenameBankRequest = { bankKey ->
               if (!uiState.settings.isLocked) renamingBankKey = bankKey
             },
-            onRescanBankRequest = { bankKey ->
-              if (!uiState.settings.isLocked) onRescanBank(bankKey)
-            },
-            onReorderBanksRequest = {
-              if (!uiState.settings.isLocked) showReorderBanksDialog = true
+            onAddBankRequest = {
+              if (!uiState.settings.isLocked) onAddBank()
             },
             onPadTapped = onPadTapped,
             onPadCustomizeClick = { pad ->
@@ -1144,6 +1193,7 @@ fun SoundPadScreen(
             onSwipeVolumeChange = onSwipeVolumeChange,
             onTogglePadSelection = onTogglePadSelection,
             onSwapPads = onSwapPads,
+            onEmptyPadClick = { if (!uiState.settings.isLocked) onPickFolderClick() },
             modifier = Modifier.weight(1f)
           )
         }
@@ -1285,6 +1335,8 @@ fun SoundPadScreen(
       onLoadDemoTracks = onLoadDemoTracks,
       onExportDemoToMusicFolder = onExportDemoToMusicFolder,
       onPreloadToggle = onPreloadToggle,
+      onAudioEffectsToggle = onAudioEffectsToggle,
+      onVisualEffectsToggle = onVisualEffectsToggle,
       onKeepScreenOnToggle = onKeepScreenOnToggle,
       onGlobalCrossfadeToggle = { onToggleCrossfade() },
       onCrossfadeDurationChange = onCrossfadeDurationChange,
@@ -1331,7 +1383,7 @@ fun SoundPadScreen(
       onStartBleScan = onStartBleMidiScan,
       onStopBleScan = onStopBleMidiScan,
       onConnectBleDevice = onConnectBleMidiDevice,
-      bankPages = uiState.bankPages,
+      bankPages = memoizedBankPages,
       pcMappings = uiState.midiPcMappings,
       onArmBankPcLearn = onArmMidiLearnForBankPc,
       onClearBankPcMapping = onClearMidiPcMappingForBank,
@@ -1348,6 +1400,7 @@ fun SoundPadScreen(
       onRefreshDevices = onRefreshOutputDevices,
       onSelectMainDevice = onSelectMainOutputDevice,
       onSelectCueDevice = onSelectCueOutputDevice,
+      onAudioEffectsToggle = onAudioEffectsToggle,
       onMasterLimiterToggle = onMasterLimiterToggle,
       onDuckingToggle = onDuckingToggle,
       onDuckingAttenuationChange = onDuckingAttenuationChange,
@@ -1590,6 +1643,7 @@ fun SoundPadScreen(
   }
 }
 
+@OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
 @Composable
 private fun BankedPadMatrix(
   bankPages: List<BankPageUi>,
@@ -1607,15 +1661,16 @@ private fun BankedPadMatrix(
   armedLearnPadId: String?,
   cuePreviewPadId: String?,
   preparingReversePadId: String?,
+  isLocked: Boolean,
   padGridSpacingDp: Int,
   reduceMotion: Boolean,
+  visualEffectsEnabled: Boolean,
   globalCrossfadeEnabled: Boolean,
   miniWaveformEnabled: Boolean,
   defaultPadShape: PadShapeStyle,
   defaultCornerGlowColor: Color,
   onRenameBankRequest: (Int) -> Unit,
-  onRescanBankRequest: (Int) -> Unit,
-  onReorderBanksRequest: () -> Unit,
+  onAddBankRequest: () -> Unit,
   onPadTapped: (SoundPad) -> Unit,
   onPadCustomizeClick: (SoundPad) -> Unit,
   onPadHoldStart: (SoundPad) -> Unit,
@@ -1624,163 +1679,151 @@ private fun BankedPadMatrix(
   onSwipeVolumeChange: (String, Float, Boolean) -> Unit,
   onTogglePadSelection: (String) -> Unit,
   onSwapPads: (fromPadId: String, toPadId: String) -> Unit,
+  onEmptyPadClick: () -> Unit,
   modifier: Modifier = Modifier
 ) {
   val pageCount = bankPages.size.coerceAtLeast(1)
   val coroutineScope = rememberCoroutineScope()
+  val bankListState = rememberLazyListState()
+  val haptic = LocalHapticFeedback.current
+  val topBarTokens = SoundPadTheme.topBarTokens
+  val extColors = SoundPadTheme.colors
+  val spacing = SoundPadTheme.spacing
   var isDraggingAnyPad by remember { mutableStateOf(false) }
-  val currentPage = bankPages.getOrNull(pagerState.currentPage)
-  val distinctBankCount = remember(bankPages) { bankPages.map { it.bankKey }.distinct().size }
+
+  LaunchedEffect(pagerState.currentPage, bankPages.size) {
+    if (pagerState.currentPage in bankPages.indices) {
+      bankListState.animateScrollToItem(pagerState.currentPage)
+    }
+  }
 
   Column(modifier = modifier.fillMaxSize()) {
     if (showInlineBankStrip) {
-      Row(
-        modifier = Modifier
-          .fillMaxWidth()
-          .padding(horizontal = 12.dp, vertical = 4.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween
-      ) {
-        LazyRow(
-          modifier = Modifier.weight(1f),
-          horizontalArrangement = Arrangement.spacedBy(6.dp)
+      Column(modifier = Modifier.fillMaxWidth()) {
+        Row(
+          modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = topBarTokens.bankTabRowHorizontalPaddingDp),
+          verticalAlignment = Alignment.CenterVertically
         ) {
-          itemsIndexed(bankPages, key = { index, page -> "${page.bankKey}_$index" }) { index, page ->
-            val isCurrent = pagerState.currentPage == index
-            val hasActiveInBank = page.pads.any { playbackStates[it.id]?.isPlaying == true }
-            Surface(
-              modifier = Modifier
-                .clip(RoundedCornerShape(8.dp))
-                .testTag("bank_tab_$index")
-                .clickable {
-                  coroutineScope.launch {
-                    pagerState.animateScrollToPage(index)
-                  }
-                },
-              shape = RoundedCornerShape(8.dp),
-              color = if (isCurrent) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainer,
-              border = BorderStroke(
-                width = 1.dp,
-                color = when {
-                  isCurrent -> MaterialTheme.colorScheme.primary
-                  hasActiveInBank -> MaterialTheme.colorScheme.secondary
-                  else -> MaterialTheme.colorScheme.outline
-                }
-              )
-            ) {
-              Row(
-                modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(5.dp)
+          LazyRow(
+            state = bankListState,
+            modifier = Modifier.weight(1f),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(spacing.xs)
+          ) {
+            itemsIndexed(bankPages, key = { index, page -> "${page.bankKey}_$index" }) { index, page ->
+              val isCurrent = pagerState.currentPage == index
+              val hasActiveInBank = page.pads.any { playbackStates[it.id]?.isPlaying == true }
+              Column(
+                modifier = Modifier
+                  .height(topBarTokens.bankTabHeightDp)
+                  .width(IntrinsicSize.Max)
+                  .clip(MaterialTheme.shapes.small)
+                  .testTag("bank_tab_$index")
+                  .combinedClickable(
+                    onClick = {
+                      coroutineScope.launch {
+                        pagerState.animateScrollToPage(index)
+                      }
+                    },
+                    onLongClick = {
+                      if (!isLocked) {
+                        performPadHaptic(haptic, hapticIntensity, HapticFeedbackType.LongPress)
+                        onRenameBankRequest(page.bankKey)
+                      }
+                    }
+                  ),
+                horizontalAlignment = Alignment.CenterHorizontally
               ) {
-                if (hasActiveInBank) {
-                  Box(
-                    modifier = Modifier
-                      .size(6.dp)
-                      .clip(CircleShape)
-                      .background(MaterialTheme.colorScheme.primary)
+                Row(
+                  modifier = Modifier
+                    .weight(1f)
+                    .padding(horizontal = topBarTokens.bankTabHorizontalPaddingDp),
+                  verticalAlignment = Alignment.CenterVertically,
+                  horizontalArrangement = Arrangement.spacedBy(spacing.xs)
+                ) {
+                  if (hasActiveInBank) {
+                    Box(
+                      modifier = Modifier
+                        .size(topBarTokens.bankActiveDotDp)
+                        .clip(CircleShape)
+                        .background(extColors.playModeActiveGreen)
+                    )
+                  }
+                  Text(
+                    text = page.title,
+                    style = MaterialTheme.typography.labelMedium.copy(
+                      fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Medium
+                    ),
+                    color = if (isCurrent) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                   )
                 }
-                Text(
-                  text = page.title,
-                  style = MaterialTheme.typography.labelMedium,
-                  color = if (isCurrent) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                  maxLines = 1,
-                  overflow = TextOverflow.Ellipsis
+
+                Box(
+                  modifier = Modifier
+                    .fillMaxWidth()
+                    .height(topBarTokens.bankTabIndicatorHeightDp)
+                    .background(
+                      if (isCurrent) MaterialTheme.colorScheme.primary else Color.Transparent
+                    )
                 )
               }
             }
           }
-        }
 
-        if (currentPage?.canRescanSubfolder == true) {
-          IconButton(
-            onClick = { onRescanBankRequest(currentPage.bankKey) },
-            modifier = Modifier
-              .size(32.dp)
-              .testTag("rescan_bank_button")
-          ) {
-            Icon(
-              imageVector = Icons.Filled.Refresh,
-              contentDescription = stringResource(R.string.cd_rescan_bank),
-              tint = MaterialTheme.colorScheme.primary,
-              modifier = Modifier.size(16.dp)
-            )
-          }
-        }
-
-        if (distinctBankCount > 1) {
-          IconButton(
-            onClick = onReorderBanksRequest,
-            modifier = Modifier
-              .size(32.dp)
-              .testTag("reorder_banks_button")
-          ) {
-            Icon(
-              imageVector = Icons.Filled.SwapVert,
-              contentDescription = stringResource(R.string.cd_reorder_banks),
-              tint = MaterialTheme.colorScheme.onSurfaceVariant,
-              modifier = Modifier.size(16.dp)
-            )
-          }
-        }
-
-        IconButton(
-          onClick = { onRenameBankRequest(currentPage?.bankKey ?: pagerState.currentPage) },
-          modifier = Modifier
-            .size(32.dp)
-            .testTag("rename_bank_button")
-        ) {
-          Icon(
-            imageVector = Icons.Filled.DriveFileRenameOutline,
-            contentDescription = stringResource(R.string.cd_rename_bank),
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.size(16.dp)
-          )
-        }
-        Surface(
-          shape = RoundedCornerShape(6.dp),
-          color = MaterialTheme.colorScheme.surfaceContainer,
-          border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
-        ) {
-          Text(
-            text = "${pagerState.currentPage + 1}/$pageCount",
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-          )
-        }
-      }
-
-      if (pageCount > 1) {
-        Row(
-          modifier = Modifier
-            .fillMaxWidth()
-            .padding(bottom = 2.dp),
-          horizontalArrangement = Arrangement.Center,
-          verticalAlignment = Alignment.CenterVertically
-        ) {
-          for (dotIdx in 0 until minOf(pageCount, 12)) {
-            val activeDot = pagerState.currentPage == dotIdx
-            Box(
-              modifier = Modifier
-                .padding(horizontal = 2.dp)
-                .size(width = if (activeDot) 14.dp else 5.dp, height = 5.dp)
-                .clip(CircleShape)
-                .background(
-                  if (activeDot) MaterialTheme.colorScheme.primary
-                  else MaterialTheme.colorScheme.outline
+          val addTooltipState = rememberTooltipState()
+          TooltipBox(
+            positionProvider = TooltipDefaults.rememberPlainTooltipPositionProvider(),
+            tooltip = {
+              PlainTooltip(
+                containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                contentColor = MaterialTheme.colorScheme.onSurface
+              ) {
+                Text(
+                  text = stringResource(R.string.tooltip_add_bank),
+                  style = MaterialTheme.typography.labelSmall
                 )
-            )
+              }
+            },
+            state = addTooltipState
+          ) {
+            IconButton(
+              onClick = onAddBankRequest,
+              enabled = !isLocked,
+              modifier = Modifier
+                .size(topBarTokens.bankAddButtonDp)
+                .testTag("add_bank_button")
+            ) {
+              Icon(
+                imageVector = Icons.Filled.Add,
+                contentDescription = stringResource(R.string.cd_add_bank),
+                tint = if (isLocked) {
+                  MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = topBarTokens.disabledAlpha)
+                } else {
+                  MaterialTheme.colorScheme.primary
+                },
+                modifier = Modifier.size(topBarTokens.bankAddIconDp)
+              )
+            }
           }
         }
+
+        HorizontalDivider(
+          thickness = topBarTokens.bankTabDividerDp,
+          color = MaterialTheme.colorScheme.outlineVariant
+        )
       }
     }
 
     HorizontalPager(
       state = pagerState,
       userScrollEnabled = !isDraggingAnyPad,
-      modifier = Modifier.fillMaxSize()
+      modifier = Modifier
+        .weight(1f)
+        .fillMaxWidth()
     ) { pageIndex ->
       val bankPads = bankPages.getOrNull(pageIndex)?.pads.orEmpty()
       PadMatrixGrid(
@@ -1801,6 +1844,7 @@ private fun BankedPadMatrix(
         cuePreviewPadId = cuePreviewPadId,
         preparingReversePadId = preparingReversePadId,
         reduceMotion = reduceMotion,
+        visualEffectsEnabled = visualEffectsEnabled,
         globalCrossfadeEnabled = globalCrossfadeEnabled,
         miniWaveformEnabled = miniWaveformEnabled,
         defaultPadShape = defaultPadShape,
@@ -1814,8 +1858,52 @@ private fun BankedPadMatrix(
         onSwipeVolumeChange = onSwipeVolumeChange,
         onTogglePadSelection = onTogglePadSelection,
         onSwapPads = onSwapPads,
+        onEmptyPadClick = onEmptyPadClick,
         modifier = Modifier.fillMaxSize()
       )
+    }
+
+    // Dot indicator below the pad grid (replaces top "1/1" pill badge)
+    if (showInlineBankStrip) {
+      val visibleDots = minOf(pageCount, topBarTokens.maxPagerDots)
+      Row(
+        modifier = Modifier
+          .fillMaxWidth()
+          .padding(vertical = topBarTokens.pagerDotsVerticalPaddingDp)
+          .testTag("bank_pager_dots"),
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically
+      ) {
+        for (dotIdx in 0 until visibleDots) {
+          val activeDot = pagerState.currentPage == dotIdx
+          val dotWidth by animateDpAsState(
+            targetValue = if (activeDot) {
+              topBarTokens.pagerDotActiveWidthDp
+            } else {
+              topBarTokens.pagerDotInactiveWidthDp
+            },
+            label = "pager_dot_width"
+          )
+          Box(
+            modifier = Modifier
+              .padding(horizontal = topBarTokens.pagerDotSpacingDp)
+              .size(width = dotWidth, height = topBarTokens.pagerDotHeightDp)
+              .clip(CircleShape)
+              .background(
+                if (activeDot) {
+                  MaterialTheme.colorScheme.primary
+                } else {
+                  MaterialTheme.colorScheme.outline.copy(alpha = topBarTokens.subtitleDimAlpha)
+                }
+              )
+              .clickable {
+                coroutineScope.launch {
+                  pagerState.animateScrollToPage(dotIdx)
+                }
+              }
+          )
+        }
+      }
     }
   }
 }
@@ -1839,6 +1927,7 @@ private fun PadMatrixGrid(
   cuePreviewPadId: String?,
   preparingReversePadId: String?,
   reduceMotion: Boolean,
+  visualEffectsEnabled: Boolean,
   globalCrossfadeEnabled: Boolean,
   miniWaveformEnabled: Boolean,
   defaultPadShape: PadShapeStyle,
@@ -1852,6 +1941,7 @@ private fun PadMatrixGrid(
   onSwipeVolumeChange: (String, Float, Boolean) -> Unit,
   onTogglePadSelection: (String) -> Unit,
   onSwapPads: (fromPadId: String, toPadId: String) -> Unit,
+  onEmptyPadClick: () -> Unit,
   modifier: Modifier = Modifier
 ) {
   val spacing: Dp = remember(padGridSpacingDp, rows, cols) {
@@ -1862,7 +1952,7 @@ private fun PadMatrixGrid(
       else -> (baseGap * 0.30f).roundToInt().coerceIn(1, 4).dp
     }
   }
-  val outerPadding: Dp = if (cols > 10 || rows > 10) 6.dp else 10.dp
+  val outerPadding: Dp = if (cols > 10 || rows > 10) SoundPadTheme.spacing.xs else SoundPadTheme.spacing.sm
 
   val cellBounds = remember { mutableStateMapOf<String, Rect>() }
   var gridRootOrigin by remember { mutableStateOf(Offset.Zero) }
@@ -1873,21 +1963,18 @@ private fun PadMatrixGrid(
 
   BoxWithConstraints(
     modifier = modifier
-      .padding(horizontal = outerPadding, vertical = 4.dp)
+      .padding(horizontal = outerPadding, vertical = SoundPadTheme.spacing.xs)
       .onGloballyPositioned { coords ->
         gridRootOrigin = coords.positionInRoot()
       }
   ) {
     val totalHorizontalSpacing = spacing * (cols - 1)
-    val totalVerticalSpacing = spacing * (rows - 1)
     val cellWidth = ((maxWidth - totalHorizontalSpacing) / cols).coerceAtLeast(16.dp)
-    val cellHeight = ((maxHeight - totalVerticalSpacing) / rows).coerceAtLeast(16.dp)
-    val minSide = min(cellWidth, cellHeight)
 
-    val density = remember(minSide, cols, rows) {
+    val density = remember(cellWidth, cols, rows) {
       when {
-        minSide >= 64.dp && cols <= 6 && rows <= 6 -> PadDensity.STANDARD
-        minSide >= 34.dp && cols <= 11 -> PadDensity.COMPACT
+        cellWidth >= 64.dp && cols <= 6 && rows <= 6 -> PadDensity.STANDARD
+        cellWidth >= 34.dp && cols <= 11 -> PadDensity.COMPACT
         else -> PadDensity.MICRO
       }
     }
@@ -1903,201 +1990,103 @@ private fun PadMatrixGrid(
         }
       }
     }
+    val doubleTapStopHandler: (SoundPad) -> Unit = remember(onDoubleTapStop) {
+      { p -> onDoubleTapStop(p.id) }
+    }
+    val swipeVolumeHandler: (SoundPad, Float, Boolean) -> Unit = remember(onSwipeVolumeChange) {
+      { p, vol, persist -> onSwipeVolumeChange(p.id, vol, persist) }
+    }
 
-    if (totalSlots > 64) {
-      val denseCellHeight = cellHeight.coerceAtLeast(36.dp)
-      LazyVerticalGrid(
-        columns = GridCells.Fixed(cols),
-        modifier = Modifier.fillMaxSize(),
-        horizontalArrangement = Arrangement.spacedBy(spacing),
-        verticalArrangement = Arrangement.spacedBy(spacing)
-      ) {
-        items(
-          count = totalSlots,
-          key = { localIndex -> pads.getOrNull(localIndex)?.id ?: "empty_${bankIndex}_$localIndex" }
-        ) { localIndex ->
-          val pad = pads.getOrNull(localIndex)
-          val playbackState = pad?.let { playbackStates[it.id] }
-          val cellModifier = if (pad != null && isEditMode && !isMultiSelectMode) {
-            Modifier
-              .onGloballyPositioned { coords -> cellBounds[pad.id] = coords.boundsInRoot() }
-              .pointerInput(pad.id, isEditMode, isMultiSelectMode, hapticIntensity) {
-                detectDragGesturesAfterLongPress(
-                  onDragStart = { localOffset ->
-                    val box = cellBounds[pad.id] ?: return@detectDragGesturesAfterLongPress
-                    performPadHaptic(haptic, hapticIntensity, HapticFeedbackType.LongPress)
-                    draggingPad = pad
-                    dragRootPosition = box.topLeft + localOffset
-                    hoveredTargetPadId = pad.id
-                    onDragActiveChange(true)
-                  },
-                  onDrag = { change, dragAmount ->
-                    change.consume()
-                    dragRootPosition += dragAmount
-                    hoveredTargetPadId = cellBounds.entries
-                      .firstOrNull { it.value.contains(dragRootPosition) }
-                      ?.key
-                  },
-                  onDragEnd = {
-                    val fromId = draggingPad?.id
-                    val toId = hoveredTargetPadId
-                    if (fromId != null && toId != null && fromId != toId) {
-                      onSwapPads(fromId, toId)
-                    }
-                    draggingPad = null
-                    hoveredTargetPadId = null
-                    onDragActiveChange(false)
-                  },
-                  onDragCancel = {
-                    draggingPad = null
-                    hoveredTargetPadId = null
-                    onDragActiveChange(false)
+    LazyVerticalGrid(
+      columns = GridCells.Fixed(cols),
+      modifier = Modifier.fillMaxSize(),
+      horizontalArrangement = Arrangement.spacedBy(spacing),
+      verticalArrangement = Arrangement.spacedBy(spacing)
+    ) {
+      items(
+        count = totalSlots,
+        key = { localIndex -> pads.getOrNull(localIndex)?.id ?: "empty_${bankIndex}_$localIndex" }
+      ) { localIndex ->
+        val pad = pads.getOrNull(localIndex)
+        val playbackState = pad?.let { playbackStates[it.id] }
+        val cellModifier = if (pad != null && isEditMode && !isMultiSelectMode) {
+          Modifier
+            .onGloballyPositioned { coords -> cellBounds[pad.id] = coords.boundsInRoot() }
+            .pointerInput(pad.id, isEditMode, isMultiSelectMode, hapticIntensity) {
+              detectDragGesturesAfterLongPress(
+                onDragStart = { localOffset ->
+                  val box = cellBounds[pad.id] ?: return@detectDragGesturesAfterLongPress
+                  performPadHaptic(haptic, hapticIntensity, HapticFeedbackType.LongPress)
+                  draggingPad = pad
+                  dragRootPosition = box.topLeft + localOffset
+                  hoveredTargetPadId = pad.id
+                  onDragActiveChange(true)
+                },
+                onDrag = { change, dragAmount ->
+                  change.consume()
+                  dragRootPosition += dragAmount
+                  hoveredTargetPadId = cellBounds.entries
+                    .firstOrNull { it.value.contains(dragRootPosition) }
+                    ?.key
+                },
+                onDragEnd = {
+                  val fromId = draggingPad?.id
+                  val toId = hoveredTargetPadId
+                  if (fromId != null && toId != null && fromId != toId) {
+                    onSwapPads(fromId, toId)
                   }
-                )
-              }
-          } else {
-            Modifier
-          }
-
-          PadCell(
-            pad = pad,
-            slotNumber = bankOffset + localIndex + 1,
-            playbackState = playbackState,
-            density = density,
-            isEditMode = isEditMode,
-            isMultiSelectMode = isMultiSelectMode,
-            isSelected = pad != null && pad.id in selectedPadIds,
-            isMidiLearnMode = isMidiLearnMode,
-            isMidiLearnArmed = pad != null && armedLearnPadId == pad.id,
-            isCuePlaying = pad != null && cuePreviewPadId == pad.id,
-            isDragging = pad != null && draggingPad?.id == pad.id,
-            isDropTarget = pad != null && hoveredTargetPadId == pad.id && draggingPad?.id != pad.id,
-            globalCrossfadeEnabled = globalCrossfadeEnabled,
-            defaultPadShape = defaultPadShape,
-            defaultCornerGlowColor = defaultCornerGlowColor,
-            miniWaveformEnabled = false,
-            isLoading = pad != null && preparingReversePadId == pad.id,
-            gridRows = rows,
-            gridCols = cols,
-            reduceMotion = reduceMotion,
-            hapticIntensity = hapticIntensity,
-            swipePadVolumeEnabled = swipePadVolumeEnabled,
-            doubleTapToStopEnabled = doubleTapToStopEnabled,
-            onClick = clickHandler,
-            onCustomizeClick = onPadCustomizeClick,
-            onHoldStart = onPadHoldStart,
-            onHoldRelease = onPadHoldRelease,
-            onDoubleTapStop = { p -> onDoubleTapStop(p.id) },
-            onSwipeVolumeChange = { p, vol, persist -> onSwipeVolumeChange(p.id, vol, persist) },
-            modifier = Modifier
-              .fillMaxWidth()
-              .height(denseCellHeight)
-              .then(cellModifier)
-          )
-        }
-      }
-    } else {
-      Column(
-        modifier = Modifier.fillMaxSize(),
-        verticalArrangement = Arrangement.spacedBy(spacing)
-      ) {
-        for (r in 0 until rows) {
-          Row(
-            modifier = Modifier
-              .fillMaxWidth()
-              .weight(1f),
-            horizontalArrangement = Arrangement.spacedBy(spacing)
-          ) {
-            for (c in 0 until cols) {
-              val localIndex = r * cols + c
-              val pad = pads.getOrNull(localIndex)
-              val playbackState = pad?.let { playbackStates[it.id] }
-
-              val cellModifier = if (pad != null) {
-                val boundsMod = Modifier.onGloballyPositioned { coords ->
-                  cellBounds[pad.id] = coords.boundsInRoot()
+                  draggingPad = null
+                  hoveredTargetPadId = null
+                  onDragActiveChange(false)
+                },
+                onDragCancel = {
+                  draggingPad = null
+                  hoveredTargetPadId = null
+                  onDragActiveChange(false)
                 }
-                val dragMod = if (isEditMode && !isMultiSelectMode) {
-                  Modifier.pointerInput(pad.id, isEditMode, isMultiSelectMode, hapticIntensity) {
-                    detectDragGesturesAfterLongPress(
-                      onDragStart = { localOffset ->
-                        val box = cellBounds[pad.id] ?: return@detectDragGesturesAfterLongPress
-                        performPadHaptic(haptic, hapticIntensity, HapticFeedbackType.LongPress)
-                        draggingPad = pad
-                        dragRootPosition = box.topLeft + localOffset
-                        hoveredTargetPadId = pad.id
-                        onDragActiveChange(true)
-                      },
-                      onDrag = { change, dragAmount ->
-                        change.consume()
-                        dragRootPosition += dragAmount
-                        hoveredTargetPadId = cellBounds.entries
-                          .firstOrNull { it.value.contains(dragRootPosition) }
-                          ?.key
-                      },
-                      onDragEnd = {
-                        val fromId = draggingPad?.id
-                        val toId = hoveredTargetPadId
-                        if (fromId != null && toId != null && fromId != toId) {
-                          onSwapPads(fromId, toId)
-                        }
-                        draggingPad = null
-                        hoveredTargetPadId = null
-                        onDragActiveChange(false)
-                      },
-                      onDragCancel = {
-                        draggingPad = null
-                        hoveredTargetPadId = null
-                        onDragActiveChange(false)
-                      }
-                    )
-                  }
-                } else {
-                  Modifier
-                }
-                boundsMod.then(dragMod)
-              } else {
-                Modifier
-              }
-
-              PadCell(
-                pad = pad,
-                slotNumber = bankOffset + localIndex + 1,
-                playbackState = playbackState,
-                density = density,
-                isEditMode = isEditMode,
-                isMultiSelectMode = isMultiSelectMode,
-                isSelected = pad != null && pad.id in selectedPadIds,
-                isMidiLearnMode = isMidiLearnMode,
-                isMidiLearnArmed = pad != null && armedLearnPadId == pad.id,
-                isCuePlaying = pad != null && cuePreviewPadId == pad.id,
-                isDragging = pad != null && draggingPad?.id == pad.id,
-                isDropTarget = pad != null && hoveredTargetPadId == pad.id && draggingPad?.id != pad.id,
-                globalCrossfadeEnabled = globalCrossfadeEnabled,
-                defaultPadShape = defaultPadShape,
-                defaultCornerGlowColor = defaultCornerGlowColor,
-                miniWaveformEnabled = miniWaveformEnabled && density == PadDensity.STANDARD,
-                isLoading = pad != null && preparingReversePadId == pad.id,
-                gridRows = rows,
-                gridCols = cols,
-                reduceMotion = reduceMotion,
-                hapticIntensity = hapticIntensity,
-                swipePadVolumeEnabled = swipePadVolumeEnabled,
-                doubleTapToStopEnabled = doubleTapToStopEnabled,
-                onClick = clickHandler,
-                onCustomizeClick = onPadCustomizeClick,
-                onHoldStart = onPadHoldStart,
-                onHoldRelease = onPadHoldRelease,
-                onDoubleTapStop = { p -> onDoubleTapStop(p.id) },
-                onSwipeVolumeChange = { p, vol, persist -> onSwipeVolumeChange(p.id, vol, persist) },
-                modifier = Modifier
-                  .weight(1f)
-                  .height(cellHeight)
-                  .then(cellModifier)
               )
             }
-          }
+        } else {
+          Modifier
         }
+
+        PadCell(
+          pad = pad,
+          slotNumber = bankOffset + localIndex + 1,
+          playbackState = playbackState,
+          density = density,
+          isEditMode = isEditMode,
+          isMultiSelectMode = isMultiSelectMode,
+          isSelected = pad != null && pad.id in selectedPadIds,
+          isMidiLearnMode = isMidiLearnMode,
+          isMidiLearnArmed = pad != null && armedLearnPadId == pad.id,
+          isCuePlaying = pad != null && cuePreviewPadId == pad.id,
+          isDragging = pad != null && draggingPad?.id == pad.id,
+          isDropTarget = pad != null && hoveredTargetPadId == pad.id && draggingPad?.id != pad.id,
+          globalCrossfadeEnabled = globalCrossfadeEnabled,
+          defaultPadShape = defaultPadShape,
+          defaultCornerGlowColor = defaultCornerGlowColor,
+          miniWaveformEnabled = miniWaveformEnabled && density == PadDensity.STANDARD && totalSlots <= 64,
+          isLoading = pad != null && preparingReversePadId == pad.id,
+          gridRows = rows,
+          gridCols = cols,
+          reduceMotion = reduceMotion,
+          visualEffectsEnabled = visualEffectsEnabled,
+          hapticIntensity = hapticIntensity,
+          swipePadVolumeEnabled = swipePadVolumeEnabled,
+          doubleTapToStopEnabled = doubleTapToStopEnabled,
+          onClick = clickHandler,
+          onEmptyClick = onEmptyPadClick,
+          onCustomizeClick = onPadCustomizeClick,
+          onHoldStart = onPadHoldStart,
+          onHoldRelease = onPadHoldRelease,
+          onDoubleTapStop = doubleTapStopHandler,
+          onSwipeVolumeChange = swipeVolumeHandler,
+          modifier = Modifier
+            .fillMaxWidth()
+            .aspectRatio(1f)
+            .then(cellModifier)
+        )
       }
     }
 
