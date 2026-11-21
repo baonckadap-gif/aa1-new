@@ -517,4 +517,9 @@
     <string name="pad_max_voices_custom">PAD VOICE CAP (%1$d voices)</string>
     <string name="cd_reset_pad_retrigger">Reset pad retrigger mode and voice cap</string>
     <string name="cd_pad_voice_count_badge">%1$d active voices</string>
+
+    <!-- Stage 4: Low-RAM Active Pad Warning -->
+    <string name="low_ram_active_pads_warning">Low RAM (%2$d MB): %1$d pads active at once. Consider stopping unused pads or disabling reverb/echo for stable playback.</string>
+    <string name="low_ram_warning_stop_all">Stop All</string>
+    <string name="cd_dismiss_low_ram_warning">Dismiss low-RAM warning</string>
 </resources>

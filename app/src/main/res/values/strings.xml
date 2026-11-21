@@ -521,4 +521,9 @@
     <string name="pad_max_voices_custom">BATAS VOICE PAD (%1$d voice)</string>
     <string name="cd_reset_pad_retrigger">Reset mode retrigger &amp; batas voice pad</string>
     <string name="cd_pad_voice_count_badge">%1$d voice aktif</string>
+
+    <!-- Tahap 4: Peringatan RAM Rendah -->
+    <string name="low_ram_active_pads_warning">RAM rendah (%2$d MB): %1$d pad aktif bersamaan. Pertimbangkan menghentikan pad atau mematikan reverb/echo agar audio tetap stabil.</string>
+    <string name="low_ram_warning_stop_all">Stop Semua</string>
+    <string name="cd_dismiss_low_ram_warning">Tutup peringatan RAM rendah</string>
 </resources>

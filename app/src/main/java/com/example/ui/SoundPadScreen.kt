@@ -75,6 +75,7 @@ import androidx.compose.material.icons.filled.LibraryMusic
 import androidx.compose.material.icons.filled.Lightbulb
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LockOpen
+import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.Piano
@@ -142,9 +143,11 @@ import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.testTagsAsResourceId
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
@@ -230,6 +233,7 @@ import kotlinx.coroutines.launch
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
+@OptIn(ExperimentalComposeUiApi::class)
 @Composable
 fun SoundPadScreen(
   uiState: SoundPadUiState,
@@ -435,7 +439,8 @@ fun SoundPadScreen(
   onExportZipClick: () -> Unit = {},
   onImportZipClick: () -> Unit = {},
   onShareZipClick: () -> Unit = {},
-  onDeleteAllConfig: (Boolean) -> Unit = {}
+  onDeleteAllConfig: (Boolean) -> Unit = {},
+  onDismissLowRamWarning: () -> Unit = {}
 ) {
   val isFocusMode = uiState.settings.isFocusMode
   BackHandler(enabled = isFocusMode) {
@@ -530,7 +535,9 @@ fun SoundPadScreen(
   }
 
   Scaffold(
-    modifier = Modifier.fillMaxSize(),
+    modifier = Modifier
+      .fillMaxSize()
+      .semantics { testTagsAsResourceId = true },
     containerColor = MaterialTheme.colorScheme.background,
     contentWindowInsets = WindowInsets(0, 0, 0, 0),
     snackbarHost = { SnackbarHost(hostState = snackbarHostState) },
@@ -1120,6 +1127,62 @@ fun SoundPadScreen(
                   modifier = Modifier.size(16.dp)
                 )
               }
+            }
+          }
+        }
+      }
+
+      AnimatedVisibility(visible = uiState.showLowRamActivePadsWarning) {
+        Surface(
+          modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 4.dp)
+            .testTag("low_ram_active_pads_warning_banner"),
+          shape = RoundedCornerShape(10.dp),
+          color = SoundPadTheme.colors.warningAmber.copy(alpha = 0.16f),
+          border = BorderStroke(1.dp, SoundPadTheme.colors.warningAmber.copy(alpha = 0.7f))
+        ) {
+          Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+          ) {
+            Icon(
+              imageVector = Icons.Filled.Memory,
+              contentDescription = null,
+              tint = SoundPadTheme.colors.warningAmber,
+              modifier = Modifier.size(18.dp)
+            )
+            Text(
+              text = stringResource(
+                R.string.low_ram_active_pads_warning,
+                uiState.activeCount,
+                uiState.deviceMemoryInfo.memoryClassMb
+              ),
+              style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Medium),
+              color = MaterialTheme.colorScheme.onSurface,
+              modifier = Modifier.weight(1f)
+            )
+            TextButton(
+              onClick = onStopAll,
+              modifier = Modifier.testTag("low_ram_warning_stop_all_button")
+            ) {
+              Text(
+                text = stringResource(R.string.low_ram_warning_stop_all),
+                color = MaterialTheme.colorScheme.error
+              )
+            }
+            IconButton(
+              onClick = onDismissLowRamWarning,
+              modifier = Modifier
+                .minimumInteractiveComponentSize()
+                .testTag("low_ram_warning_dismiss_button")
+            ) {
+              Icon(
+                imageVector = Icons.Filled.Close,
+                contentDescription = stringResource(R.string.cd_dismiss_low_ram_warning),
+                modifier = Modifier.size(16.dp)
+              )
             }
           }
         }
@@ -2670,7 +2733,9 @@ private fun PadMatrixGrid(
 
     LazyVerticalGrid(
       columns = GridCells.Fixed(cols),
-      modifier = Modifier.fillMaxSize(),
+      modifier = Modifier
+        .fillMaxSize()
+        .testTag("pad_grid_scroll"),
       horizontalArrangement = Arrangement.spacedBy(spacing),
       verticalArrangement = Arrangement.spacedBy(spacing)
     ) {

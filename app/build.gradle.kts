@@ -3,6 +3,7 @@ plugins {
   alias(libs.plugins.kotlin.compose)
   alias(libs.plugins.google.devtools.ksp)
   alias(libs.plugins.secrets)
+  alias(libs.plugins.androidx.baselineprofile)
 }
 
 if (file("google-services.json").exists()) {
@@ -105,6 +106,8 @@ dependencies {
   implementation(libs.androidx.compose.ui.graphics)
   implementation(libs.androidx.compose.ui.tooling.preview)
   implementation(libs.androidx.core.ktx)
+  implementation(libs.androidx.profileinstaller)
+  baselineProfile(project(":baselineprofile"))
   implementation(libs.androidx.datastore.preferences)
   implementation(libs.androidx.documentfile)
   implementation(libs.androidx.lifecycle.runtime.compose)

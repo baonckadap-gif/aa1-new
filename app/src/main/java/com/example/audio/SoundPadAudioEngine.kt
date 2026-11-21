@@ -508,6 +508,11 @@ class SoundPadAudioEngine(
           settings
         )
       }
+      if (!settings.audioEffectsEnabled) {
+        idleSlotPool.forEach { pooled ->
+          pooled.fxProcessor.setParams(ReverbEchoParams())
+        }
+      }
       activeCuePad?.let { cuePad ->
         cuePlayer?.volume = AudioMixMath.computeCueGain(cuePad.settings.volume, settings.cueVolume)
       }
@@ -1310,6 +1315,7 @@ class SoundPadAudioEngine(
 
   private fun discardPooledSlotLocked(pooled: PooledPlayerSlot) {
     pooled.tapProcessor?.setRouteViaMixerBus(false)
+    pooled.fxProcessor.setParams(ReverbEchoParams())
     pooled.currentListener?.let { l -> runCatching { pooled.player.removeListener(l) } }
     pooled.currentListener = null
     runCatching { pooled.player.stop() }
@@ -1406,6 +1412,7 @@ class SoundPadAudioEngine(
 
   private fun returnOrDiscardPooledSlotLocked(pooled: PooledPlayerSlot) {
     pooled.tapProcessor?.setRouteViaMixerBus(false)
+    pooled.fxProcessor.setParams(ReverbEchoParams())
     mixerBus.removeSlot(pooled.slotTag)
     masterRecorder?.removeSlot(pooled.slotTag)
     pooled.currentListener?.let { l -> runCatching { pooled.player.removeListener(l) } }

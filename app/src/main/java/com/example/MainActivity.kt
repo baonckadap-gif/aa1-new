@@ -11,6 +11,7 @@ import android.os.Bundle
 import android.os.SystemClock
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.ReportDrawnWhen
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -557,6 +558,7 @@ class MainActivity : ComponentActivity() {
     canScheduleExactAlarms: Boolean,
     actions: MainScreenActions
   ) {
+    ReportDrawnWhen { uiState.pads.isNotEmpty() || !uiState.isScanning }
     SoundPadScreen(
       uiState = uiState,
       onPickFolderClick = actions.onPickFolderClick,
@@ -763,7 +765,8 @@ class MainActivity : ComponentActivity() {
       onExportZipClick = actions.onExportZipClick,
       onImportZipClick = actions.onImportZipClick,
       onShareZipClick = actions.onShareZipClick,
-      onDeleteAllConfig = actions.onDeleteAllConfig
+      onDeleteAllConfig = actions.onDeleteAllConfig,
+      onDismissLowRamWarning = viewModel::dismissLowRamActivePadsWarning
     )
   }
 }

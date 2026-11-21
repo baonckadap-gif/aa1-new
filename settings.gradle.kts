@@ -25,3 +25,4 @@ dependencyResolutionManagement {
 rootProject.name = "SoundPad Pro"
 
 include(":app")
+include(":baselineprofile")

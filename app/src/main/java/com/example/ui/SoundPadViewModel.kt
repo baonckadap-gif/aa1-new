@@ -43,6 +43,8 @@ import com.example.data.local.db.SoundPadEntity
 import com.example.data.profile.ExportedProfileBundle
 import com.example.data.profile.ProfileJsonSerializer
 import com.example.scheduler.PadSchedulerManager
+import com.example.util.DeviceMemoryHelper
+import com.example.util.DeviceMemoryInfo
 import com.example.scheduler.toDomain
 import com.example.scheduler.toEntity
 import com.example.domain.model.AnimationMode
@@ -186,10 +188,15 @@ data class SoundPadUiState(
   val requestedBankPageIndex: Int? = null,
   val persistentBackupState: PersistentBackupUiState = PersistentBackupUiState(),
   val restoreUiState: RestoreUiState = RestoreUiState(),
-  val tapLatencyMetrics: TapLatencyMetrics = TapLatencyMetrics()
+  val tapLatencyMetrics: TapLatencyMetrics = TapLatencyMetrics(),
+  val deviceMemoryInfo: DeviceMemoryInfo = DeviceMemoryInfo(),
+  val isLowRamWarningDismissed: Boolean = false
 ) {
   val activeCount: Int
     get() = playbackStates.count { it.value.isPlaying }
+
+  val showLowRamActivePadsWarning: Boolean
+    get() = !isLowRamWarningDismissed && deviceMemoryInfo.shouldWarnActivePads(activeCount)
 
   val armedLearnPadId: String?
     get() = (midiLearnTarget as? MidiLearnTarget.PadNote)?.padId
@@ -311,6 +318,7 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
 
   init {
     AppHolder.application = application
+    _uiState.update { it.copy(deviceMemoryInfo = DeviceMemoryHelper.inspect(app)) }
     refreshOutputDevices()
     val callback = object : AudioDeviceCallback() {
       override fun onAudioDevicesAdded(addedDevices: Array<out AudioDeviceInfo>?) {
@@ -504,7 +512,23 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
 
     viewModelScope.launch {
       audioEngine.playbackStates.collect { states ->
-        _uiState.update { it.copy(playbackStates = states) }
+        val activePads = states.count { it.value.isPlaying }
+        val refreshedMemory = if (activePads > DeviceMemoryInfo.LOW_RAM_ACTIVE_PAD_WARNING_THRESHOLD) {
+          DeviceMemoryHelper.inspect(app)
+        } else {
+          null
+        }
+        _uiState.update { current ->
+          current.copy(
+            playbackStates = states,
+            deviceMemoryInfo = refreshedMemory ?: current.deviceMemoryInfo,
+            isLowRamWarningDismissed = if (activePads <= DeviceMemoryInfo.LOW_RAM_ACTIVE_PAD_WARNING_THRESHOLD) {
+              false
+            } else {
+              current.isLowRamWarningDismissed
+            }
+          )
+        }
       }
     }
 
@@ -4285,6 +4309,10 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
 
   fun resetTapLatencyMetrics() {
     audioEngine.resetLatencyMetrics()
+  }
+
+  fun dismissLowRamActivePadsWarning() {
+    _uiState.update { it.copy(isLowRamWarningDismissed = true) }
   }
 
   fun setRetriggerMode(mode: RetriggerMode) {
