@@ -63,6 +63,8 @@ class StereoPanAudioProcessor : BaseAudioProcessor() {
     rightGain = r
   }
 
+  fun isNeutralBypass(): Boolean = abs(activePan) < 0.005f
+
   override fun onConfigure(inputAudioFormat: AudioProcessor.AudioFormat): AudioProcessor.AudioFormat {
     val supportedEncoding = inputAudioFormat.encoding == C.ENCODING_PCM_16BIT ||
       inputAudioFormat.encoding == C.ENCODING_PCM_FLOAT
@@ -82,6 +84,13 @@ class StereoPanAudioProcessor : BaseAudioProcessor() {
     if (remaining == 0) return
 
     val inChannels = inputAudioFormat.channelCount
+    if (inChannels == 2 && isNeutralBypass()) {
+      val outBuffer = replaceOutputBuffer(remaining)
+      outBuffer.put(inputBuffer)
+      outBuffer.flip()
+      return
+    }
+
     val encoding = inputAudioFormat.encoding
     val bytesPerSample = if (encoding == C.ENCODING_PCM_FLOAT) 4 else 2
     val frameCount = remaining / (inChannels * bytesPerSample)

@@ -8,6 +8,8 @@ import com.example.audio.toEntity
 import com.example.data.local.db.ErrorLogEntity
 import com.example.data.local.db.MidiCcMappingEntity
 import com.example.data.local.db.MidiPcBankMappingEntity
+import com.example.data.local.db.PadDatabaseRepository
+import com.example.data.local.db.PadLayoutEntity
 import com.example.data.local.db.PadProfileEntity
 import com.example.data.local.db.PadSettingEntity
 import com.example.data.local.db.SoundPadDao
@@ -20,10 +22,13 @@ import com.example.domain.model.PadErrorType
 import com.example.domain.model.PadProfile
 import com.example.domain.model.PadSettings
 import com.example.domain.model.SoundPad
+import com.example.error.CrashLogManager
 import com.example.scheduler.PadSchedulerManager
 import com.example.scheduler.toEntity
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.io.File
@@ -716,7 +721,7 @@ object PersistentConfigRestoreEngine {
     rescheduleAlarms: Boolean = true,
     onProgress: suspend (progress: Float, stageLabel: String) -> Unit = { _, _ -> }
   ): RestoreExecutionOutcome = withContext(Dispatchers.IO) {
-    runCatching {
+    try {
       val bundle = inspection.bundle
       val warnings = inspection.warnings.toMutableList()
 
@@ -756,112 +761,181 @@ object PersistentConfigRestoreEngine {
         .groupBy { it.profileId }
         .mapValues { (_, list) -> list.firstOrNull { it.isDefault } ?: list.firstOrNull() }
 
-      if (options.restoreProfilesAndPads && targetProfiles.isNotEmpty()) {
-        val totalProfiles = targetProfiles.size
-        targetProfiles.forEachIndexed { idx, pBundle ->
-          val progressFraction = 0.20f + (0.50f * (idx.toFloat() / totalProfiles.coerceAtLeast(1)))
-          onProgress(progressFraction, "Memulihkan profil \"${pBundle.profile.name}\"…")
+      PadDatabaseRepository.sharedMutationMutex.withLock {
+        if (options.restoreProfilesAndPads && targetProfiles.isNotEmpty()) {
+          val totalProfiles = targetProfiles.size
+          targetProfiles.forEachIndexed { idx, pBundle ->
+            val progressFraction = 0.20f + (0.50f * (idx.toFloat() / totalProfiles.coerceAtLeast(1)))
+            onProgress(progressFraction, "Memulihkan profil \"${pBundle.profile.name}\"…")
 
-          val layoutSlotsByPadId = defaultLayoutByProfile[pBundle.profile.id]
-            ?.slots
-            ?.associateBy { it.padId }
-            .orEmpty()
+            val layoutSlotsByPadId = defaultLayoutByProfile[pBundle.profile.id]
+              ?.slots
+              ?.associateBy { it.padId }
+              .orEmpty()
 
-          val profileFolderUri = when {
-            effectiveMusicUri != null -> effectiveMusicUri.toString()
-            else -> pBundle.profile.folderUri
-          }
+            val profileFolderUri = when {
+              effectiveMusicUri != null -> effectiveMusicUri.toString()
+              else -> pBundle.profile.folderUri
+            }
 
-          val isActiveProfile = if (options.selectedProfileIds.isEmpty()) {
-            pBundle.profile.id == bundle.settings.settings.activeProfileId || pBundle.profile.isActive
-          } else {
-            idx == 0
-          }
-
-          val profileEntity = pBundle.profile.copy(
-            folderUri = profileFolderUri,
-            isActive = isActiveProfile,
-            updatedAtMs = System.currentTimeMillis()
-          ).toProfileEntity()
-
-          val usedPadIds = mutableSetOf<String>()
-          val padEntities = mutableListOf<SoundPadEntity>()
-          val padSettingEntities = mutableListOf<PadSettingEntity>()
-
-          pBundle.pads.forEachIndexed { padIdx, entry ->
-            val relinked = AudioFileRelinker.relinkPadEntry(
-              entry = entry,
-              candidates = candidates,
-              uriReadableChecker = uriReadableChecker
-            )
-            val layoutOverride = layoutSlotsByPadId[entry.pad.id]
-            val finalSlotIndex = (layoutOverride?.slotIndex ?: entry.slotIndex).coerceAtLeast(0)
-            val finalBankIndex = (layoutOverride?.bankIndex ?: entry.pad.bankIndex).coerceAtLeast(0)
-            val finalColor = layoutOverride?.colorArgb ?: entry.pad.colorArgb
-            val finalDisplayName = layoutOverride?.displayName?.takeIf { it.isNotBlank() }
-              ?: entry.pad.displayName
-
-            // Pertahankan ID asli jika unik agar relasi Scheduler/Sequencer/Layout tetap utuh
-            val finalPadId = if (entry.pad.id.isNotBlank() && usedPadIds.add(entry.pad.id)) {
-              entry.pad.id
+            val isActiveProfile = if (options.selectedProfileIds.isEmpty()) {
+              pBundle.profile.id == bundle.settings.settings.activeProfileId || pBundle.profile.isActive
             } else {
-              val gen = "pad_${pBundle.profile.id}_${padIdx}_${UUID.randomUUID().toString().take(6)}"
-              usedPadIds.add(gen)
-              gen
+              idx == 0
             }
 
-            val isMissing = relinked.matchType == PadRelinkMatchType.MISSING
-            if (isMissing) {
-              missingFilePadCount++
-              missingNames.add(entry.pad.fileName)
-              missingErrorLogs.add(
-                ErrorLogEntity(
-                  id = "restore_missing_${finalPadId}_${UUID.randomUUID().toString().take(6)}",
-                  timestampMs = System.currentTimeMillis(),
-                  fileName = entry.pad.fileName,
-                  uriString = entry.pad.uriString,
-                  errorType = PadErrorType.MISSING_PERMISSION.name,
-                  message = "${MISSING_FILE_ERROR_PREFIX}${entry.pad.fileName}",
-                  suggestion = "Pilih ulang folder musik Anda untuk menautkan otomatis file yang hilang. Posisi slot pad tetap dipertahankan.",
-                  padId = finalPadId
-                )
+            val profileEntity = pBundle.profile.copy(
+              folderUri = profileFolderUri,
+              isActive = isActiveProfile,
+              updatedAtMs = System.currentTimeMillis()
+            ).toProfileEntity()
+
+            val usedPadIds = mutableSetOf<String>()
+            val padEntities = mutableListOf<SoundPadEntity>()
+            val padSettingEntities = mutableListOf<PadSettingEntity>()
+
+            pBundle.pads.forEachIndexed { padIdx, entry ->
+              val relinked = AudioFileRelinker.relinkPadEntry(
+                entry = entry,
+                candidates = candidates,
+                uriReadableChecker = uriReadableChecker
               )
-            } else if (relinked.matchType != PadRelinkMatchType.UNCHANGED_LOCAL) {
-              relinkedPadCount++
+              val layoutOverride = layoutSlotsByPadId[entry.pad.id]
+              val finalSlotIndex = (layoutOverride?.slotIndex ?: entry.slotIndex).coerceAtLeast(0)
+              val finalBankIndex = (layoutOverride?.bankIndex ?: entry.pad.bankIndex).coerceAtLeast(0)
+              val finalColor = layoutOverride?.colorArgb ?: entry.pad.colorArgb
+              val finalDisplayName = layoutOverride?.displayName?.takeIf { it.isNotBlank() }
+                ?: entry.pad.displayName
+
+              // Pertahankan ID asli jika unik agar relasi Scheduler/Sequencer/Layout tetap utuh
+              val finalPadId = if (entry.pad.id.isNotBlank() && usedPadIds.add(entry.pad.id)) {
+                entry.pad.id
+              } else {
+                val gen = "pad_${pBundle.profile.id}_${padIdx}_${UUID.randomUUID().toString().take(6)}"
+                usedPadIds.add(gen)
+                gen
+              }
+
+              val isMissing = relinked.matchType == PadRelinkMatchType.MISSING
+              if (isMissing) {
+                missingFilePadCount++
+                missingNames.add(entry.pad.fileName)
+                missingErrorLogs.add(
+                  ErrorLogEntity(
+                    id = "restore_missing_${finalPadId}_${UUID.randomUUID().toString().take(6)}",
+                    timestampMs = System.currentTimeMillis(),
+                    fileName = entry.pad.fileName,
+                    uriString = entry.pad.uriString,
+                    errorType = PadErrorType.MISSING_PERMISSION.name,
+                    message = "${MISSING_FILE_ERROR_PREFIX}${entry.pad.fileName}",
+                    suggestion = "Pilih ulang folder musik Anda untuk menautkan otomatis file yang hilang. Posisi slot pad tetap dipertahankan.",
+                    padId = finalPadId
+                  )
+                )
+              } else if (relinked.matchType != PadRelinkMatchType.UNCHANGED_LOCAL) {
+                relinkedPadCount++
+              }
+
+              val finalPad = entry.pad.copy(
+                id = finalPadId,
+                uriString = relinked.resolvedUriString,
+                displayName = finalDisplayName,
+                positionIndex = finalSlotIndex,
+                bankIndex = finalBankIndex,
+                subfolderName = relinked.resolvedSubfolderName,
+                colorArgb = finalColor,
+                errorType = if (isMissing) PadErrorType.MISSING_PERMISSION else null,
+                errorMessage = if (isMissing) "${MISSING_FILE_ERROR_PREFIX}${entry.pad.fileName}" else null
+              )
+
+              padEntities.add(finalPad.toBackupPadEntity(pBundle.profile.id))
+              padSettingEntities.add(finalPad.settings.toBackupSettingEntity(finalPadId))
+              restoredPadCount++
             }
 
-            val finalPad = entry.pad.copy(
-              id = finalPadId,
-              uriString = relinked.resolvedUriString,
-              displayName = finalDisplayName,
-              positionIndex = finalSlotIndex,
-              bankIndex = finalBankIndex,
-              subfolderName = relinked.resolvedSubfolderName,
-              colorArgb = finalColor,
-              errorType = if (isMissing) PadErrorType.MISSING_PERMISSION else null,
-              errorMessage = if (isMissing) "${MISSING_FILE_ERROR_PREFIX}${entry.pad.fileName}" else null
+            dao.saveCompleteProfile(
+              profile = profileEntity,
+              pads = padEntities,
+              settings = padSettingEntities
             )
+            val profileLayouts = bundle.layouts.filter { it.profileId == pBundle.profile.id }
+            if (profileLayouts.isNotEmpty()) {
+              dao.deleteLayoutsForProfile(pBundle.profile.id)
+              profileLayouts.forEach { lay ->
+                dao.upsertLayoutSafely(
+                  PadLayoutEntity(
+                    id = lay.layoutId.ifBlank { "layout_${pBundle.profile.id}_${UUID.randomUUID()}" },
+                    profileId = pBundle.profile.id,
+                    name = lay.name,
+                    gridRows = lay.gridRows.coerceIn(1, 16),
+                    gridCols = lay.gridCols.coerceIn(1, 16),
+                    isDefault = lay.isDefault,
+                    slotsJson = LayoutBackupSerializer.encodeSlotsJson(lay.slots),
+                    createdAtMs = lay.createdAtMs,
+                    updatedAtMs = lay.updatedAtMs
+                  )
+                )
+              }
+            }
+            restoredProfileCount++
 
-            padEntities.add(finalPad.toBackupPadEntity(pBundle.profile.id))
-            padSettingEntities.add(finalPad.settings.toBackupSettingEntity(finalPadId))
-            restoredPadCount++
+            if (options.restoreMidiMapping) {
+              dao.deleteMidiCcMappingsForProfile(pBundle.profile.id)
+              if (pBundle.ccMappings.isNotEmpty()) {
+                dao.upsertMidiCcMappings(
+                  pBundle.ccMappings.map { m ->
+                    MidiCcMappingEntity(
+                      id = m.id.ifBlank { "cc_${pBundle.profile.id}_${m.target.name}" },
+                      profileId = pBundle.profile.id,
+                      target = m.target.name,
+                      ccNumber = m.ccNumber,
+                      channel = m.channel
+                    )
+                  }
+                )
+              }
+              dao.deleteMidiPcMappingsForProfile(pBundle.profile.id)
+              pBundle.pcMappings.forEach { pc ->
+                dao.upsertMidiPcMapping(
+                  MidiPcBankMappingEntity(
+                    id = pc.id.ifBlank { "pc_${pBundle.profile.id}_${pc.bankIndex}" },
+                    profileId = pBundle.profile.id,
+                    programNumber = pc.programNumber,
+                    bankIndex = pc.bankIndex,
+                    channel = pc.channel
+                  )
+                )
+              }
+              val isActiveTarget = pBundle.profile.id == bundle.settings.settings.activeProfileId ||
+                pBundle.profile.isActive
+              if (pBundle.profile.focusModeMidiNote == null && isActiveTarget && bundle.midiMapping.focusModeMidiNote != null) {
+                dao.updateProfileFocusModeMidiNote(
+                  pBundle.profile.id,
+                  bundle.midiMapping.focusModeMidiNote,
+                  System.currentTimeMillis()
+                )
+              }
+            }
           }
 
-          dao.saveCompleteProfile(
-            profile = profileEntity,
-            pads = padEntities,
-            settings = padSettingEntities
-          )
-          restoredProfileCount++
+          // Pastikan profil aktif menunjuk profil yang valid
+          val activeTargetId = targetProfiles.firstOrNull {
+            it.profile.id == bundle.settings.settings.activeProfileId || it.profile.isActive
+          }?.profile?.id ?: targetProfiles.first().profile.id
+          dao.setActiveProfile(activeTargetId)
+          settingsRepo.setActiveProfileId(activeTargetId)
+        }
 
-          if (options.restoreMidiMapping) {
-            dao.deleteMidiCcMappingsForProfile(pBundle.profile.id)
-            if (pBundle.ccMappings.isNotEmpty()) {
+        if (options.restoreMidiMapping && !options.restoreProfilesAndPads) {
+          onProgress(0.75f, "Memulihkan pemetaan MIDI…")
+          val existingProfiles = dao.getAllProfilesOnce().map { it.id }.toSet()
+          bundle.midiMapping.ccMappings.filter { it.profileId in existingProfiles }.let { validCc ->
+            if (validCc.isNotEmpty()) {
               dao.upsertMidiCcMappings(
-                pBundle.ccMappings.map { m ->
+                validCc.map { m ->
                   MidiCcMappingEntity(
-                    id = m.id.ifBlank { "cc_${pBundle.profile.id}_${m.target.name}" },
-                    profileId = pBundle.profile.id,
+                    id = m.id,
+                    profileId = m.profileId,
                     target = m.target.name,
                     ccNumber = m.ccNumber,
                     channel = m.channel
@@ -869,127 +943,81 @@ object PersistentConfigRestoreEngine {
                 }
               )
             }
-            dao.deleteMidiPcMappingsForProfile(pBundle.profile.id)
-            pBundle.pcMappings.forEach { pc ->
-              dao.upsertMidiPcMapping(
-                MidiPcBankMappingEntity(
-                  id = pc.id.ifBlank { "pc_${pBundle.profile.id}_${pc.bankIndex}" },
-                  profileId = pBundle.profile.id,
-                  programNumber = pc.programNumber,
-                  bankIndex = pc.bankIndex,
-                  channel = pc.channel
-                )
+          }
+          bundle.midiMapping.pcMappings.filter { it.profileId in existingProfiles }.forEach { pc ->
+            dao.upsertMidiPcMapping(
+              MidiPcBankMappingEntity(
+                id = pc.id,
+                profileId = pc.profileId,
+                programNumber = pc.programNumber,
+                bankIndex = pc.bankIndex,
+                channel = pc.channel
               )
-            }
-            val isActiveTarget = pBundle.profile.id == bundle.settings.settings.activeProfileId ||
-              pBundle.profile.isActive
-            if (pBundle.profile.focusModeMidiNote == null && isActiveTarget && bundle.midiMapping.focusModeMidiNote != null) {
-              dao.updateProfileFocusModeMidiNote(
-                pBundle.profile.id,
-                bundle.midiMapping.focusModeMidiNote,
-                System.currentTimeMillis()
-              )
-            }
+            )
+          }
+          val activeId = settingsRepo.settingsFlow.first().activeProfileId
+          if (activeId in existingProfiles) {
+            dao.updateProfileFocusModeMidiNote(
+              activeId,
+              bundle.midiMapping.focusModeMidiNote,
+              System.currentTimeMillis()
+            )
+          }
+          settingsRepo.setFocusModeMidiNote(bundle.midiMapping.focusModeMidiNote)
+        } else if (options.restoreMidiMapping) {
+          val activeProfileNote = targetProfiles.firstOrNull {
+            it.profile.id == bundle.settings.settings.activeProfileId || it.profile.isActive
+          }?.profile?.focusModeMidiNote ?: bundle.midiMapping.focusModeMidiNote
+          settingsRepo.setFocusModeMidiNote(activeProfileNote)
+        }
+
+        if (options.restoreSchedulerAndSequencer) {
+          onProgress(0.84f, "Memulihkan Scheduler & Sequencer…")
+          dao.deleteAllScheduledTasks()
+          bundle.scheduler.tasks.forEach { task ->
+            dao.upsertScheduledTaskAssigningRequestCode(task.toEntity())
+          }
+          dao.deleteAllSequencerPlaylists()
+          bundle.sequencer.playlists.forEach { pl ->
+            dao.upsertSequencerPlaylist(pl.toEntity())
+          }
+          if (rescheduleAlarms) {
+            runCatching { PadSchedulerManager.rescheduleAllActive(context) }
           }
         }
 
-        // Pastikan profil aktif menunjuk profil yang valid
-        val activeTargetId = targetProfiles.firstOrNull {
-          it.profile.id == bundle.settings.settings.activeProfileId || it.profile.isActive
-        }?.profile?.id ?: targetProfiles.first().profile.id
-        dao.setActiveProfile(activeTargetId)
-        settingsRepo.setActiveProfileId(activeTargetId)
-      }
-
-      if (options.restoreMidiMapping && !options.restoreProfilesAndPads) {
-        onProgress(0.75f, "Memulihkan pemetaan MIDI…")
-        val existingProfiles = dao.getAllProfilesOnce().map { it.id }.toSet()
-        bundle.midiMapping.ccMappings.filter { it.profileId in existingProfiles }.let { validCc ->
-          if (validCc.isNotEmpty()) {
-            dao.upsertMidiCcMappings(
-              validCc.map { m ->
-                MidiCcMappingEntity(
-                  id = m.id,
-                  profileId = m.profileId,
-                  target = m.target.name,
-                  ccNumber = m.ccNumber,
-                  channel = m.channel
-                )
-              }
-            )
-          }
-        }
-        bundle.midiMapping.pcMappings.filter { it.profileId in existingProfiles }.forEach { pc ->
-          dao.upsertMidiPcMapping(
-            MidiPcBankMappingEntity(
-              id = pc.id,
-              profileId = pc.profileId,
-              programNumber = pc.programNumber,
-              bankIndex = pc.bankIndex,
-              channel = pc.channel
-            )
-          )
-        }
-        val activeId = settingsRepo.settingsFlow.first().activeProfileId
-        dao.updateProfileFocusModeMidiNote(
-          activeId,
-          bundle.midiMapping.focusModeMidiNote,
-          System.currentTimeMillis()
-        )
-        settingsRepo.setFocusModeMidiNote(bundle.midiMapping.focusModeMidiNote)
-      } else if (options.restoreMidiMapping) {
-        val activeProfileNote = targetProfiles.firstOrNull {
-          it.profile.id == bundle.settings.settings.activeProfileId || it.profile.isActive
-        }?.profile?.focusModeMidiNote ?: bundle.midiMapping.focusModeMidiNote
-        settingsRepo.setFocusModeMidiNote(activeProfileNote)
-      }
-
-      if (options.restoreSchedulerAndSequencer) {
-        onProgress(0.84f, "Memulihkan Scheduler & Sequencer…")
-        dao.deleteAllScheduledTasks()
-        bundle.scheduler.tasks.forEach { task ->
-          dao.upsertScheduledTaskAssigningRequestCode(task.toEntity())
-        }
-        dao.deleteAllSequencerPlaylists()
-        bundle.sequencer.playlists.forEach { pl ->
-          dao.upsertSequencerPlaylist(pl.toEntity())
-        }
-        if (rescheduleAlarms) {
-          runCatching { PadSchedulerManager.rescheduleAllActive(context) }
-        }
-      }
-
-      if (options.restoreSettings) {
-        onProgress(0.92f, "Menerapkan pengaturan global…")
-        val restoredGs = bundle.settings.settings
-        val activeFallbackId = if (options.restoreProfilesAndPads && targetProfiles.isNotEmpty()) {
-          targetProfiles.firstOrNull {
-            it.profile.id == restoredGs.activeProfileId || it.profile.isActive
-          }?.profile?.id ?: targetProfiles.first().profile.id
-        } else {
-          restoredGs.activeProfileId
-        }
-        val finalGs = restoredGs.copy(
-          activeProfileId = activeFallbackId,
-          folderUri = effectiveMusicUri?.toString() ?: restoredGs.folderUri,
-          folderName = if (effectiveMusicUri != null) {
-            SafAudioScanner(context).resolveFolderDisplayName(effectiveMusicUri)
+        if (options.restoreSettings) {
+          onProgress(0.92f, "Menerapkan pengaturan global…")
+          val restoredGs = bundle.settings.settings
+          val activeFallbackId = if (options.restoreProfilesAndPads && targetProfiles.isNotEmpty()) {
+            targetProfiles.firstOrNull {
+              it.profile.id == restoredGs.activeProfileId || it.profile.isActive
+            }?.profile?.id ?: targetProfiles.first().profile.id
           } else {
-            restoredGs.folderName
-          },
-          hasCompletedOnboarding = true
-        )
-        settingsRepo.applyRestoredGlobalSettings(
-          gs = finalGs,
-          restoreSyncFolderConfig = false
-        )
-      } else if (effectiveMusicUri != null) {
-        val folderName = SafAudioScanner(context).resolveFolderDisplayName(effectiveMusicUri)
-        settingsRepo.setSelectedFolder(effectiveMusicUri.toString(), folderName)
-      }
+            restoredGs.activeProfileId
+          }
+          val finalGs = restoredGs.copy(
+            activeProfileId = activeFallbackId,
+            folderUri = effectiveMusicUri?.toString() ?: restoredGs.folderUri,
+            folderName = if (effectiveMusicUri != null) {
+              SafAudioScanner(context).resolveFolderDisplayName(effectiveMusicUri)
+            } else {
+              restoredGs.folderName
+            },
+            hasCompletedOnboarding = true
+          )
+          settingsRepo.applyRestoredGlobalSettings(
+            gs = finalGs,
+            restoreSyncFolderConfig = false
+          )
+        } else if (effectiveMusicUri != null) {
+          val folderName = SafAudioScanner(context).resolveFolderDisplayName(effectiveMusicUri)
+          settingsRepo.setSelectedFolder(effectiveMusicUri.toString(), folderName)
+        }
 
-      if (missingErrorLogs.isNotEmpty()) {
-        dao.insertErrorLogs(missingErrorLogs)
+        if (missingErrorLogs.isNotEmpty()) {
+          dao.insertErrorLogs(missingErrorLogs)
+        }
       }
 
       onProgress(1.0f, "Pemulihan selesai")
@@ -1003,7 +1031,16 @@ object PersistentConfigRestoreEngine {
         usedFallbackSnapshotName = inspection.usedFallbackSnapshotName,
         warnings = warnings
       )
-    }.getOrElse { err ->
+    } catch (ce: CancellationException) {
+      throw ce
+    } catch (err: Throwable) {
+      CrashLogManager.recordNonFatalToDao(
+        dao = dao,
+        source = "PersistentConfigRestoreEngine.applyRestore",
+        errorType = PadErrorType.PLAYBACK_ERROR,
+        throwable = err,
+        message = "Gagal memulihkan config: ${err.localizedMessage ?: err.javaClass.simpleName}"
+      )
       RestoreExecutionOutcome(
         success = false,
         errorMessage = err.localizedMessage ?: "Gagal memulihkan config"
@@ -1092,6 +1129,8 @@ object PersistentConfigRestoreEngine {
     reverbEnabled = reverbEnabled,
     reverbRoomSize = reverbRoomSize,
     reverbDamping = reverbDamping,
-    reverbMix = reverbMix
+    reverbMix = reverbMix,
+    retriggerMode = retriggerMode?.name,
+    maxVoices = maxVoices.coerceIn(0, 16)
   )
 }

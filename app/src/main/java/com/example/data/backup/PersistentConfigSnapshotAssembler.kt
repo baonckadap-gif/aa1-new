@@ -2,6 +2,7 @@ package com.example.data.backup
 
 import android.content.Context
 import com.example.audio.toDomain
+import com.example.data.local.db.PadLayoutEntity
 import com.example.data.local.db.PadProfileEntity
 import com.example.data.local.db.PadSettingEntity
 import com.example.data.local.db.SoundPadDao
@@ -23,6 +24,7 @@ import com.example.domain.model.PadSettings
 import com.example.domain.model.PadShapeStyle
 import com.example.domain.model.PadSurfaceFinish
 import com.example.domain.model.PadTriggerMode
+import com.example.domain.model.RetriggerMode
 import com.example.domain.model.SoundPad
 import com.example.scheduler.toDomain
 import kotlinx.coroutines.Dispatchers
@@ -145,7 +147,27 @@ object PersistentConfigSnapshotAssembler {
       }
     }
 
-    val layouts = PersistentConfigBundleSerializer.deriveLayoutsFromProfiles(profileBundles)
+    val storedLayouts = runCatching { dao.getAllLayoutsOnce() }.getOrDefault(emptyList()).map { entity ->
+      PadLayoutBackup(
+        layoutId = entity.id,
+        profileId = entity.profileId,
+        name = entity.name,
+        gridRows = entity.gridRows.coerceIn(1, 16),
+        gridCols = entity.gridCols.coerceIn(1, 16),
+        isDefault = entity.isDefault,
+        createdAtMs = entity.createdAtMs,
+        updatedAtMs = entity.updatedAtMs,
+        slots = LayoutBackupSerializer.decodeSlotsJson(entity.slotsJson)
+      )
+    }
+    val derivedLayouts = PersistentConfigBundleSerializer.deriveLayoutsFromProfiles(profileBundles)
+    val storedById = storedLayouts.associateBy { it.layoutId }
+    val layouts = buildList {
+      addAll(storedLayouts)
+      derivedLayouts.forEach { d ->
+        if (d.layoutId !in storedById) add(d)
+      }
+    }
     val presets = PersistentConfigBundleSerializer.deriveDefaultPresets(settings, profileBundles)
     val mainDeviceName = settings.preferredMainOutputName ?: outputDeviceNameResolver?.invoke(settings.preferredMainOutputId)
     val cueDeviceName = settings.preferredCueOutputName ?: outputDeviceNameResolver?.invoke(settings.preferredCueOutputId)
@@ -292,7 +314,11 @@ object PersistentConfigSnapshotAssembler {
         reverbEnabled = setting.reverbEnabled,
         reverbRoomSize = setting.reverbRoomSize,
         reverbDamping = setting.reverbDamping,
-        reverbMix = setting.reverbMix
+        reverbMix = setting.reverbMix,
+        retriggerMode = setting.retriggerMode?.let { raw ->
+          runCatching { RetriggerMode.valueOf(raw) }.getOrNull()
+        },
+        maxVoices = setting.maxVoices.coerceIn(0, 16)
       )
     }
 

@@ -15,6 +15,7 @@ import com.example.domain.model.PadSettings
 import com.example.domain.model.PadShapeStyle
 import com.example.domain.model.PadSurfaceFinish
 import com.example.domain.model.PadTriggerMode
+import com.example.domain.model.RetriggerMode
 import com.example.domain.model.SoundPad
 import com.example.domain.model.ThemeMode
 import com.example.ui.PadGridSlotManager
@@ -127,6 +128,8 @@ object ProfileJsonSerializer {
           put("reverbRoomSize", pad.settings.reverbRoomSize.toDouble())
           put("reverbDamping", pad.settings.reverbDamping.toDouble())
           put("reverbMix", pad.settings.reverbMix.toDouble())
+          put("retriggerMode", pad.settings.retriggerMode?.name ?: JSONObject.NULL)
+          put("maxVoices", pad.settings.maxVoices.coerceIn(0, 16))
         }
         val padObj = JSONObject().apply {
           put("uriString", pad.uriString)
@@ -268,7 +271,11 @@ object ProfileJsonSerializer {
         reverbEnabled = settingsObj.optBoolean("reverbEnabled", false),
         reverbRoomSize = settingsObj.optDouble("reverbRoomSize", 0.35).toFloat().coerceIn(0f, 1f),
         reverbDamping = settingsObj.optDouble("reverbDamping", 0.45).toFloat().coerceIn(0f, 1f),
-        reverbMix = settingsObj.optDouble("reverbMix", 0.25).toFloat().coerceIn(0f, 0.85f)
+        reverbMix = settingsObj.optDouble("reverbMix", 0.25).toFloat().coerceIn(0f, 0.85f),
+        retriggerMode = if (settingsObj.has("retriggerMode") && !settingsObj.isNull("retriggerMode")) {
+          runCatching { RetriggerMode.valueOf(settingsObj.optString("retriggerMode")) }.getOrNull()
+        } else null,
+        maxVoices = settingsObj.optInt("maxVoices", 0).coerceIn(0, 16)
       )
 
       val colorArgb = if (obj.isNull("colorArgb")) null else obj.optLong("colorArgb")

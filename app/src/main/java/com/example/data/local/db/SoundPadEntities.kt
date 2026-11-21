@@ -114,7 +114,9 @@ data class PadSettingEntity(
   val reverbEnabled: Boolean = false,
   val reverbRoomSize: Float = 0.35f,
   val reverbDamping: Float = 0.45f,
-  val reverbMix: Float = 0.25f
+  val reverbMix: Float = 0.25f,
+  val retriggerMode: String? = null,
+  val maxVoices: Int = 0
 )
 
 @Entity(
@@ -210,3 +212,26 @@ data class MidiPcBankMappingEntity(
   val channel: Int = -1
 )
 
+@Entity(
+  tableName = "pad_layouts",
+  foreignKeys = [
+    ForeignKey(
+      entity = PadProfileEntity::class,
+      parentColumns = ["id"],
+      childColumns = ["profileId"],
+      onDelete = ForeignKey.CASCADE
+    )
+  ],
+  indices = [Index("profileId")]
+)
+data class PadLayoutEntity(
+  @PrimaryKey val id: String,
+  val profileId: String,
+  val name: String,
+  val gridRows: Int = 4,
+  val gridCols: Int = 4,
+  val isDefault: Boolean = false,
+  val slotsJson: String = "[]",
+  val createdAtMs: Long,
+  val updatedAtMs: Long
+)

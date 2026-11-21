@@ -304,6 +304,8 @@ object SoundPadPreMigrationBackupManager {
             put("reverbRoomSize", s.reverbRoomSize)
             put("reverbDamping", s.reverbDamping)
             put("reverbMix", s.reverbMix)
+            s.retriggerMode?.name?.let { put("retriggerMode", it) } ?: putNull("retriggerMode")
+            put("maxVoices", s.maxVoices.coerceIn(0, 16))
           }
           db.insert("pad_settings", SQLiteDatabase.CONFLICT_REPLACE, settingValues)
           restoredRows++
@@ -474,7 +476,11 @@ object SoundPadPreMigrationBackupManager {
           reverbEnabled = c.optBool("reverbEnabled", false),
           reverbRoomSize = c.optFloat("reverbRoomSize", 0.35f),
           reverbDamping = c.optFloat("reverbDamping", 0.45f),
-          reverbMix = c.optFloat("reverbMix", 0.25f)
+          reverbMix = c.optFloat("reverbMix", 0.25f),
+          retriggerMode = c.optNullStr("retriggerMode")?.let { raw ->
+            runCatching { com.example.domain.model.RetriggerMode.valueOf(raw) }.getOrNull()
+          },
+          maxVoices = c.optInt("maxVoices", 0).coerceIn(0, 16)
         )
       }
     }

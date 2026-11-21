@@ -96,6 +96,7 @@ import com.example.domain.model.PadShapeStyle
 import com.example.domain.model.PadSurfaceFinish
 import com.example.domain.model.PadTriggerMode
 import com.example.domain.model.PadVisualConfig
+import com.example.domain.model.RetriggerMode
 import com.example.domain.model.SoundPad
 import com.example.domain.model.toVisualConfig
 import com.example.ui.theme.SoundPadColorPalette
@@ -118,6 +119,8 @@ fun PadSettingsSheet(
   defaultCornerGlowColor: Color,
   defaultPadColorMode: DefaultPadColorMode = DefaultPadColorMode.GRAY,
   defaultCustomPadColorArgb: Long = SoundPadColorPalette.DEFAULT_CUSTOM_PAD_COLOR_ARGB,
+  globalRetriggerMode: RetriggerMode = RetriggerMode.RESTART,
+  globalMaxVoices: Int = 16,
   isCuePlaying: Boolean = false,
   isPreparingReverse: Boolean = false,
   onSelectPad: (String) -> Unit,
@@ -1242,6 +1245,156 @@ fun PadSettingsSheet(
                 modifier = Modifier.weight(1f)
               )
             }
+          }
+        }
+
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+          val globalLabel = stringResource(
+            if (globalRetriggerMode == RetriggerMode.LAYER) R.string.retrigger_mode_layer else R.string.retrigger_mode_restart
+          )
+          Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+          ) {
+            Text(
+              text = stringResource(R.string.pad_retrigger_mode_title),
+              style = MaterialTheme.typography.labelMedium,
+              color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            IconButton(
+              onClick = {
+                val updated = settings.copy(retriggerMode = null, maxVoices = 0)
+                settings = updated
+                onSettingsChange(updated)
+              },
+              modifier = Modifier
+                .minimumInteractiveComponentSize()
+                .testTag("reset_pad_retrigger_button")
+            ) {
+              Icon(
+                imageVector = Icons.Filled.RestartAlt,
+                contentDescription = stringResource(R.string.cd_reset_pad_retrigger),
+                modifier = Modifier.size(18.dp)
+              )
+            }
+          }
+          Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+          ) {
+            FilterChip(
+              selected = settings.retriggerMode == null,
+              onClick = {
+                val updated = settings.copy(retriggerMode = null)
+                settings = updated
+                onSettingsChange(updated)
+              },
+              label = {
+                Text(
+                  text = stringResource(R.string.retrigger_mode_inherit, globalLabel),
+                  style = MaterialTheme.typography.labelSmall,
+                  maxLines = 1,
+                  overflow = TextOverflow.Ellipsis
+                )
+              },
+              modifier = Modifier
+                .weight(1.25f)
+                .testTag("pad_retrigger_inherit")
+            )
+            FilterChip(
+              selected = settings.retriggerMode == RetriggerMode.RESTART,
+              onClick = {
+                val updated = settings.copy(retriggerMode = RetriggerMode.RESTART)
+                settings = updated
+                onSettingsChange(updated)
+              },
+              label = {
+                Text(
+                  text = stringResource(R.string.retrigger_mode_restart),
+                  style = MaterialTheme.typography.labelSmall,
+                  maxLines = 1
+                )
+              },
+              modifier = Modifier
+                .weight(0.9f)
+                .testTag("pad_retrigger_restart")
+            )
+            FilterChip(
+              selected = settings.retriggerMode == RetriggerMode.LAYER,
+              onClick = {
+                val updated = settings.copy(retriggerMode = RetriggerMode.LAYER)
+                settings = updated
+                onSettingsChange(updated)
+              },
+              label = {
+                Text(
+                  text = stringResource(R.string.retrigger_mode_layer),
+                  style = MaterialTheme.typography.labelSmall,
+                  maxLines = 1,
+                  overflow = TextOverflow.Ellipsis
+                )
+              },
+              modifier = Modifier
+                .weight(1f)
+                .testTag("pad_retrigger_layer")
+            )
+          }
+
+          val isEffectiveLayer = (settings.retriggerMode ?: globalRetriggerMode) == RetriggerMode.LAYER
+          Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+          ) {
+            Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
+              Text(
+                text = stringResource(R.string.pad_layer_switch_title),
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.onSurface
+              )
+              Text(
+                text = stringResource(R.string.pad_layer_switch_subtitle),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+              )
+            }
+            Switch(
+              checked = isEffectiveLayer,
+              onCheckedChange = { checked ->
+                val targetMode = if (checked) RetriggerMode.LAYER else RetriggerMode.RESTART
+                val updated = settings.copy(
+                  retriggerMode = if (targetMode == globalRetriggerMode) null else targetMode
+                )
+                settings = updated
+                onSettingsChange(updated)
+              },
+              modifier = Modifier.testTag("pad_layer_switch")
+            )
+          }
+
+          Column {
+            val effectiveCapLabel = if (settings.maxVoices <= 0) {
+              stringResource(R.string.pad_max_voices_inherit, globalMaxVoices)
+            } else {
+              stringResource(R.string.pad_max_voices_custom, settings.maxVoices)
+            }
+            Text(
+              text = effectiveCapLabel,
+              style = MaterialTheme.typography.labelMedium,
+              color = if (settings.maxVoices > 0) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Slider(
+              value = settings.maxVoices.coerceIn(0, 16).toFloat(),
+              onValueChange = { raw ->
+                val updated = settings.copy(maxVoices = raw.roundToInt().coerceIn(0, 16))
+                settings = updated
+                onSettingsChange(updated)
+              },
+              valueRange = 0f..16f,
+              steps = 15,
+              modifier = Modifier.testTag("pad_max_voices_slider")
+            )
           }
         }
 

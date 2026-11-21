@@ -11,7 +11,9 @@ import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.example.data.profile.ProfileJsonSerializer
+import com.example.domain.model.AnimationMode
 import com.example.domain.model.AppLanguage
+import com.example.domain.model.ColorBlindMode
 import com.example.domain.model.DefaultPadColorMode
 import com.example.domain.model.DragDropConflictMode
 import com.example.domain.model.EqPreset
@@ -22,6 +24,7 @@ import com.example.domain.model.GridPreset
 import com.example.domain.model.HapticIntensity
 import com.example.domain.model.PadShapeStyle
 import com.example.domain.model.PlayMode
+import com.example.domain.model.RetriggerMode
 import com.example.domain.model.ThemeMode
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
@@ -106,6 +109,12 @@ class GlobalSettingsRepository(private val context: Context) {
     val LAST_BLE_MIDI_ADDRESS = stringPreferencesKey("last_ble_midi_address")
     val LAST_BLE_MIDI_NAME = stringPreferencesKey("last_ble_midi_name")
     val BLE_AUTO_RECONNECT_ENABLED = booleanPreferencesKey("ble_auto_reconnect_enabled")
+    val ANIMATION_MODE = stringPreferencesKey("animation_mode")
+    val SHOW_LATENCY_DEBUG_OVERLAY = booleanPreferencesKey("show_latency_debug_overlay")
+    val RETRIGGER_MODE = stringPreferencesKey("retrigger_mode")
+    val MAX_VOICES = intPreferencesKey("max_voices")
+    val HIGH_CONTRAST_ENABLED = booleanPreferencesKey("high_contrast_enabled")
+    val COLOR_BLIND_MODE = stringPreferencesKey("color_blind_mode")
   }
 
   val settingsFlow: Flow<GlobalSettings> = context.soundPadDataStore.data.map { prefs ->
@@ -156,6 +165,17 @@ class GlobalSettingsRepository(private val context: Context) {
     val dragDropConflictMode = runCatching {
       prefs[Keys.DRAG_DROP_CONFLICT_MODE]?.let { DragDropConflictMode.valueOf(it) }
     }.getOrNull() ?: DragDropConflictMode.SWAP
+
+    val visualEffectsEnabled = prefs[Keys.VISUAL_EFFECTS_ENABLED] ?: true
+    val animationMode = runCatching {
+      prefs[Keys.ANIMATION_MODE]?.let { AnimationMode.valueOf(it) }
+    }.getOrNull() ?: if (visualEffectsEnabled) AnimationMode.FULL else AnimationMode.OFF
+    val retriggerMode = runCatching {
+      prefs[Keys.RETRIGGER_MODE]?.let { RetriggerMode.valueOf(it) }
+    }.getOrNull() ?: RetriggerMode.RESTART
+    val colorBlindMode = runCatching {
+      prefs[Keys.COLOR_BLIND_MODE]?.let { ColorBlindMode.valueOf(it) }
+    }.getOrNull() ?: ColorBlindMode.NONE
 
     GlobalSettings(
       activeProfileId = prefs[Keys.ACTIVE_PROFILE_ID] ?: "default_profile",
@@ -225,7 +245,13 @@ class GlobalSettingsRepository(private val context: Context) {
       dragDropConflictMode = dragDropConflictMode,
       lastBleMidiAddress = prefs[Keys.LAST_BLE_MIDI_ADDRESS],
       lastBleMidiName = prefs[Keys.LAST_BLE_MIDI_NAME],
-      bleAutoReconnectEnabled = prefs[Keys.BLE_AUTO_RECONNECT_ENABLED] ?: true
+      bleAutoReconnectEnabled = prefs[Keys.BLE_AUTO_RECONNECT_ENABLED] ?: true,
+      animationMode = animationMode,
+      showLatencyDebugOverlay = prefs[Keys.SHOW_LATENCY_DEBUG_OVERLAY] ?: false,
+      retriggerMode = retriggerMode,
+      maxVoices = (prefs[Keys.MAX_VOICES] ?: 16).coerceIn(1, 16),
+      highContrastEnabled = prefs[Keys.HIGH_CONTRAST_ENABLED] ?: false,
+      colorBlindMode = colorBlindMode
     )
   }
 
@@ -283,7 +309,51 @@ class GlobalSettingsRepository(private val context: Context) {
   }
 
   suspend fun setVisualEffectsEnabled(enabled: Boolean) {
-    context.soundPadDataStore.edit { prefs -> prefs[Keys.VISUAL_EFFECTS_ENABLED] = enabled }
+    context.soundPadDataStore.edit { prefs ->
+      prefs[Keys.VISUAL_EFFECTS_ENABLED] = enabled
+      if (!enabled) {
+        prefs[Keys.ANIMATION_MODE] = AnimationMode.OFF.name
+      } else if (prefs[Keys.ANIMATION_MODE] == AnimationMode.OFF.name) {
+        prefs[Keys.ANIMATION_MODE] = AnimationMode.FULL.name
+      }
+    }
+  }
+
+  suspend fun setAnimationMode(mode: AnimationMode) {
+    context.soundPadDataStore.edit { prefs ->
+      prefs[Keys.ANIMATION_MODE] = mode.name
+      prefs[Keys.VISUAL_EFFECTS_ENABLED] = mode != AnimationMode.OFF
+    }
+  }
+
+  suspend fun setShowLatencyDebugOverlay(enabled: Boolean) {
+    context.soundPadDataStore.edit { prefs ->
+      prefs[Keys.SHOW_LATENCY_DEBUG_OVERLAY] = enabled
+    }
+  }
+
+  suspend fun setRetriggerMode(mode: RetriggerMode) {
+    context.soundPadDataStore.edit { prefs ->
+      prefs[Keys.RETRIGGER_MODE] = mode.name
+    }
+  }
+
+  suspend fun setMaxVoices(maxVoices: Int) {
+    context.soundPadDataStore.edit { prefs ->
+      prefs[Keys.MAX_VOICES] = maxVoices.coerceIn(1, 16)
+    }
+  }
+
+  suspend fun setHighContrastEnabled(enabled: Boolean) {
+    context.soundPadDataStore.edit { prefs ->
+      prefs[Keys.HIGH_CONTRAST_ENABLED] = enabled
+    }
+  }
+
+  suspend fun setColorBlindMode(mode: ColorBlindMode) {
+    context.soundPadDataStore.edit { prefs ->
+      prefs[Keys.COLOR_BLIND_MODE] = mode.name
+    }
   }
 
   suspend fun setKeepScreenOn(enabled: Boolean) {
@@ -689,6 +759,12 @@ class GlobalSettingsRepository(private val context: Context) {
         prefs.remove(Keys.LAST_BLE_MIDI_NAME)
       }
       prefs[Keys.BLE_AUTO_RECONNECT_ENABLED] = gs.bleAutoReconnectEnabled
+      prefs[Keys.ANIMATION_MODE] = gs.animationMode.name
+      prefs[Keys.SHOW_LATENCY_DEBUG_OVERLAY] = gs.showLatencyDebugOverlay
+      prefs[Keys.RETRIGGER_MODE] = gs.retriggerMode.name
+      prefs[Keys.MAX_VOICES] = gs.maxVoices.coerceIn(1, 16)
+      prefs[Keys.HIGH_CONTRAST_ENABLED] = gs.highContrastEnabled
+      prefs[Keys.COLOR_BLIND_MODE] = gs.colorBlindMode.name
       if (restoreSyncFolderConfig) {
         if (!gs.persistentBackupFolderUri.isNullOrBlank()) {
           prefs[Keys.PERSISTENT_BACKUP_FOLDER_URI] = gs.persistentBackupFolderUri

@@ -28,12 +28,34 @@ object ZipBackupArchiver {
   private const val MAX_ZIP_ENTRIES = 512
   private const val MAX_ENTRY_BYTES = 10 * 1024 * 1024 // 10 MB per JSON entry
   private const val SHARE_CACHE_DIR = "shared_backups"
+  const val ENCRYPTED_PAYLOAD_ENTRY = "encrypted_backup.sppenc"
 
   fun exportBundleToZipOutputStream(
     bundle: PersistentConfigBundle,
     outputStream: OutputStream,
-    includeWaveforms: Boolean = bundle.meta.includesWaveforms
+    includeWaveforms: Boolean = bundle.meta.includesWaveforms,
+    passphrase: String? = null
   ): Int {
+    val trimmedPass = passphrase?.trim().orEmpty()
+    if (trimmedPass.isNotEmpty()) {
+      val encryptedMeta = bundle.meta.copy(isEncrypted = true)
+      val encryptedBundle = bundle.copy(meta = encryptedMeta)
+      val plainCombined = PersistentConfigBundleSerializer.exportCombinedJson(encryptedBundle, includeWaveforms)
+      val encryptedEnvelope = BackupCryptoManager.encryptText(plainCombined, trimmedPass)
+      val metaJson = ConfigMetaBackupSerializer.exportBackupJson(encryptedMeta).toString(2)
+      ZipOutputStream(outputStream.buffered()).use { zos ->
+        zos.putNextEntry(ZipEntry(PersistentConfigSchema.FILE_CONFIG_META))
+        zos.write(metaJson.toByteArray(StandardCharsets.UTF_8))
+        zos.closeEntry()
+
+        zos.putNextEntry(ZipEntry(ENCRYPTED_PAYLOAD_ENTRY))
+        zos.write(encryptedEnvelope.toByteArray(StandardCharsets.UTF_8))
+        zos.closeEntry()
+        zos.finish()
+      }
+      return 2
+    }
+
     val fileMap = PersistentConfigBundleSerializer.exportToFolderFiles(bundle, includeWaveforms)
     ZipOutputStream(outputStream.buffered()).use { zos ->
       fileMap.forEach { (relativePath, content) ->
@@ -51,14 +73,15 @@ object ZipBackupArchiver {
     context: Context,
     bundle: PersistentConfigBundle,
     targetUri: Uri,
-    includeWaveforms: Boolean = bundle.meta.includesWaveforms
+    includeWaveforms: Boolean = bundle.meta.includesWaveforms,
+    passphrase: String? = null
   ): Result<Int> = withContext(Dispatchers.IO) {
     runCatching {
       val stream = context.contentResolver.openOutputStream(targetUri, "wt")
         ?: context.contentResolver.openOutputStream(targetUri)
         ?: error("Tidak dapat membuka lokasi tujuan file .zip")
       stream.use { out ->
-        exportBundleToZipOutputStream(bundle, out, includeWaveforms)
+        exportBundleToZipOutputStream(bundle, out, includeWaveforms, passphrase)
       }
     }
   }
@@ -73,7 +96,9 @@ object ZipBackupArchiver {
           count++
           require(count <= MAX_ZIP_ENTRIES) { "Arsip ZIP memiliki terlalu banyak file (> $MAX_ZIP_ENTRIES)" }
           val safePath = sanitizeZipEntryPath(entry.name)
-          if (safePath != null && safePath.endsWith(".json", ignoreCase = true)) {
+          if (safePath != null &&
+            (safePath.endsWith(".json", ignoreCase = true) || safePath.endsWith(".sppenc", ignoreCase = true))
+          ) {
             val baos = ByteArrayOutputStream()
             val buf = ByteArray(8192)
             var total = 0
@@ -94,15 +119,29 @@ object ZipBackupArchiver {
     return result
   }
 
-  suspend fun inspectZipUri(
-    context: Context,
-    zipUri: Uri,
-    displayName: String = "SoundPadPro_Backup.zip"
-  ): Result<BackupInspectionSummary> = withContext(Dispatchers.IO) {
-    runCatching {
-      val entries = context.contentResolver.openInputStream(zipUri)?.use { stream ->
-        readZipEntriesSafe(stream)
-      } ?: error("Tidak dapat membuka file arsip .zip")
+  fun inspectZipEntriesMap(
+    entries: Map<String, String>,
+    displayName: String = "SoundPadPro_Backup.zip",
+    passphrase: String? = null
+  ): Result<BackupInspectionSummary> {
+    return runCatching {
+      val encryptedEntry = entries.entries.firstOrNull { (path, content) ->
+        path.endsWith(ENCRYPTED_PAYLOAD_ENTRY, ignoreCase = true) || BackupCryptoManager.isEncryptedPayload(content)
+      }?.value
+
+      if (encryptedEntry != null) {
+        val trimmedPass = passphrase?.trim().orEmpty()
+        if (trimmedPass.isEmpty()) {
+          throw EncryptedBackupPassphraseRequiredException()
+        }
+        val decryptedCombined = BackupCryptoManager.decryptText(encryptedEntry, trimmedPass)
+        val combinedEntries = mapOf(PersistentConfigSchema.FILE_COMBINED_CONFIG to decryptedCombined)
+        return@runCatching PersistentConfigRestoreEngine.inspectFolderFilesMap(
+          files = combinedEntries,
+          sourceLabel = displayName,
+          sourceKind = BackupSourceKind.ZIP_ARCHIVE
+        ).getOrThrow()
+      }
 
       PersistentConfigRestoreEngine.inspectFolderFilesMap(
         files = entries,
@@ -112,10 +151,30 @@ object ZipBackupArchiver {
     }
   }
 
+  suspend fun inspectZipUri(
+    context: Context,
+    zipUri: Uri,
+    displayName: String = "SoundPadPro_Backup.zip",
+    passphrase: String? = null
+  ): Result<BackupInspectionSummary> = withContext(Dispatchers.IO) {
+    runCatching {
+      val entries = context.contentResolver.openInputStream(zipUri)?.use { stream ->
+        readZipEntriesSafe(stream)
+      } ?: error("Tidak dapat membuka file arsip .zip")
+
+      inspectZipEntriesMap(
+        entries = entries,
+        displayName = displayName,
+        passphrase = passphrase
+      ).getOrThrow()
+    }
+  }
+
   suspend fun createShareableZipFile(
     context: Context,
     bundle: PersistentConfigBundle,
-    includeWaveforms: Boolean = bundle.meta.includesWaveforms
+    includeWaveforms: Boolean = bundle.meta.includesWaveforms,
+    passphrase: String? = null
   ): Result<Pair<File, Uri>> = withContext(Dispatchers.IO) {
     runCatching {
       val dir = File(context.cacheDir, SHARE_CACHE_DIR)
@@ -130,7 +189,7 @@ object ZipBackupArchiver {
       val stamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
       val zipFile = File(dir, "SoundPadPro_Backup_$stamp.zip")
       FileOutputStream(zipFile).use { fos ->
-        exportBundleToZipOutputStream(bundle, fos, includeWaveforms)
+        exportBundleToZipOutputStream(bundle, fos, includeWaveforms, passphrase)
       }
       val contentUri = FileProvider.getUriForFile(
         context,

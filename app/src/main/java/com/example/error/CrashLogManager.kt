@@ -2,8 +2,17 @@ package com.example.error
 
 import android.content.Context
 import android.os.Build
+import android.util.Log
+import com.example.data.local.db.ErrorLogEntity
+import com.example.data.local.db.SoundPadDao
+import com.example.data.local.db.SoundPadDatabase
 import com.example.domain.model.AppErrorLog
 import com.example.domain.model.PadErrorType
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import org.json.JSONObject
 import java.io.File
 import java.text.SimpleDateFormat
@@ -13,7 +22,9 @@ import java.util.UUID
 
 object CrashLogManager {
 
+  private const val TAG = "SoundPadCrashLog"
   private const val PENDING_CRASH_FILE = "pending_crash_log.json"
+  private val logScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
   @Volatile
   private var installed = false
@@ -68,6 +79,73 @@ object CrashLogManager {
     }.getOrElse {
       runCatching { file.delete() }
       null
+    }
+  }
+
+  fun recordNonFatal(
+    context: Context,
+    source: String,
+    errorType: PadErrorType = PadErrorType.PLAYBACK_ERROR,
+    throwable: Throwable? = null,
+    message: String = throwable?.localizedMessage ?: throwable?.message ?: errorType.label,
+    suggestion: String = errorType.defaultSuggestion,
+    padId: String? = null,
+    uriString: String? = null
+  ) {
+    if (throwable is CancellationException) throw throwable
+    Log.e(TAG, "[$source] $message", throwable)
+    val appCtx = context.applicationContext
+    val stack = throwable?.stackTraceToString()?.take(4000) ?: ""
+    val entity = ErrorLogEntity(
+      id = "err_${UUID.randomUUID()}",
+      timestampMs = System.currentTimeMillis(),
+      fileName = source,
+      uriString = uriString,
+      errorType = errorType.name,
+      message = message,
+      suggestion = suggestion,
+      stackTrace = stack,
+      padId = padId
+    )
+    logScope.launch {
+      try {
+        SoundPadDatabase.getInstance(appCtx).soundPadDao().insertErrorLog(entity)
+      } catch (e: Exception) {
+        Log.e(TAG, "Gagal menulis ErrorLogEntity ke Room: ${e.message}")
+      }
+    }
+  }
+
+  suspend fun recordNonFatalToDao(
+    dao: SoundPadDao,
+    source: String,
+    errorType: PadErrorType = PadErrorType.PLAYBACK_ERROR,
+    throwable: Throwable? = null,
+    message: String = throwable?.localizedMessage ?: throwable?.message ?: errorType.label,
+    suggestion: String = errorType.defaultSuggestion,
+    padId: String? = null,
+    uriString: String? = null
+  ) {
+    if (throwable is CancellationException) throw throwable
+    Log.e(TAG, "[$source] $message", throwable)
+    val stack = throwable?.stackTraceToString()?.take(4000) ?: ""
+    val entity = ErrorLogEntity(
+      id = "err_${UUID.randomUUID()}",
+      timestampMs = System.currentTimeMillis(),
+      fileName = source,
+      uriString = uriString,
+      errorType = errorType.name,
+      message = message,
+      suggestion = suggestion,
+      stackTrace = stack,
+      padId = padId
+    )
+    try {
+      dao.insertErrorLog(entity)
+    } catch (ce: CancellationException) {
+      throw ce
+    } catch (e: Exception) {
+      Log.e(TAG, "Gagal menulis ErrorLogEntity ke Room: ${e.message}")
     }
   }
 

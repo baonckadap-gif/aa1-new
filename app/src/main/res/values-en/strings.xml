@@ -488,4 +488,33 @@
     <string name="cd_move_bank_down">Move bank down</string>
     <string name="cd_reset_default_color">Reset default color</string>
     <string name="cd_select_preset_color">Select color %1$s</string>
+
+    <!-- Stage 2 Latency Optimization & Developer Overlay -->
+    <string name="settings_tab_developer">Developer</string>
+    <string name="settings_animation_mode_title">PAD ANIMATION MODE</string>
+    <string name="settings_animation_mode_subtitle">Choose Full (spring + glow), Light (fast colors), or Off (no extra frames)</string>
+    <string name="developer_latency_overlay_title">Audio Latency Debug Overlay</string>
+    <string name="developer_latency_overlay_subtitle">Show live tap-to-sound ms, dispatcher queue, and slot pool telemetry over grid</string>
+    <string name="developer_latency_card_title">LATENCY &amp; AUDIO ENGINE TELEMETRY</string>
+    <string name="developer_latency_reset_btn">Reset Stats</string>
+    <string name="developer_latency_ping_btn">Ping Engine</string>
+    <string name="cd_close_latency_overlay">Close latency debug overlay</string>
+    <string name="cd_reset_latency_overlay">Reset latency statistics</string>
+
+    <!-- Stage 3 Retrigger & Multi-Voice Polyphony -->
+    <string name="settings_retrigger_mode_title">GLOBAL RETRIGGER MODE</string>
+    <string name="settings_retrigger_mode_subtitle">Restart cuts the previous voice on the same pad; Layer stacks polyphonic voices</string>
+    <string name="retrigger_mode_restart">Restart</string>
+    <string name="retrigger_mode_layer">Layer (Polyphony)</string>
+    <string name="retrigger_mode_inherit">Follow Global (%1$s)</string>
+    <string name="settings_max_voices_title">MAX POLYPHONY VOICES (%1$d / 16)</string>
+    <string name="settings_max_voices_subtitle">Maximum concurrent active mixer voices before automatic voice stealing</string>
+    <string name="cd_reset_max_voices">Reset max polyphony to 16 voices</string>
+    <string name="pad_retrigger_mode_title">PAD RETRIGGER MODE</string>
+    <string name="pad_layer_switch_title">Polyphonic Layer Mode</string>
+    <string name="pad_layer_switch_subtitle">Rapid taps stack concurrent voices without cutting off previous notes</string>
+    <string name="pad_max_voices_inherit">PAD VOICE CAP (Follow Global: %1$d)</string>
+    <string name="pad_max_voices_custom">PAD VOICE CAP (%1$d voices)</string>
+    <string name="cd_reset_pad_retrigger">Reset pad retrigger mode and voice cap</string>
+    <string name="cd_pad_voice_count_badge">%1$d active voices</string>
 </resources>

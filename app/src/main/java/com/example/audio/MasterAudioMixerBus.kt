@@ -33,8 +33,31 @@ class MasterAudioMixerBus(
 
   companion object {
     const val DEFAULT_BUS_SAMPLE_RATE = 48000
+    const val DEFAULT_FRAMES_PER_BURST = 256
     private const val MIXER_BLOCK_MS = 10
     private const val BUS_RECORD_SLOT_ID = "__master_mixer_bus__"
+
+    fun alignFramesToBurst(targetFrames: Int, framesPerBurst: Int, minFrames: Int = 256): Int {
+      val burst = framesPerBurst.coerceIn(64, 2048)
+      val floored = maxOf(targetFrames, minFrames)
+      val multiples = ((floored + burst - 1) / burst).coerceAtLeast(1)
+      return multiples * burst
+    }
+
+    fun alignBufferBytesToBurst(
+      sampleRateHz: Int,
+      framesPerBurst: Int,
+      minBufBytes: Int,
+      requestedBufferMs: Int,
+      bytesPerFrame: Int = 4
+    ): Int {
+      val burst = framesPerBurst.coerceIn(64, 2048)
+      val burstBytes = burst * bytesPerFrame
+      val targetFrames = (sampleRateHz * requestedBufferMs.coerceIn(20, 200)) / 1000
+      val rawBytes = maxOf(minBufBytes, targetFrames * bytesPerFrame)
+      val multiples = ((rawBytes + burstBytes - 1) / burstBytes).coerceAtLeast(1)
+      return multiples * burstBytes
+    }
   }
 
   private val slotBuffers = ConcurrentHashMap<String, SlotPcmRingBuffer>()
@@ -49,6 +72,15 @@ class MasterAudioMixerBus(
 
   @Volatile
   private var busSampleRateHz: Int = DEFAULT_BUS_SAMPLE_RATE
+
+  @Volatile
+  private var busFramesPerBurst: Int = DEFAULT_FRAMES_PER_BURST
+
+  val nativeSampleRateHz: Int
+    get() = busSampleRateHz
+
+  val framesPerBurst: Int
+    get() = busFramesPerBurst
 
   @Volatile
   private var preferredOutputDevice: AudioDeviceInfo? = null
@@ -106,8 +138,9 @@ class MasterAudioMixerBus(
       if (isActivelyHandlingOutput && audioTrack != null && runningFlag.get()) {
         return true
       }
-      val nativeRate = queryNativeOutputSampleRate()
+      val (nativeRate, burstFrames) = queryNativeOutputSpec()
       busSampleRateHz = nativeRate
+      busFramesPerBurst = burstFrames
       limiterProcessor.configureForFormat(nativeRate, 2)
 
       val minBufBytes = runCatching {
@@ -123,8 +156,12 @@ class MasterAudioMixerBus(
         return false
       }
 
-      val targetBytes = ((nativeRate * requestedBufferMs.coerceIn(20, 200)) / 1000) * 4
-      val bufferBytes = maxOf(minBufBytes, targetBytes)
+      val bufferBytes = alignBufferBytesToBurst(
+        sampleRateHz = nativeRate,
+        framesPerBurst = burstFrames,
+        minBufBytes = minBufBytes,
+        requestedBufferMs = requestedBufferMs
+      )
 
       val track = runCatching {
         val attrs = AudioAttributes.Builder()
@@ -194,17 +231,32 @@ class MasterAudioMixerBus(
     stop()
   }
 
-  private fun queryNativeOutputSampleRate(): Int {
+  private fun queryNativeOutputSpec(): Pair<Int, Int> {
     return runCatching {
       val am = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
-      val raw = am?.getProperty(AudioManager.PROPERTY_OUTPUT_SAMPLE_RATE)?.toIntOrNull()
-      if (raw == 44100 || raw == 48000) raw else DEFAULT_BUS_SAMPLE_RATE
-    }.getOrDefault(DEFAULT_BUS_SAMPLE_RATE)
+      val rawRate = am?.getProperty(AudioManager.PROPERTY_OUTPUT_SAMPLE_RATE)?.toIntOrNull()
+      val rate = if (rawRate == 44100 || rawRate == 48000) rawRate else DEFAULT_BUS_SAMPLE_RATE
+      val rawBurst = am?.getProperty(AudioManager.PROPERTY_OUTPUT_FRAMES_PER_BUFFER)?.toIntOrNull()
+      val burst = if (rawBurst != null && rawBurst in 64..2048) rawBurst else DEFAULT_FRAMES_PER_BURST
+      rate to burst
+    }.getOrDefault(DEFAULT_BUS_SAMPLE_RATE to DEFAULT_FRAMES_PER_BURST)
+  }
+
+  fun refreshHardwareAudioSpec(): Pair<Int, Int> {
+    val spec = queryNativeOutputSpec()
+    busSampleRateHz = spec.first
+    busFramesPerBurst = spec.second
+    return spec
   }
 
   private fun runMixerLoop(track: AudioTrack, sampleRateHz: Int) {
     runCatching { Process.setThreadPriority(Process.THREAD_PRIORITY_AUDIO) }
-    val framesPerBlock = ((sampleRateHz * MIXER_BLOCK_MS) / 1000).coerceAtLeast(256)
+    val targetFrames = (sampleRateHz * MIXER_BLOCK_MS) / 1000
+    val framesPerBlock = alignFramesToBurst(
+      targetFrames = targetFrames,
+      framesPerBurst = busFramesPerBurst,
+      minFrames = busFramesPerBurst.coerceAtLeast(192)
+    )
     val samplesPerBlock = framesPerBlock * 2
     val mixFloat = FloatArray(samplesPerBlock)
     val pcmShort = ShortArray(samplesPerBlock)

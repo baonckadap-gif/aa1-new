@@ -2,7 +2,9 @@ package com.example.data.backup
 
 import com.example.data.profile.ExportedProfileBundle
 import com.example.data.profile.ProfileJsonSerializer
+import com.example.domain.model.AnimationMode
 import com.example.domain.model.AppLanguage
+import com.example.domain.model.ColorBlindMode
 import com.example.domain.model.DefaultPadColorMode
 import com.example.domain.model.DragDropConflictMode
 import com.example.domain.model.EqPreset
@@ -13,6 +15,7 @@ import com.example.domain.model.GridPreset
 import com.example.domain.model.HapticIntensity
 import com.example.domain.model.PadShapeStyle
 import com.example.domain.model.PlayMode
+import com.example.domain.model.RetriggerMode
 import com.example.domain.model.ThemeMode
 import org.json.JSONArray
 import org.json.JSONObject
@@ -101,6 +104,12 @@ object FullBackupSerializer {
       put("lastBleMidiAddress", settings.lastBleMidiAddress ?: JSONObject.NULL)
       put("lastBleMidiName", settings.lastBleMidiName ?: JSONObject.NULL)
       put("bleAutoReconnectEnabled", settings.bleAutoReconnectEnabled)
+      put("animationMode", settings.animationMode.name)
+      put("showLatencyDebugOverlay", settings.showLatencyDebugOverlay)
+      put("retriggerMode", settings.retriggerMode.name)
+      put("maxVoices", settings.maxVoices.coerceIn(1, 16))
+      put("highContrastEnabled", settings.highContrastEnabled)
+      put("colorBlindMode", settings.colorBlindMode.name)
     }
 
     val profilesArr = JSONArray()
@@ -126,7 +135,30 @@ object FullBackupSerializer {
     return root.toString(2)
   }
 
+  fun exportBackupJson(
+    settings: GlobalSettings,
+    profiles: List<ExportedProfileBundle>,
+    passphrase: String?
+  ): String {
+    val plain = exportBackupJson(settings, profiles)
+    val trimmed = passphrase?.trim().orEmpty()
+    return if (trimmed.isEmpty()) plain else BackupCryptoManager.encryptText(plain, trimmed)
+  }
+
   fun importBackupJson(jsonString: String): FullBackupPayload {
+    return importBackupJson(jsonString, passphrase = null)
+  }
+
+  fun importBackupJson(rawPayload: String, passphrase: String?): FullBackupPayload {
+    val jsonString = if (BackupCryptoManager.isEncryptedPayload(rawPayload)) {
+      val trimmed = passphrase?.trim().orEmpty()
+      if (trimmed.isEmpty()) {
+        throw EncryptedBackupPassphraseRequiredException()
+      }
+      BackupCryptoManager.decryptText(rawPayload, trimmed)
+    } else {
+      rawPayload
+    }
     val root = JSONObject(jsonString)
     val s = root.optJSONObject("globalSettings") ?: JSONObject()
 
@@ -226,7 +258,24 @@ object FullBackupSerializer {
       }.getOrDefault(DragDropConflictMode.SWAP),
       lastBleMidiAddress = if (s.isNull("lastBleMidiAddress")) null else s.optString("lastBleMidiAddress", "").ifBlank { null },
       lastBleMidiName = if (s.isNull("lastBleMidiName")) null else s.optString("lastBleMidiName", "").ifBlank { null },
-      bleAutoReconnectEnabled = s.optBoolean("bleAutoReconnectEnabled", true)
+      bleAutoReconnectEnabled = s.optBoolean("bleAutoReconnectEnabled", true),
+      animationMode = runCatching {
+        AnimationMode.valueOf(
+          s.optString(
+            "animationMode",
+            if (s.optBoolean("visualEffectsEnabled", true)) AnimationMode.FULL.name else AnimationMode.OFF.name
+          )
+        )
+      }.getOrDefault(AnimationMode.FULL),
+      showLatencyDebugOverlay = s.optBoolean("showLatencyDebugOverlay", false),
+      retriggerMode = runCatching {
+        RetriggerMode.valueOf(s.optString("retriggerMode", RetriggerMode.RESTART.name))
+      }.getOrDefault(RetriggerMode.RESTART),
+      maxVoices = s.optInt("maxVoices", 16).coerceIn(1, 16),
+      highContrastEnabled = s.optBoolean("highContrastEnabled", false),
+      colorBlindMode = runCatching {
+        ColorBlindMode.valueOf(s.optString("colorBlindMode", ColorBlindMode.NONE.name))
+      }.getOrDefault(ColorBlindMode.NONE)
     )
 
     val profilesArr = root.optJSONArray("profiles") ?: JSONArray()

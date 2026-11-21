@@ -5,6 +5,7 @@ import android.content.Intent
 import android.media.AudioDeviceCallback
 import android.media.AudioDeviceInfo
 import android.net.Uri
+import android.os.SystemClock
 import androidx.compose.runtime.Immutable
 import androidx.documentfile.provider.DocumentFile
 import androidx.lifecycle.AndroidViewModel
@@ -44,6 +45,7 @@ import com.example.data.profile.ProfileJsonSerializer
 import com.example.scheduler.PadSchedulerManager
 import com.example.scheduler.toDomain
 import com.example.scheduler.toEntity
+import com.example.domain.model.AnimationMode
 import com.example.domain.model.AppErrorLog
 import com.example.domain.model.AppLanguage
 import com.example.domain.model.AudioOutputDeviceUi
@@ -75,11 +77,13 @@ import com.example.domain.model.PadSurfaceFinish
 import com.example.domain.model.PadTriggerMode
 import com.example.domain.model.PadVisualConfig
 import com.example.domain.model.PlayMode
+import com.example.domain.model.RetriggerMode
 import com.example.domain.model.ScheduleTargetType
 import com.example.domain.model.ScheduledPadTask
 import com.example.domain.model.SequencerPlaybackState
 import com.example.domain.model.SequencerPlaylist
 import com.example.domain.model.SoundPad
+import com.example.domain.model.TapLatencyMetrics
 import com.example.domain.model.ThemeMode
 import com.example.domain.model.WaveformData
 import com.example.error.CrashLogManager
@@ -181,7 +185,8 @@ data class SoundPadUiState(
   val midiPcMappings: List<MidiProgramBankMapping> = emptyList(),
   val requestedBankPageIndex: Int? = null,
   val persistentBackupState: PersistentBackupUiState = PersistentBackupUiState(),
-  val restoreUiState: RestoreUiState = RestoreUiState()
+  val restoreUiState: RestoreUiState = RestoreUiState(),
+  val tapLatencyMetrics: TapLatencyMetrics = TapLatencyMetrics()
 ) {
   val activeCount: Int
     get() = playbackStates.count { it.value.isPlaying }
@@ -274,6 +279,7 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
   private val app = application as SoundPadApplication
   private val settingsRepo = app.settingsRepository
   private val dao = app.database.soundPadDao()
+  private val padRepo = app.padRepository
   private val scanner = app.safScanner
   private val ramCache = app.ramCache
   private val audioEngine = app.audioEngine
@@ -378,7 +384,9 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
     viewModelScope.launch {
       val pendingCrash = withContext(Dispatchers.IO) { CrashLogManager.consumePendingCrash(app) }
       if (pendingCrash != null) {
-        dao.insertErrorLog(pendingCrash.toEntity())
+        padRepo.withSafeDbCall("insertPendingCrashLog", Unit) {
+          it.insertErrorLog(pendingCrash.toEntity())
+        }
         _uiState.update { it.copy(pendingCrashLog = pendingCrash) }
       }
     }
@@ -407,7 +415,9 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
       dao.observeProfiles().collectLatest { entities ->
         val mapped = entities.map { entity ->
           val preset = runCatching { GridPreset.valueOf(entity.gridPreset) }.getOrDefault(GridPreset.GRID_4X4)
-          val profilePads = dao.getPadsForProfileOnce(entity.id)
+          val profilePads = padRepo.withSafeDbCall("loadProfilePreviewPads", emptyList()) {
+            it.getPadsForProfileOnce(entity.id)
+          }
           val masterEqPreset = runCatching { EqPreset.valueOf(entity.masterEqPreset) }.getOrDefault(EqPreset.FLAT)
           PadProfile(
             id = entity.id,
@@ -472,7 +482,9 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
         val uriStr = settings.folderUri
         if (uriStr == null && !didAttemptInitialDemoSeed) {
           didAttemptInitialDemoSeed = true
-          val existing = dao.getPadsForProfileOnce(settings.activeProfileId)
+          val existing = padRepo.withSafeDbCall("checkInitialDemoSeed", emptyList()) {
+            it.getPadsForProfileOnce(settings.activeProfileId)
+          }
           if (existing.isEmpty()) {
             loadDemoTracks(showBanner = false)
           }
@@ -493,6 +505,12 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
     viewModelScope.launch {
       audioEngine.playbackStates.collect { states ->
         _uiState.update { it.copy(playbackStates = states) }
+      }
+    }
+
+    viewModelScope.launch {
+      audioEngine.tapLatencyMetrics.collect { metrics ->
+        _uiState.update { it.copy(tapLatencyMetrics = metrics) }
       }
     }
 
@@ -642,69 +660,96 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
       val demoPads = DemoTrackManager.ensureDemoTracksInstalled(app)
       DemoTrackManager.exportDemoTracksToPhoneMusicFolder(app)
 
-      val existingEntities = dao.getPadsForProfileOnce(profileId)
-      val existingByUri = existingEntities.groupBy { it.uriString }
-      val existingSettings = dao.getPadSettingsForProfileOnce(profileId).associateBy { it.padId }
+      val normalized = padRepo.withDbMutation("loadDemoTracks", emptyList()) { dbDao ->
+        val existingEntities = dbDao.getPadsForProfileOnce(profileId)
+        val existingByUri = existingEntities.groupBy { it.uriString }
+        val existingSettings = dbDao.getPadSettingsForProfileOnce(profileId).associateBy { it.padId }
 
-      val occupiedByBank = existingEntities
-        .groupBy { it.bankIndex }
-        .mapValuesTo(mutableMapOf()) { (_, list) ->
-          list.mapTo(mutableSetOf()) { it.positionIndex.coerceAtLeast(0) }
-        }
-      val merged = mutableListOf<SoundPad>()
-      for (demo in demoPads) {
-        val matches = existingByUri[demo.uriString]
-        if (!matches.isNullOrEmpty()) {
-          matches.forEach { entity ->
+        val occupiedByBank = existingEntities
+          .groupBy { it.bankIndex }
+          .mapValuesTo(mutableMapOf()) { (_, list) ->
+            list.mapTo(mutableSetOf()) { it.positionIndex.coerceAtLeast(0) }
+          }
+        val merged = mutableListOf<SoundPad>()
+        for (demo in demoPads) {
+          val matches = existingByUri[demo.uriString]
+          if (!matches.isNullOrEmpty()) {
+            matches.forEach { entity ->
+              merged.add(
+                demo.copy(
+                  id = entity.id,
+                  displayName = entity.displayName,
+                  positionIndex = entity.positionIndex,
+                  bankIndex = entity.bankIndex,
+                  subfolderName = entity.subfolderName,
+                  colorArgb = entity.colorArgb,
+                  glowColorArgb = entity.glowColorArgb,
+                  glowIntensity = entity.glowIntensity,
+                  shapeStyle = entity.shapeStyle?.let { s -> runCatching { PadShapeStyle.valueOf(s) }.getOrNull() },
+                  borderColorArgb = entity.borderColorArgb,
+                  borderWidthDp = entity.borderWidthDp,
+                  cornerRadiusDp = entity.cornerRadiusDp,
+                  textColorArgb = entity.textColorArgb,
+                  surfaceFinish = runCatching { PadSurfaceFinish.valueOf(entity.surfaceFinish) }.getOrDefault(PadSurfaceFinish.CLASSIC),
+                  badgeIcon = runCatching { PadBadgeIcon.valueOf(entity.badgeIcon) }.getOrDefault(PadBadgeIcon.NONE),
+                  showSlotNumber = entity.showSlotNumber,
+                  showDurationLabel = entity.showDurationLabel,
+                  isClone = entity.isClone,
+                  midiNote = entity.midiNote,
+                  isFavorite = entity.isFavorite,
+                  categoryTag = entity.categoryTag,
+                  settings = existingSettings[entity.id].toDomain()
+                )
+              )
+            }
+          } else {
+            val occupied = occupiedByBank.getOrPut(0) { mutableSetOf() }
+            val freeSlot = PadGridSlotManager.findFirstEmptySlot(occupied, startFrom = 0)
+            occupied.add(freeSlot)
             merged.add(
               demo.copy(
-                id = entity.id,
-                displayName = entity.displayName,
-                positionIndex = entity.positionIndex,
-                bankIndex = entity.bankIndex,
-                subfolderName = entity.subfolderName,
-                colorArgb = entity.colorArgb,
-                glowColorArgb = entity.glowColorArgb,
-                glowIntensity = entity.glowIntensity,
-                shapeStyle = entity.shapeStyle?.let { s -> runCatching { PadShapeStyle.valueOf(s) }.getOrNull() },
-                borderColorArgb = entity.borderColorArgb,
-                borderWidthDp = entity.borderWidthDp,
-                cornerRadiusDp = entity.cornerRadiusDp,
-                textColorArgb = entity.textColorArgb,
-                surfaceFinish = runCatching { PadSurfaceFinish.valueOf(entity.surfaceFinish) }.getOrDefault(PadSurfaceFinish.CLASSIC),
-                badgeIcon = runCatching { PadBadgeIcon.valueOf(entity.badgeIcon) }.getOrDefault(PadBadgeIcon.NONE),
-                showSlotNumber = entity.showSlotNumber,
-                showDurationLabel = entity.showDurationLabel,
-                isClone = entity.isClone,
-                midiNote = entity.midiNote,
-                isFavorite = entity.isFavorite,
-                categoryTag = entity.categoryTag,
-                settings = existingSettings[entity.id].toDomain()
+                positionIndex = freeSlot,
+                bankIndex = 0,
+                colorArgb = null,
+                glowColorArgb = null,
+                glowIntensity = 0f
               )
             )
           }
-        } else {
-          val occupied = occupiedByBank.getOrPut(0) { mutableSetOf() }
-          val freeSlot = PadGridSlotManager.findFirstEmptySlot(occupied, startFrom = 0)
-          occupied.add(freeSlot)
-          merged.add(
-            demo.copy(
-              positionIndex = freeSlot,
-              bankIndex = 0,
-              colorArgb = null,
-              glowColorArgb = null,
-              glowIntensity = 0f
-            )
-          )
         }
-      }
-      // Keep local voice tracks / cut exports too
-      val demoUris = demoPads.map { it.uriString }.toSet()
-      existingEntities.filter { it.uriString !in demoUris && it.uriString.startsWith("file://") }.forEach { entity ->
-        merged.add(entityToDomain(entity, existingSettings[entity.id].toDomain()))
+        // Keep local voice tracks / cut exports too
+        val demoUris = demoPads.map { it.uriString }.toSet()
+        existingEntities.filter { it.uriString !in demoUris && it.uriString.startsWith("file://") }.forEach { entity ->
+          merged.add(entityToDomain(entity, existingSettings[entity.id].toDomain()))
+        }
+
+        val resolved = PadGridSlotManager.resolveBankSlotCollisions(merged)
+        val now = System.currentTimeMillis()
+        val existingProfile = dbDao.getProfileById(profileId)
+        val grid = _uiState.value.settings.gridConfig
+        val gs = _uiState.value.settings
+        val profile = PadProfileEntity(
+          id = profileId,
+          name = existingProfile?.name ?: DEFAULT_PROFILE_NAME,
+          folderUri = DemoTrackManager.DEMO_FOLDER_URI,
+          gridPreset = grid.preset.name,
+          gridRows = grid.rows,
+          gridCols = grid.cols,
+          bankNamesJson = existingProfile?.bankNamesJson ?: "{}",
+          masterEqEnabled = existingProfile?.masterEqEnabled ?: gs.masterEqEnabled,
+          masterEqPreset = existingProfile?.masterEqPreset ?: gs.masterEqPreset.name,
+          masterEqBandsJson = existingProfile?.masterEqBandsJson
+            ?: ProfileJsonSerializer.encodeEqBandsString(gs.masterEqBandsDb),
+          createdAtMs = existingProfile?.createdAtMs ?: now,
+          updatedAtMs = now,
+          isActive = true
+        )
+        val entities = resolved.map { it.toPadEntity(profileId) }
+        val settingEntities = resolved.map { it.settings.toEntity(it.id) }
+        dbDao.saveCompleteProfile(profile, entities, settingEntities)
+        resolved
       }
 
-      val normalized = PadGridSlotManager.resolveBankSlotCollisions(merged)
       val preloadedIds = if (_uiState.value.settings.preloadShortAudio) {
         ramCache.preloadShortSamples(normalized)
       } else {
@@ -712,30 +757,6 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
       }
       val ready = normalized.map { it.copy(isPreloadedInRam = it.id in preloadedIds) }
       ensureInitialSlotsCaptured(profileId, ready)
-
-      val now = System.currentTimeMillis()
-      val existingProfile = dao.getProfileById(profileId)
-      val grid = _uiState.value.settings.gridConfig
-      val gs = _uiState.value.settings
-      val profile = PadProfileEntity(
-        id = profileId,
-        name = existingProfile?.name ?: DEFAULT_PROFILE_NAME,
-        folderUri = DemoTrackManager.DEMO_FOLDER_URI,
-        gridPreset = grid.preset.name,
-        gridRows = grid.rows,
-        gridCols = grid.cols,
-        bankNamesJson = existingProfile?.bankNamesJson ?: "{}",
-        masterEqEnabled = existingProfile?.masterEqEnabled ?: gs.masterEqEnabled,
-        masterEqPreset = existingProfile?.masterEqPreset ?: gs.masterEqPreset.name,
-        masterEqBandsJson = existingProfile?.masterEqBandsJson
-          ?: ProfileJsonSerializer.encodeEqBandsString(gs.masterEqBandsDb),
-        createdAtMs = existingProfile?.createdAtMs ?: now,
-        updatedAtMs = now,
-        isActive = true
-      )
-      val entities = ready.map { it.toPadEntity(profileId) }
-      val settingEntities = ready.map { it.settings.toEntity(it.id) }
-      dao.saveCompleteProfile(profile, entities, settingEntities)
       persistentConfigManager.notifyConfigDirty("demo_tracks")
 
       lastObservedFolderUri = DemoTrackManager.DEMO_FOLDER_URI
@@ -855,8 +876,9 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
     }
   }
 
-  fun onPadTapped(pad: SoundPad) {
-    if (_uiState.value.isMidiLearnMode) {
+  fun onPadTapped(pad: SoundPad, tapDownNanos: Long = SystemClock.elapsedRealtimeNanos()) {
+    val state = _uiState.value
+    if (state.isMidiLearnMode) {
       _uiState.update {
         it.copy(
           midiLearnTarget = MidiLearnTarget.PadNote(pad.id, pad.displayName),
@@ -869,25 +891,25 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
       _uiState.update { it.copy(diagnosticPadId = pad.id) }
       return
     }
-    if (_uiState.value.isEditMode) {
-      if (_uiState.value.isMultiSelectMode) {
+    if (state.isEditMode) {
+      if (state.isMultiSelectMode) {
         togglePadSelection(pad.id)
       } else {
         _uiState.update { it.copy(editingPadId = pad.id) }
       }
       return
     }
-    if (_uiState.value.settings.isGlobalCueEnabled) {
+    if (state.settings.isGlobalCueEnabled) {
       toggleCuePreview(pad)
       return
     }
-    val designatedPlaylist = _uiState.value.sequencerPlaylists.firstOrNull { it.triggerPadId == pad.id }
+    val designatedPlaylist = state.sequencerPlaylists.firstOrNull { it.triggerPadId == pad.id }
     if (designatedPlaylist != null) {
-      sequencerEngine.updateAvailablePads(_uiState.value.pads)
+      sequencerEngine.updateAvailablePads(state.pads)
       sequencerEngine.togglePlayPause(designatedPlaylist)
       return
     }
-    audioEngine.triggerPad(pad)
+    audioEngine.triggerPad(pad, tapDownNanos)
   }
 
   fun stopSinglePad(padId: String) {
@@ -921,9 +943,9 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
     }
   }
 
-  fun onPadHoldStart(pad: SoundPad) {
+  fun onPadHoldStart(pad: SoundPad, tapDownNanos: Long = SystemClock.elapsedRealtimeNanos()) {
     if (_uiState.value.isEditMode || _uiState.value.isMidiLearnMode) return
-    audioEngine.triggerHoldStart(pad)
+    audioEngine.triggerHoldStart(pad, tapDownNanos)
   }
 
   fun onPadHoldRelease(pad: SoundPad) {
@@ -1027,8 +1049,12 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
       }
 
       viewModelScope.launch {
-        dao.upsertPads(changedPads.map { it.toPadEntity(profileId) })
-        dao.upsertPadSettingSafely(savedClone.settings.toEntity(savedClone.id))
+        padRepo.duplicatePadToBank(
+          profileId = profileId,
+          padsToPersist = changedPads.map { it.toPadEntity(profileId) },
+          clonedPadId = savedClone.id,
+          clonedSetting = savedClone.settings.toEntity(savedClone.id)
+        )
         persistentConfigManager.notifyConfigDirty("duplicate_pad")
       }
       return
@@ -1101,8 +1127,13 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
     }
 
     viewModelScope.launch {
+      var bankNamesJson: String? = null
+      var bankOrderJson: String? = null
+      var bankFolderUrisJson: String? = null
       if (!wasExplicit || createNewBank) {
-        val existingProfile = dao.getProfileById(profileId)
+        val existingProfile = padRepo.withSafeDbCall("duplicatePadToBank.readProfile", null) {
+          it.getProfileById(profileId)
+        }
         val existingOrder = ProfileJsonSerializer.decodeBankOrderString(existingProfile?.bankOrderJson)
         val newOrder = if (!wasExplicit) {
           (existingOrder + (0..resolvedTargetBank)).distinct()
@@ -1113,15 +1144,19 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
         if (!namesMap.containsKey(resolvedTargetBank) || createNewBank) {
           namesMap[resolvedTargetBank] = targetSubName
         }
-        dao.updateProfileBankConfig(
-          profileId = profileId,
-          bankNamesJson = ProfileJsonSerializer.encodeBankNamesString(namesMap),
-          bankOrderJson = ProfileJsonSerializer.encodeBankOrderString(newOrder),
-          bankFolderUrisJson = existingProfile?.bankFolderUrisJson ?: "{}"
-        )
+        bankNamesJson = ProfileJsonSerializer.encodeBankNamesString(namesMap)
+        bankOrderJson = ProfileJsonSerializer.encodeBankOrderString(newOrder)
+        bankFolderUrisJson = existingProfile?.bankFolderUrisJson ?: "{}"
       }
-      dao.upsertPads(padsToPersist.map { it.toPadEntity(profileId) })
-      dao.upsertPadSettingSafely(savedClone.settings.toEntity(savedClone.id))
+      padRepo.duplicatePadToBank(
+        profileId = profileId,
+        padsToPersist = padsToPersist.map { it.toPadEntity(profileId) },
+        clonedPadId = savedClone.id,
+        clonedSetting = savedClone.settings.toEntity(savedClone.id),
+        bankNamesJson = bankNamesJson,
+        bankOrderJson = bankOrderJson,
+        bankFolderUrisJson = bankFolderUrisJson
+      )
       persistentConfigManager.notifyConfigDirty("duplicate_pad_bank")
     }
   }
@@ -1143,7 +1178,7 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
       )
     }
     viewModelScope.launch {
-      dao.deletePadById(padId)
+      padRepo.deletePadById(padId)
       persistentConfigManager.notifyConfigDirty("delete_pad")
     }
   }
@@ -1164,22 +1199,24 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
       recordEditSnapshot(currentPads)
     }
     viewModelScope.launch {
-      dao.updatePadAppearance(
-        padId = padId,
-        displayName = trimmedName,
-        colorArgb = config.colorArgb,
-        glowColorArgb = config.glowColorArgb,
-        glowIntensity = config.glowIntensity,
-        shapeStyle = config.shapeStyle?.name,
-        borderColorArgb = config.borderColorArgb,
-        borderWidthDp = config.borderWidthDp,
-        cornerRadiusDp = config.cornerRadiusDp,
-        textColorArgb = config.textColorArgb,
-        surfaceFinish = config.surfaceFinish.name,
-        badgeIcon = config.badgeIcon.name,
-        showSlotNumber = config.showSlotNumber,
-        showDurationLabel = config.showDurationLabel
-      )
+      padRepo.withDbMutation("updatePadAppearance", Unit, padId = padId) { dbDao ->
+        dbDao.updatePadAppearance(
+          padId = padId,
+          displayName = trimmedName,
+          colorArgb = config.colorArgb,
+          glowColorArgb = config.glowColorArgb,
+          glowIntensity = config.glowIntensity,
+          shapeStyle = config.shapeStyle?.name,
+          borderColorArgb = config.borderColorArgb,
+          borderWidthDp = config.borderWidthDp,
+          cornerRadiusDp = config.cornerRadiusDp,
+          textColorArgb = config.textColorArgb,
+          surfaceFinish = config.surfaceFinish.name,
+          badgeIcon = config.badgeIcon.name,
+          showSlotNumber = config.showSlotNumber,
+          showDurationLabel = config.showDurationLabel
+        )
+      }
       _uiState.update { state ->
         val updatedPads = state.pads.map { pad ->
           if (pad.id == padId) {
@@ -1213,20 +1250,22 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
     recordEditSnapshot(_uiState.value.pads)
     val profileId = _uiState.value.settings.activeProfileId
     viewModelScope.launch {
-      dao.applyVisualStyleToAllInProfile(
-        profileId = profileId,
-        colorArgb = config.colorArgb,
-        glowColorArgb = config.glowColorArgb,
-        glowIntensity = config.glowIntensity,
-        shapeStyle = config.shapeStyle?.name,
-        borderColorArgb = config.borderColorArgb,
-        borderWidthDp = config.borderWidthDp,
-        cornerRadiusDp = config.cornerRadiusDp,
-        textColorArgb = config.textColorArgb,
-        surfaceFinish = config.surfaceFinish.name,
-        showSlotNumber = config.showSlotNumber,
-        showDurationLabel = config.showDurationLabel
-      )
+      padRepo.withDbMutation("applyVisualStyleToAllPads", Unit) { dbDao ->
+        dbDao.applyVisualStyleToAllInProfile(
+          profileId = profileId,
+          colorArgb = config.colorArgb,
+          glowColorArgb = config.glowColorArgb,
+          glowIntensity = config.glowIntensity,
+          shapeStyle = config.shapeStyle?.name,
+          borderColorArgb = config.borderColorArgb,
+          borderWidthDp = config.borderWidthDp,
+          cornerRadiusDp = config.cornerRadiusDp,
+          textColorArgb = config.textColorArgb,
+          surfaceFinish = config.surfaceFinish.name,
+          showSlotNumber = config.showSlotNumber,
+          showDurationLabel = config.showDurationLabel
+        )
+      }
       _uiState.update { state ->
         val updatedPads = state.pads.map { pad ->
           pad.copy(
@@ -1337,7 +1376,9 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
     recordEditSnapshot(pads)
     val nextFav = !target.isFavorite
     viewModelScope.launch {
-      dao.updatePadFavoriteAndTag(padId, nextFav, target.categoryTag)
+      padRepo.withDbMutation("togglePadFavorite", Unit, padId = padId) { dbDao ->
+        dbDao.updatePadFavoriteAndTag(padId, nextFav, target.categoryTag)
+      }
       persistentConfigManager.notifyConfigDirty("pad_favorite")
       _uiState.update { state ->
         val updated = state.pads.map { p ->
@@ -1356,7 +1397,9 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
     if (target.categoryTag == cleaned) return
     recordEditSnapshot(pads)
     viewModelScope.launch {
-      dao.updatePadFavoriteAndTag(padId, target.isFavorite, cleaned)
+      padRepo.withDbMutation("setPadCategoryTag", Unit, padId = padId) { dbDao ->
+        dbDao.updatePadFavoriteAndTag(padId, target.isFavorite, cleaned)
+      }
       persistentConfigManager.notifyConfigDirty("pad_tag")
       _uiState.update { state ->
         val updated = state.pads.map { p ->
@@ -1573,30 +1616,28 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
     val readyPad = inserted.copy(isPreloadedInRam = inserted.id in preloaded)
     val updatedList = existing + readyPad
 
-    val existingProfile = dao.getProfileById(profileId)
-    if (existingProfile == null) {
-      val now = System.currentTimeMillis()
-      val gs = _uiState.value.settings
-      val grid = gs.gridConfig
-      dao.upsertProfile(
-        PadProfileEntity(
-          id = profileId,
-          name = DEFAULT_PROFILE_NAME,
-          folderUri = gs.folderUri,
-          gridPreset = grid.preset.name,
-          gridRows = grid.rows,
-          gridCols = grid.cols,
-          masterEqEnabled = gs.masterEqEnabled,
-          masterEqPreset = gs.masterEqPreset.name,
-          masterEqBandsJson = ProfileJsonSerializer.encodeEqBandsString(gs.masterEqBandsDb),
-          createdAtMs = now,
-          updatedAtMs = now,
-          isActive = true
-        )
-      )
-    }
-    dao.upsertPad(readyPad.toPadEntity(profileId))
-    dao.upsertPadSettingSafely(readyPad.settings.toEntity(readyPad.id))
+    val now = System.currentTimeMillis()
+    val gs = _uiState.value.settings
+    val grid = gs.gridConfig
+    val fallbackProfile = PadProfileEntity(
+      id = profileId,
+      name = DEFAULT_PROFILE_NAME,
+      folderUri = gs.folderUri,
+      gridPreset = grid.preset.name,
+      gridRows = grid.rows,
+      gridCols = grid.cols,
+      masterEqEnabled = gs.masterEqEnabled,
+      masterEqPreset = gs.masterEqPreset.name,
+      masterEqBandsJson = ProfileJsonSerializer.encodeEqBandsString(gs.masterEqBandsDb),
+      createdAtMs = now,
+      updatedAtMs = now,
+      isActive = true
+    )
+    padRepo.upsertPadWithSetting(
+      pad = readyPad.toPadEntity(profileId),
+      setting = readyPad.settings.toEntity(readyPad.id),
+      fallbackProfile = fallbackProfile
+    )
     persistentConfigManager.notifyConfigDirty("add_created_pad")
 
     audioEngine.updatePlaylist(updatedList)
@@ -1637,7 +1678,7 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
     _uiState.update { it.copy(pads = updated) }
 
     viewModelScope.launch {
-      dao.upsertPads(changed.map { it.toPadEntity(profileId) })
+      padRepo.upsertPadsIfProfileExists(profileId, changed.map { it.toPadEntity(profileId) })
       persistentConfigManager.notifyConfigDirty("swap_pad_positions")
     }
   }
@@ -1712,8 +1753,13 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
       )
     }
     viewModelScope.launch {
+      var bankNamesJson: String? = null
+      var bankOrderJson: String? = null
+      var bankFolderUrisJson: String? = null
       if (needsPromote || createNewBank) {
-        val existingProfile = dao.getProfileById(profileId)
+        val existingProfile = padRepo.withSafeDbCall("movePadToSlot.readProfile", null) {
+          it.getProfileById(profileId)
+        }
         val existingOrder = ProfileJsonSerializer.decodeBankOrderString(existingProfile?.bankOrderJson)
         val newOrder = if (needsPromote) {
           (existingOrder + (0..resolvedTargetBank)).distinct()
@@ -1724,14 +1770,17 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
         if (!namesMap.containsKey(resolvedTargetBank) || createNewBank) {
           namesMap[resolvedTargetBank] = targetSubName
         }
-        dao.updateProfileBankConfig(
-          profileId = profileId,
-          bankNamesJson = ProfileJsonSerializer.encodeBankNamesString(namesMap),
-          bankOrderJson = ProfileJsonSerializer.encodeBankOrderString(newOrder),
-          bankFolderUrisJson = existingProfile?.bankFolderUrisJson ?: "{}"
-        )
+        bankNamesJson = ProfileJsonSerializer.encodeBankNamesString(namesMap)
+        bankOrderJson = ProfileJsonSerializer.encodeBankOrderString(newOrder)
+        bankFolderUrisJson = existingProfile?.bankFolderUrisJson ?: "{}"
       }
-      dao.upsertPads(changed.map { it.toPadEntity(profileId) })
+      padRepo.upsertPadsIfProfileExists(
+        profileId = profileId,
+        pads = changed.map { it.toPadEntity(profileId) },
+        bankNamesJson = bankNamesJson,
+        bankOrderJson = bankOrderJson,
+        bankFolderUrisJson = bankFolderUrisJson
+      )
       persistentConfigManager.notifyConfigDirty("move_pad_slot")
     }
   }
@@ -1794,28 +1843,36 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
       )
     }
     viewModelScope.launch {
+      var bankNamesJson: String? = null
+      var bankOrderJson: String? = null
+      var bankFolderUrisJson: String? = null
       if (needsPromote || createNewBank) {
-        val existingProfile = dao.getProfileById(profileId)
-        val existingOrder = ProfileJsonSerializer.decodeBankOrderString(existingProfile?.bankOrderJson)
-        val newOrder = if (needsPromote) {
-          (existingOrder + (0..resolvedTargetBank)).distinct()
-        } else {
-          (existingOrder + resolvedTargetBank).distinct()
+        val existingProfile = padRepo.withSafeDbCall("bulkMoveSelectedPadsToSlot.readProfile", null) {
+          it.getProfileById(profileId)
         }
-        val namesMap = ProfileJsonSerializer.decodeBankNamesString(existingProfile?.bankNamesJson).toMutableMap()
-        if (targetSubName != null && (!namesMap.containsKey(resolvedTargetBank) || createNewBank)) {
-          namesMap[resolvedTargetBank] = targetSubName
+        if (existingProfile != null) {
+          val existingOrder = ProfileJsonSerializer.decodeBankOrderString(existingProfile.bankOrderJson)
+          val newOrder = if (needsPromote) {
+            (existingOrder + (0..resolvedTargetBank)).distinct()
+          } else {
+            (existingOrder + resolvedTargetBank).distinct()
+          }
+          val namesMap = ProfileJsonSerializer.decodeBankNamesString(existingProfile.bankNamesJson).toMutableMap()
+          if (targetSubName != null && (!namesMap.containsKey(resolvedTargetBank) || createNewBank)) {
+            namesMap[resolvedTargetBank] = targetSubName
+          }
+          bankNamesJson = ProfileJsonSerializer.encodeBankNamesString(namesMap)
+          bankOrderJson = ProfileJsonSerializer.encodeBankOrderString(newOrder)
+          bankFolderUrisJson = existingProfile.bankFolderUrisJson
         }
-        dao.updateProfileBankConfig(
-          profileId = profileId,
-          bankNamesJson = ProfileJsonSerializer.encodeBankNamesString(namesMap),
-          bankOrderJson = ProfileJsonSerializer.encodeBankOrderString(newOrder),
-          bankFolderUrisJson = existingProfile?.bankFolderUrisJson ?: "{}"
-        )
       }
-      if (changed.isNotEmpty()) {
-        dao.upsertPads(changed.map { it.toPadEntity(profileId) })
-      }
+      padRepo.upsertPadsIfProfileExists(
+        profileId = profileId,
+        pads = changed.map { it.toPadEntity(profileId) },
+        bankNamesJson = bankNamesJson,
+        bankOrderJson = bankOrderJson,
+        bankFolderUrisJson = bankFolderUrisJson
+      )
       persistentConfigManager.notifyConfigDirty("bulk_move_slots")
     }
   }
@@ -1837,7 +1894,7 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
     audioEngine.updatePlaylist(updated)
     _uiState.update { it.copy(pads = updated, statusMessage = "Slot pad dirapikan (${changed.size} dipindah)") }
     viewModelScope.launch {
-      dao.upsertPads(changed.map { it.toPadEntity(profileId) })
+      padRepo.upsertPadsIfProfileExists(profileId, changed.map { it.toPadEntity(profileId) })
       persistentConfigManager.notifyConfigDirty("compact_bank_slots")
     }
   }
@@ -1859,7 +1916,7 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
     audioEngine.updatePlaylist(updated)
     _uiState.update { it.copy(pads = updated, statusMessage = "Pad diurutkan A–Z") }
     viewModelScope.launch {
-      dao.upsertPads(changed.map { it.toPadEntity(profileId) })
+      padRepo.upsertPadsIfProfileExists(profileId, changed.map { it.toPadEntity(profileId) })
       persistentConfigManager.notifyConfigDirty("sort_bank_az")
     }
   }
@@ -1897,7 +1954,7 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
     audioEngine.updatePlaylist(updated)
     _uiState.update { it.copy(pads = updated, statusMessage = "Posisi awal dikembalikan") }
     viewModelScope.launch {
-      dao.upsertPads(changed.map { it.toPadEntity(profileId) })
+      padRepo.upsertPadsIfProfileExists(profileId, changed.map { it.toPadEntity(profileId) })
       persistentConfigManager.notifyConfigDirty("restore_initial_slots")
     }
   }
@@ -1941,7 +1998,6 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
         pad.settings.toEntity(idMap.getValue(pad.id))
       }
 
-      dao.saveCompleteProfile(newProfile, padEntities, settingEntities)
       val copiedCc = state.midiCcMappings.map { mapping ->
         MidiCcMappingEntity(
           id = "cc_${newProfileId}_${mapping.target.name}",
@@ -1951,9 +2007,12 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
           channel = mapping.channel
         )
       }
-      if (copiedCc.isNotEmpty()) {
-        dao.upsertMidiCcMappings(copiedCc)
-      }
+      padRepo.saveCompleteProfile(
+        profile = newProfile,
+        pads = padEntities,
+        settings = settingEntities,
+        ccMappings = copiedCc
+      )
       lastLoadedProfileId = newProfileId
       settingsRepo.setActiveProfileId(newProfileId)
       _uiState.update { it.copy(statusMessage = "Saved profile \"$name\"") }
@@ -1962,9 +2021,10 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
 
   fun loadProfile(profileId: String) {
     viewModelScope.launch {
-      val profile = dao.getProfileById(profileId) ?: return@launch
+      val profile = padRepo.withSafeDbCall("loadProfile.read", null) { it.getProfileById(profileId) }
+        ?: return@launch
       audioEngine.stopAll()
-      dao.setActiveProfile(profileId)
+      padRepo.setActiveProfile(profileId)
 
       val preset = runCatching { GridPreset.valueOf(profile.gridPreset) }.getOrDefault(GridPreset.GRID_4X4)
       settingsRepo.setGridConfig(GridConfig(preset, profile.gridRows, profile.gridCols))
@@ -1996,9 +2056,18 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
 
   fun duplicateProfile(profileId: String) {
     viewModelScope.launch {
-      val source = dao.getProfileById(profileId) ?: return@launch
-      val sourcePads = dao.getPadsForProfileOnce(profileId)
-      val sourceSettings = dao.getPadSettingsForProfileOnce(profileId).associateBy { it.padId }
+      val sourceData = padRepo.withSafeDbCall("duplicateProfile.read", null) { dbDao ->
+        val source = dbDao.getProfileById(profileId) ?: return@withSafeDbCall null
+        val sourcePads = dbDao.getPadsForProfileOnce(profileId)
+        val sourceSettings = dbDao.getPadSettingsForProfileOnce(profileId).associateBy { it.padId }
+        val sourceCc = dbDao.getMidiCcMappingsOnce(profileId)
+        val sourcePc = dbDao.getMidiPcMappingsOnce(profileId)
+        Triple(source, sourcePads to sourceSettings, sourceCc to sourcePc)
+      } ?: return@launch
+
+      val (source, padsPair, midiPair) = sourceData
+      val (sourcePads, sourceSettings) = padsPair
+      val (sourceCc, sourcePc) = midiPair
 
       val now = System.currentTimeMillis()
       val newProfileId = "profile_${UUID.randomUUID()}"
@@ -2019,21 +2088,17 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
         newSettings.add(setting.copy(padId = newPadId))
       }
 
-      dao.saveCompleteProfile(copyProfile, newPads, newSettings)
-      val sourceCc = dao.getMidiCcMappingsOnce(profileId)
-      if (sourceCc.isNotEmpty()) {
-        dao.upsertMidiCcMappings(
-          sourceCc.map { cc ->
-            cc.copy(id = "cc_${newProfileId}_${cc.target}", profileId = newProfileId)
-          }
-        )
-      }
-      val sourcePc = dao.getMidiPcMappingsOnce(profileId)
-      sourcePc.forEach { pc ->
-        dao.upsertMidiPcMapping(
+      padRepo.saveCompleteProfile(
+        profile = copyProfile,
+        pads = newPads,
+        settings = newSettings,
+        ccMappings = sourceCc.map { cc ->
+          cc.copy(id = "cc_${newProfileId}_${cc.target}", profileId = newProfileId)
+        },
+        pcMappings = sourcePc.map { pc ->
           pc.copy(id = "pc_${newProfileId}_${pc.bankIndex}", profileId = newProfileId)
-        )
-      }
+        }
+      )
       lastLoadedProfileId = newProfileId
       settingsRepo.setActiveProfileId(newProfileId)
       loadProfilePads(newProfileId, _uiState.value.settings.preloadShortAudio)
@@ -2043,24 +2108,26 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
 
   fun deleteProfile(profileId: String) {
     viewModelScope.launch {
-      val all = dao.getAllProfilesOnce()
-      if (all.size <= 1) return@launch
       val deletingActive = profileId == _uiState.value.settings.activeProfileId
-      dao.deleteProfileById(profileId)
+      val fallbackId = padRepo.deleteProfileIfNotLast(profileId) ?: return@launch
       if (deletingActive) {
-        val fallback = dao.getAllProfilesOnce().firstOrNull()
-        if (fallback != null) {
-          loadProfile(fallback.id)
-        }
+        loadProfile(fallbackId)
       }
       _uiState.update { it.copy(statusMessage = "Profile deleted") }
     }
   }
 
   private suspend fun buildExportBundleForProfile(profileId: String): ExportedProfileBundle {
-    val profileEntity = dao.getProfileById(profileId)
-    val padEntities = dao.getPadsForProfileOnce(profileId)
-    val settingEntities = dao.getPadSettingsForProfileOnce(profileId).associateBy { it.padId }
+    val (profileEntity, padEntities, settingEntities) = padRepo.withSafeDbCall(
+      operation = "buildExportBundleForProfile",
+      fallback = Triple(null, emptyList(), emptyMap())
+    ) { dbDao ->
+      Triple(
+        dbDao.getProfileById(profileId),
+        dbDao.getPadsForProfileOnce(profileId),
+        dbDao.getPadSettingsForProfileOnce(profileId).associateBy { it.padId }
+      )
+    }
 
     val preset = profileEntity?.let {
       runCatching { GridPreset.valueOf(it.gridPreset) }.getOrDefault(GridPreset.GRID_4X4)
@@ -2107,15 +2174,21 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
     val domainPads = padEntities.map { entity ->
       entityToDomain(entity, settingEntities[entity.id].toDomain())
     }
-    val ccMappings = dao.getMidiCcMappingsOnce(profileId).toDomainMappings()
-    val pcMappings = dao.getMidiPcMappingsOnce(profileId).map { entity ->
-      MidiProgramBankMapping(
-        id = entity.id,
-        profileId = entity.profileId,
-        programNumber = entity.programNumber,
-        bankIndex = entity.bankIndex,
-        channel = entity.channel
-      )
+    val (ccMappings, pcMappings) = padRepo.withSafeDbCall(
+      operation = "buildExportBundleMidi",
+      fallback = emptyList<MidiCcMapping>() to emptyList<MidiProgramBankMapping>()
+    ) { dbDao ->
+      val cc = dbDao.getMidiCcMappingsOnce(profileId).toDomainMappings()
+      val pc = dbDao.getMidiPcMappingsOnce(profileId).map { entity ->
+        MidiProgramBankMapping(
+          id = entity.id,
+          profileId = entity.profileId,
+          programNumber = entity.programNumber,
+          bankIndex = entity.bankIndex,
+          channel = entity.channel
+        )
+      }
+      cc to pc
     }
     return ExportedProfileBundle(
       profile = profile,
@@ -2184,24 +2257,20 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
         )
         val padEntities = bundle.pads.map { pad -> pad.toPadEntity(profile.id) }
         val settingEntities = bundle.pads.map { pad -> pad.settings.toEntity(pad.id) }
-        dao.saveCompleteProfile(profileEntity, padEntities, settingEntities)
-        dao.deleteMidiCcMappingsForProfile(profile.id)
-        if (bundle.ccMappings.isNotEmpty()) {
-          dao.upsertMidiCcMappings(
-            bundle.ccMappings.map { mapping ->
-              MidiCcMappingEntity(
-                id = "cc_${profile.id}_${mapping.target.name}",
-                profileId = profile.id,
-                target = mapping.target.name,
-                ccNumber = mapping.ccNumber,
-                channel = mapping.channel
-              )
-            }
-          )
-        }
-        dao.deleteMidiPcMappingsForProfile(profile.id)
-        bundle.pcMappings.forEach { pc ->
-          dao.upsertMidiPcMapping(
+        padRepo.saveCompleteProfile(
+          profile = profileEntity,
+          pads = padEntities,
+          settings = settingEntities,
+          ccMappings = bundle.ccMappings.map { mapping ->
+            MidiCcMappingEntity(
+              id = "cc_${profile.id}_${mapping.target.name}",
+              profileId = profile.id,
+              target = mapping.target.name,
+              ccNumber = mapping.ccNumber,
+              channel = mapping.channel
+            )
+          },
+          pcMappings = bundle.pcMappings.map { pc ->
             MidiPcBankMappingEntity(
               id = "pc_${profile.id}_${pc.bankIndex}",
               profileId = profile.id,
@@ -2209,8 +2278,9 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
               bankIndex = pc.bankIndex,
               channel = pc.channel
             )
-          )
-        }
+          },
+          replaceMidiMappings = true
+        )
         settingsRepo.setFocusModeMidiNote(importedFocusNote)
 
         settingsRepo.setGridConfig(profile.gridConfig)
@@ -2249,7 +2319,9 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
     viewModelScope.launch {
       runCatching {
         val json = withContext(Dispatchers.IO) {
-          val allProfiles = dao.getAllProfilesOnce()
+          val allProfiles = padRepo.withSafeDbCall("exportFullBackupGetProfiles", emptyList()) { dbDao ->
+            dbDao.getAllProfilesOnce()
+          }
           val bundles = if (allProfiles.isEmpty()) {
             listOf(buildExportBundleForProfile(_uiState.value.settings.activeProfileId))
           } else {
@@ -2307,28 +2379,20 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
             val uniquePadId = "pad_${idPrefix}_${idx}_${UUID.randomUUID().toString().take(8)}"
             pad.copy(id = uniquePadId) to pad.settings
           }
-          dao.saveCompleteProfile(
+          padRepo.saveCompleteProfile(
             profile = entity,
             pads = padEntities.map { (p, _) -> p.toPadEntity(profile.id) },
-            settings = padEntities.map { (p, s) -> s.toEntity(p.id) }
-          )
-          dao.deleteMidiCcMappingsForProfile(profile.id)
-          if (bundle.ccMappings.isNotEmpty()) {
-            dao.upsertMidiCcMappings(
-              bundle.ccMappings.map { mapping ->
-                MidiCcMappingEntity(
-                  id = "cc_${profile.id}_${mapping.target.name}",
-                  profileId = profile.id,
-                  target = mapping.target.name,
-                  ccNumber = mapping.ccNumber,
-                  channel = mapping.channel
-                )
-              }
-            )
-          }
-          dao.deleteMidiPcMappingsForProfile(profile.id)
-          bundle.pcMappings.forEach { pc ->
-            dao.upsertMidiPcMapping(
+            settings = padEntities.map { (p, s) -> s.toEntity(p.id) },
+            ccMappings = bundle.ccMappings.map { mapping ->
+              MidiCcMappingEntity(
+                id = "cc_${profile.id}_${mapping.target.name}",
+                profileId = profile.id,
+                target = mapping.target.name,
+                ccNumber = mapping.ccNumber,
+                channel = mapping.channel
+              )
+            },
+            pcMappings = bundle.pcMappings.map { pc ->
               MidiPcBankMappingEntity(
                 id = "pc_${profile.id}_${pc.bankIndex}",
                 profileId = profile.id,
@@ -2336,14 +2400,15 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
                 bankIndex = pc.bankIndex,
                 channel = pc.channel
               )
-            )
-          }
+            },
+            replaceMidiMappings = true
+          )
         }
 
         val gs = payload.globalSettings
         val restoredActiveId = payload.profiles.firstOrNull { it.profile.id == gs.activeProfileId }?.profile?.id
           ?: payload.profiles.first().profile.id
-        dao.setActiveProfile(restoredActiveId)
+        padRepo.setActiveProfile(restoredActiveId)
 
         settingsRepo.setGridConfig(gs.gridConfig)
         settingsRepo.setPlayMode(gs.playMode)
@@ -2484,7 +2549,11 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
   fun clearFocusModeMidiNote() {
     val profileId = _uiState.value.settings.activeProfileId
     viewModelScope.launch {
-      dao.updateProfileFocusModeMidiNote(profileId, null, System.currentTimeMillis())
+      padRepo.withDbMutation("clearFocusModeMidiNote", Unit) { dbDao ->
+        if (dbDao.profileExists(profileId)) {
+          dbDao.updateProfileFocusModeMidiNote(profileId, null, System.currentTimeMillis())
+        }
+      }
       settingsRepo.setFocusModeMidiNote(null)
       persistentConfigManager.notifyConfigDirty("clear_focus_midi")
       _uiState.update { it.copy(statusMessage = "Mapping MIDI Note Fokus Mode profil dihapus") }
@@ -2497,7 +2566,11 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
 
   fun clearPadMidiNote(padId: String) {
     viewModelScope.launch {
-      dao.updatePadMidiNote(padId, null)
+      padRepo.withDbMutation("clearPadMidiNote", Unit, padId) { dbDao ->
+        if (dbDao.padExists(padId)) {
+          dbDao.updatePadMidiNote(padId, null)
+        }
+      }
       persistentConfigManager.notifyConfigDirty("clear_pad_midi")
       _uiState.update { state ->
         val updated = state.pads.map { pad ->
@@ -2512,7 +2585,9 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
   fun clearMidiCcMapping(target: MidiCcTarget) {
     val profileId = _uiState.value.settings.activeProfileId
     viewModelScope.launch {
-      dao.deleteMidiCcMappingByTarget(profileId, target.name)
+      padRepo.withDbMutation("clearMidiCcMapping", Unit) { dbDao ->
+        dbDao.deleteMidiCcMappingByTarget(profileId, target.name)
+      }
       persistentConfigManager.notifyConfigDirty("clear_cc_midi")
       _uiState.update { state ->
         state.copy(
@@ -2572,7 +2647,12 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
         learnTarget is MidiLearnTarget.PadNote && event is MidiEvent.NoteOn -> {
           val note = event.note
           viewModelScope.launch {
-            dao.updatePadMidiNote(learnTarget.padId, note)
+            val saved = padRepo.withDbMutation("updatePadMidiNote", false, learnTarget.padId) { dbDao ->
+              if (!dbDao.padExists(learnTarget.padId)) return@withDbMutation false
+              dbDao.updatePadMidiNote(learnTarget.padId, note)
+              true
+            }
+            if (!saved) return@launch
             persistentConfigManager.notifyConfigDirty("midi_learn_pad")
             _uiState.update { cur ->
               val updated = cur.pads.map { pad ->
@@ -2597,15 +2677,20 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
             channel = event.channel
           )
           viewModelScope.launch {
-            dao.upsertMidiCcMapping(
-              MidiCcMappingEntity(
-                id = mapping.id,
-                profileId = mapping.profileId,
-                target = mapping.target.name,
-                ccNumber = mapping.ccNumber,
-                channel = mapping.channel
+            val saved = padRepo.withDbMutation("upsertMidiCcMapping", false) { dbDao ->
+              if (!dbDao.profileExists(profileId)) return@withDbMutation false
+              dbDao.upsertMidiCcMapping(
+                MidiCcMappingEntity(
+                  id = mapping.id,
+                  profileId = mapping.profileId,
+                  target = mapping.target.name,
+                  ccNumber = mapping.ccNumber,
+                  channel = mapping.channel
+                )
               )
-            )
+              true
+            }
+            if (!saved) return@launch
             persistentConfigManager.notifyConfigDirty("midi_learn_cc")
             _uiState.update { cur ->
               val filtered = cur.midiCcMappings.filterNot { it.target == learnTarget.target }
@@ -2627,15 +2712,20 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
             channel = event.channel
           )
           viewModelScope.launch {
-            dao.upsertMidiPcMapping(
-              MidiPcBankMappingEntity(
-                id = mapping.id,
-                profileId = mapping.profileId,
-                programNumber = mapping.programNumber,
-                bankIndex = mapping.bankIndex,
-                channel = mapping.channel
+            val saved = padRepo.withDbMutation("upsertMidiPcMapping", false) { dbDao ->
+              if (!dbDao.profileExists(profileId)) return@withDbMutation false
+              dbDao.upsertMidiPcMapping(
+                MidiPcBankMappingEntity(
+                  id = mapping.id,
+                  profileId = mapping.profileId,
+                  programNumber = mapping.programNumber,
+                  bankIndex = mapping.bankIndex,
+                  channel = mapping.channel
+                )
               )
-            )
+              true
+            }
+            if (!saved) return@launch
             persistentConfigManager.notifyConfigDirty("midi_learn_pc")
             _uiState.update { cur ->
               val filtered = cur.midiPcMappings.filterNot { it.bankIndex == learnTarget.bankIndex }
@@ -2653,7 +2743,9 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
             val existing = state.sequencerPlaylists.firstOrNull { it.id == learnTarget.playlistId }
               ?: return@launch
             val updated = existing.copy(triggerMidiNote = note, updatedAtMs = System.currentTimeMillis())
-            dao.upsertSequencerPlaylist(updated.toEntity())
+            padRepo.withDbMutation("upsertSequencerPlaylistMidi", Unit) { dbDao ->
+              dbDao.upsertSequencerPlaylist(updated.toEntity())
+            }
             _uiState.update { cur ->
               cur.copy(
                 midiLearnTarget = null,
@@ -2666,7 +2758,12 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
           val note = event.note
           val profileId = state.settings.activeProfileId
           viewModelScope.launch {
-            dao.updateProfileFocusModeMidiNote(profileId, note, System.currentTimeMillis())
+            val saved = padRepo.withDbMutation("updateProfileFocusModeMidiNote", false) { dbDao ->
+              if (!dbDao.profileExists(profileId)) return@withDbMutation false
+              dbDao.updateProfileFocusModeMidiNote(profileId, note, System.currentTimeMillis())
+              true
+            }
+            if (!saved) return@launch
             settingsRepo.setFocusModeMidiNote(note)
             persistentConfigManager.notifyConfigDirty("learn_focus_midi")
             _uiState.update { cur ->
@@ -2769,7 +2866,9 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
   fun clearMidiPcMappingForBank(bankIndex: Int) {
     val profileId = _uiState.value.settings.activeProfileId
     viewModelScope.launch {
-      dao.deleteMidiPcMappingByBank(profileId, bankIndex)
+      padRepo.withDbMutation("deleteMidiPcMappingByBank", Unit) { dbDao ->
+        dbDao.deleteMidiPcMappingByBank(profileId, bankIndex)
+      }
       persistentConfigManager.notifyConfigDirty("clear_pc_midi")
       _uiState.update { state ->
         state.copy(
@@ -2891,18 +2990,23 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
 
   fun saveScheduledTask(task: ScheduledPadTask) {
     viewModelScope.launch {
-      val assignedEntity = dao.upsertScheduledTaskAssigningRequestCode(task.toEntity())
-      val assignedDomain = assignedEntity.toDomain()
-      val nextMs = if (assignedDomain.enabled) {
-        PadSchedulerManager.scheduleTask(app, assignedDomain)
-      } else {
-        PadSchedulerManager.cancelTask(app, assignedDomain.id, assignedDomain.requestCode)
-        0L
+      val finalized = padRepo.withDbMutation("saveScheduledTask", null) { dbDao ->
+        val assignedEntity = dbDao.upsertScheduledTaskAssigningRequestCode(task.toEntity())
+        val assignedDomain = assignedEntity.toDomain()
+        val nextMs = if (assignedDomain.enabled) {
+          PadSchedulerManager.scheduleTask(app, assignedDomain)
+        } else {
+          PadSchedulerManager.cancelTask(app, assignedDomain.id, assignedDomain.requestCode)
+          0L
+        }
+        val finalizedDomain = assignedDomain.copy(nextTriggerAtMs = nextMs)
+        dbDao.upsertScheduledTask(finalizedDomain.toEntity())
+        finalizedDomain
       }
-      val finalized = assignedDomain.copy(nextTriggerAtMs = nextMs)
-      dao.upsertScheduledTask(finalized.toEntity())
-      _uiState.update {
-        it.copy(statusMessage = "Jadwal \"${finalized.title}\" disimpan")
+      if (finalized != null) {
+        _uiState.update {
+          it.copy(statusMessage = "Jadwal \"${finalized.title}\" disimpan")
+        }
       }
     }
   }
@@ -2913,9 +3017,11 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
 
   fun deleteScheduledTask(taskId: String) {
     viewModelScope.launch {
-      val existing = dao.getScheduledTaskById(taskId)
-      PadSchedulerManager.cancelTask(app, taskId, existing?.requestCode ?: 0)
-      dao.deleteScheduledTaskById(taskId)
+      padRepo.withDbMutation("deleteScheduledTask", Unit) { dbDao ->
+        val existing = dbDao.getScheduledTaskById(taskId)
+        PadSchedulerManager.cancelTask(app, taskId, existing?.requestCode ?: 0)
+        dbDao.deleteScheduledTaskById(taskId)
+      }
       _uiState.update { it.copy(statusMessage = "Jadwal dihapus") }
     }
   }
@@ -2959,7 +3065,9 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
   fun saveSequencerPlaylist(playlist: SequencerPlaylist) {
     viewModelScope.launch {
       val updated = playlist.copy(updatedAtMs = System.currentTimeMillis())
-      dao.upsertSequencerPlaylist(updated.toEntity())
+      padRepo.withDbMutation("saveSequencerPlaylist", Unit) { dbDao ->
+        dbDao.upsertSequencerPlaylist(updated.toEntity())
+      }
       _uiState.update { it.copy(statusMessage = "Playlist \"${updated.name}\" diperbarui") }
     }
   }
@@ -2969,7 +3077,9 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
       if (_uiState.value.sequencerPlayback.activePlaylistId == playlistId) {
         sequencerEngine.stop()
       }
-      dao.deleteSequencerPlaylistById(playlistId)
+      padRepo.withDbMutation("deleteSequencerPlaylist", Unit) { dbDao ->
+        dbDao.deleteSequencerPlaylistById(playlistId)
+      }
       _uiState.update { it.copy(statusMessage = "Playlist dihapus") }
     }
   }
@@ -3093,7 +3203,7 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
       )
     }
     viewModelScope.launch {
-      selectedIds.forEach { dao.deletePadById(it) }
+      padRepo.deletePadsByIds(selectedIds.toList())
       persistentConfigManager.notifyConfigDirty("bulk_delete_pads")
     }
   }
@@ -3123,7 +3233,10 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
     }
     val profileId = state.settings.activeProfileId
     viewModelScope.launch {
-      dao.upsertPads(updatedPads.filter { it.id in selectedIds }.map { it.toPadEntity(profileId) })
+      padRepo.upsertPadsIfProfileExists(
+        profileId = profileId,
+        pads = updatedPads.filter { it.id in selectedIds }.map { it.toPadEntity(profileId) }
+      )
       persistentConfigManager.notifyConfigDirty("bulk_color_pads")
     }
   }
@@ -3183,23 +3296,25 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
     }
     val profileId = state.settings.activeProfileId
     viewModelScope.launch {
-      val existingProfile = dao.getProfileById(profileId)
-      if (existingProfile != null && (!state.isBankExplicitMode || createNew)) {
-        val existingOrder = ProfileJsonSerializer.decodeBankOrderString(existingProfile.bankOrderJson)
-        val newOrder = (existingOrder + (0..resolvedTargetBank)).distinct()
-        val namesMap = ProfileJsonSerializer.decodeBankNamesString(existingProfile.bankNamesJson).toMutableMap()
-        if (!namesMap.containsKey(resolvedTargetBank)) {
-          namesMap[resolvedTargetBank] = targetSubName
+      padRepo.withDbMutation("bulkMoveSelectedPadsToBank", Unit) { dbDao ->
+        val existingProfile = dbDao.getProfileById(profileId) ?: return@withDbMutation
+        if (!state.isBankExplicitMode || createNew) {
+          val existingOrder = ProfileJsonSerializer.decodeBankOrderString(existingProfile.bankOrderJson)
+          val newOrder = (existingOrder + (0..resolvedTargetBank)).distinct()
+          val namesMap = ProfileJsonSerializer.decodeBankNamesString(existingProfile.bankNamesJson).toMutableMap()
+          if (!namesMap.containsKey(resolvedTargetBank)) {
+            namesMap[resolvedTargetBank] = targetSubName
+          }
+          dbDao.updateProfileBankConfig(
+            profileId = profileId,
+            bankNamesJson = ProfileJsonSerializer.encodeBankNamesString(namesMap),
+            bankOrderJson = ProfileJsonSerializer.encodeBankOrderString(newOrder),
+            bankFolderUrisJson = existingProfile.bankFolderUrisJson
+          )
         }
-        dao.updateProfileBankConfig(
-          profileId = profileId,
-          bankNamesJson = ProfileJsonSerializer.encodeBankNamesString(namesMap),
-          bankOrderJson = ProfileJsonSerializer.encodeBankOrderString(newOrder),
-          bankFolderUrisJson = existingProfile.bankFolderUrisJson
-        )
-      }
-      if (changedPads.isNotEmpty()) {
-        dao.upsertPads(changedPads.map { it.toPadEntity(profileId) })
+        if (changedPads.isNotEmpty()) {
+          dbDao.upsertPadsIfProfileExists(profileId, changedPads.map { it.toPadEntity(profileId) })
+        }
       }
       persistentConfigManager.notifyConfigDirty("bulk_move_pads")
     }
@@ -3250,8 +3365,11 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
     }
     val profileId = state.settings.activeProfileId
     viewModelScope.launch {
-      dao.upsertPads(clonedPairs.map { it.toPadEntity(profileId) })
-      dao.upsertPadSettingsSafely(clonedPairs.map { it.settings.toEntity(it.id) })
+      padRepo.bulkDuplicateSelectedPads(
+        profileId = profileId,
+        clonedPads = clonedPairs.map { it.toPadEntity(profileId) },
+        clonedSettings = clonedPairs.map { it.settings.toEntity(it.id) }
+      )
       persistentConfigManager.notifyConfigDirty("bulk_duplicate_pads")
     }
   }
@@ -3322,10 +3440,10 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
       )
     }
     viewModelScope.launch {
-      val existingProfile = dao.getProfileById(profileId)
       val gs = _uiState.value.settings
       val grid = gs.gridConfig
-      val profile = existingProfile?.copy(updatedAtMs = System.currentTimeMillis()) ?: PadProfileEntity(
+      val now = System.currentTimeMillis()
+      val fallbackProfile = PadProfileEntity(
         id = profileId,
         name = DEFAULT_PROFILE_NAME,
         folderUri = gs.folderUri,
@@ -3335,44 +3453,23 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
         masterEqEnabled = gs.masterEqEnabled,
         masterEqPreset = gs.masterEqPreset.name,
         masterEqBandsJson = ProfileJsonSerializer.encodeEqBandsString(gs.masterEqBandsDb),
-        createdAtMs = System.currentTimeMillis(),
-        updatedAtMs = System.currentTimeMillis(),
+        createdAtMs = now,
+        updatedAtMs = now,
         isActive = true
       )
-      dao.syncProfilePadsPreservingSettings(profile, normalized.map { it.toPadEntity(profileId) })
-      dao.upsertPadSettingsSafely(normalized.map { it.settings.toEntity(it.id) })
+      padRepo.syncSnapshotWithSettings(
+        profileId = profileId,
+        fallbackProfile = fallbackProfile,
+        pads = normalized.map { it.toPadEntity(profileId) },
+        settings = normalized.map { it.settings.toEntity(it.id) }
+      )
       persistentConfigManager.notifyConfigDirty("undo_redo_snapshot")
     }
   }
 
   private suspend fun persistPadSettingSafely(padId: String, settings: PadSettings) {
-    val entity = settings.toEntity(padId)
-    if (dao.upsertPadSettingSafely(entity)) return
-    val currentPad = _uiState.value.pads.firstOrNull { it.id == padId } ?: return
-    val gs = _uiState.value.settings
-    val profileId = gs.activeProfileId
-    if (dao.getProfileById(profileId) == null) {
-      val now = System.currentTimeMillis()
-      val grid = gs.gridConfig
-      dao.upsertProfile(
-        PadProfileEntity(
-          id = profileId,
-          name = DEFAULT_PROFILE_NAME,
-          folderUri = gs.folderUri,
-          gridPreset = grid.preset.name,
-          gridRows = grid.rows,
-          gridCols = grid.cols,
-          masterEqEnabled = gs.masterEqEnabled,
-          masterEqPreset = gs.masterEqPreset.name,
-          masterEqBandsJson = ProfileJsonSerializer.encodeEqBandsString(gs.masterEqBandsDb),
-          createdAtMs = now,
-          updatedAtMs = now,
-          isActive = true
-        )
-      )
-    }
-    dao.upsertPad(currentPad.copy(settings = settings).toPadEntity(profileId))
-    dao.upsertPadSettingSafely(entity)
+    // Jika pad induk sudah dihapus (race delete/rescan/restore), padRepo mengabaikan diam-diam & mencatat log.
+    padRepo.persistPadSettingSafely(settings.toEntity(padId))
   }
 
   fun toggleFavoritesFilter() {
@@ -3390,18 +3487,21 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
     val profileId = _uiState.value.settings.activeProfileId
     val trimmed = newName.trim().take(20)
     viewModelScope.launch {
-      val existing = dao.getProfileById(profileId) ?: return@launch
-      val map = ProfileJsonSerializer.decodeBankNamesString(existing.bankNamesJson).toMutableMap()
-      if (trimmed.isEmpty()) {
-        map.remove(bankIndex)
-      } else {
-        map[bankIndex] = trimmed
-      }
-      dao.updateProfileBankNames(profileId, ProfileJsonSerializer.encodeBankNamesString(map))
+      val updatedMap = padRepo.withDbMutation("renameBank", null) { dbDao ->
+        val existing = dbDao.getProfileById(profileId) ?: return@withDbMutation null
+        val map = ProfileJsonSerializer.decodeBankNamesString(existing.bankNamesJson).toMutableMap()
+        if (trimmed.isEmpty()) {
+          map.remove(bankIndex)
+        } else {
+          map[bankIndex] = trimmed
+        }
+        dbDao.updateProfileBankNames(profileId, ProfileJsonSerializer.encodeBankNamesString(map))
+        map
+      } ?: return@launch
       _uiState.update { cur ->
         cur.copy(
           profiles = cur.profiles.map { p ->
-            if (p.id == profileId) p.copy(bankNames = map) else p
+            if (p.id == profileId) p.copy(bankNames = updatedMap) else p
           },
           statusMessage = if (trimmed.isEmpty()) "Reset Bank ${bankIndex + 1} name" else "Bank ${bankIndex + 1} renamed to \"$trimmed\""
         )
@@ -3419,61 +3519,58 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
     val newBankLabel = "B${newBankKey + 1}"
 
     viewModelScope.launch {
-      val existing = dao.getProfileById(profileId) ?: return@launch
-      val map = ProfileJsonSerializer.decodeBankNamesString(existing.bankNamesJson).toMutableMap()
-      if (!map.containsKey(newBankKey)) {
-        map[newBankKey] = newBankLabel
-      }
-
-      if (!state.isBankExplicitMode && state.pads.isNotEmpty()) {
-        val perBank = state.settings.gridConfig.padsPerBank.coerceAtLeast(1)
-        val promoted = PadGridSlotManager.promoteImplicitBanks(state.pads, perBank)
-        dao.upsertPads(promoted.map { it.toPadEntity(profileId) })
-        val promotedKeys = promoted.map { it.bankIndex }.distinct().sorted().ifEmpty { listOf(0) }
-        val updatedOrder = (promotedKeys + newBankKey).distinct()
-        dao.updateProfileBankConfig(
-          profileId = profileId,
-          bankNamesJson = ProfileJsonSerializer.encodeBankNamesString(map),
-          bankOrderJson = ProfileJsonSerializer.encodeBankOrderString(updatedOrder),
-          bankFolderUrisJson = existing.bankFolderUrisJson
-        )
-        _uiState.update { cur ->
-          val updatedProfiles = cur.profiles.map { p ->
-            if (p.id == profileId) p.copy(bankNames = map, bankOrder = updatedOrder) else p
-          }
-          val tempState = cur.copy(pads = promoted, profiles = updatedProfiles)
-          val targetIdx = tempState.bankPages.indexOfFirst { it.bankKey == newBankKey }
-            .takeIf { it >= 0 } ?: (tempState.bankPages.size - 1).coerceAtLeast(0)
-          tempState.copy(
-            requestedBankPageIndex = targetIdx,
-            statusMessage = "Bank \"$newBankLabel\" ditambahkan"
-          )
+      val resultTriple = padRepo.withDbMutation("addNewBank", null) { dbDao ->
+        val existing = dbDao.getProfileById(profileId) ?: return@withDbMutation null
+        val map = ProfileJsonSerializer.decodeBankNamesString(existing.bankNamesJson).toMutableMap()
+        if (!map.containsKey(newBankKey)) {
+          map[newBankKey] = newBankLabel
         }
-      } else {
-        val baseOrder = if (state.activeBankOrder.isNotEmpty()) {
-          state.activeBankOrder
+        if (!state.isBankExplicitMode && state.pads.isNotEmpty()) {
+          val perBank = state.settings.gridConfig.padsPerBank.coerceAtLeast(1)
+          val promoted = PadGridSlotManager.promoteImplicitBanks(state.pads, perBank)
+          dbDao.upsertPadsIfProfileExists(profileId, promoted.map { it.toPadEntity(profileId) })
+          val promotedKeys = promoted.map { it.bankIndex }.distinct().sorted().ifEmpty { listOf(0) }
+          val updatedOrder = (promotedKeys + newBankKey).distinct()
+          dbDao.updateProfileBankConfig(
+            profileId = profileId,
+            bankNamesJson = ProfileJsonSerializer.encodeBankNamesString(map),
+            bankOrderJson = ProfileJsonSerializer.encodeBankOrderString(updatedOrder),
+            bankFolderUrisJson = existing.bankFolderUrisJson
+          )
+          Triple(map, updatedOrder, promoted)
         } else {
-          existingKeys.ifEmpty { listOf(0) }
-        }
-        val updatedOrder = (baseOrder + newBankKey).distinct()
-        dao.updateProfileBankConfig(
-          profileId = profileId,
-          bankNamesJson = ProfileJsonSerializer.encodeBankNamesString(map),
-          bankOrderJson = ProfileJsonSerializer.encodeBankOrderString(updatedOrder),
-          bankFolderUrisJson = existing.bankFolderUrisJson
-        )
-        _uiState.update { cur ->
-          val updatedProfiles = cur.profiles.map { p ->
-            if (p.id == profileId) p.copy(bankNames = map, bankOrder = updatedOrder) else p
+          val baseOrder = if (state.activeBankOrder.isNotEmpty()) {
+            state.activeBankOrder
+          } else {
+            existingKeys.ifEmpty { listOf(0) }
           }
-          val tempState = cur.copy(profiles = updatedProfiles)
-          val targetIdx = tempState.bankPages.indexOfFirst { it.bankKey == newBankKey }
-            .takeIf { it >= 0 } ?: (tempState.bankPages.size - 1).coerceAtLeast(0)
-          tempState.copy(
-            requestedBankPageIndex = targetIdx,
-            statusMessage = "Bank \"$newBankLabel\" ditambahkan"
+          val updatedOrder = (baseOrder + newBankKey).distinct()
+          dbDao.updateProfileBankConfig(
+            profileId = profileId,
+            bankNamesJson = ProfileJsonSerializer.encodeBankNamesString(map),
+            bankOrderJson = ProfileJsonSerializer.encodeBankOrderString(updatedOrder),
+            bankFolderUrisJson = existing.bankFolderUrisJson
           )
+          Triple(map, updatedOrder, null)
         }
+      } ?: return@launch
+
+      val (map, updatedOrder, promoted) = resultTriple
+      _uiState.update { cur ->
+        val updatedProfiles = cur.profiles.map { p ->
+          if (p.id == profileId) p.copy(bankNames = map, bankOrder = updatedOrder) else p
+        }
+        val tempState = if (promoted != null) {
+          cur.copy(pads = promoted, profiles = updatedProfiles)
+        } else {
+          cur.copy(profiles = updatedProfiles)
+        }
+        val targetIdx = tempState.bankPages.indexOfFirst { it.bankKey == newBankKey }
+          .takeIf { it >= 0 } ?: (tempState.bankPages.size - 1).coerceAtLeast(0)
+        tempState.copy(
+          requestedBankPageIndex = targetIdx,
+          statusMessage = "Bank \"$newBankLabel\" ditambahkan"
+        )
       }
     }
   }
@@ -3485,41 +3582,44 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
     if (currentKeys.size <= 1) return
 
     viewModelScope.launch {
-      val existing = dao.getProfileById(profileId) ?: return@launch
-      if (!state.isBankExplicitMode) {
-        // Materialize chunked banks into explicit bankIndices before reordering
-        val perBank = state.settings.gridConfig.padsPerBank.coerceAtLeast(1)
-        val promoted = PadGridSlotManager.promoteImplicitBanks(state.pads, perBank)
-        val idx = currentKeys.indexOf(bankKey)
-        val targetIdx = (idx + delta).coerceIn(0, currentKeys.lastIndex)
-        if (idx < 0 || idx == targetIdx) return@launch
-        val reordered = currentKeys.toMutableList().apply {
-          val removed = removeAt(idx)
-          add(targetIdx, removed)
+      val idx = currentKeys.indexOf(bankKey)
+      val targetIdx = (idx + delta).coerceIn(0, currentKeys.lastIndex)
+      if (idx < 0 || idx == targetIdx) return@launch
+      val reordered = currentKeys.toMutableList().apply {
+        val removed = removeAt(idx)
+        add(targetIdx, removed)
+      }
+      val promotedResult = padRepo.withDbMutation("moveBankOrder", null) { dbDao ->
+        val existing = dbDao.getProfileById(profileId) ?: return@withDbMutation null
+        if (!state.isBankExplicitMode) {
+          val perBank = state.settings.gridConfig.padsPerBank.coerceAtLeast(1)
+          val promoted = PadGridSlotManager.promoteImplicitBanks(state.pads, perBank)
+          dbDao.upsertPadsIfProfileExists(profileId, promoted.map { it.toPadEntity(profileId) })
+          dbDao.updateProfileBankConfig(
+            profileId = profileId,
+            bankNamesJson = existing.bankNamesJson,
+            bankOrderJson = ProfileJsonSerializer.encodeBankOrderString(reordered),
+            bankFolderUrisJson = existing.bankFolderUrisJson
+          )
+          promoted to true
+        } else {
+          dbDao.updateProfileBankConfig(
+            profileId = profileId,
+            bankNamesJson = existing.bankNamesJson,
+            bankOrderJson = ProfileJsonSerializer.encodeBankOrderString(reordered),
+            bankFolderUrisJson = existing.bankFolderUrisJson
+          )
+          null to true
         }
-        dao.upsertPads(promoted.map { it.toPadEntity(profileId) })
-        dao.updateProfileBankConfig(
-          profileId = profileId,
-          bankNamesJson = existing.bankNamesJson,
-          bankOrderJson = ProfileJsonSerializer.encodeBankOrderString(reordered),
-          bankFolderUrisJson = existing.bankFolderUrisJson
-        )
-        _uiState.update { it.copy(pads = promoted, statusMessage = "Urutan bank diperbarui") }
-      } else {
-        val idx = currentKeys.indexOf(bankKey)
-        val targetIdx = (idx + delta).coerceIn(0, currentKeys.lastIndex)
-        if (idx < 0 || idx == targetIdx) return@launch
-        val reordered = currentKeys.toMutableList().apply {
-          val removed = removeAt(idx)
-          add(targetIdx, removed)
+      } ?: return@launch
+
+      val promoted = promotedResult.first
+      _uiState.update {
+        if (promoted != null) {
+          it.copy(pads = promoted, statusMessage = "Urutan bank diperbarui")
+        } else {
+          it.copy(statusMessage = "Urutan bank diperbarui")
         }
-        dao.updateProfileBankConfig(
-          profileId = profileId,
-          bankNamesJson = existing.bankNamesJson,
-          bankOrderJson = ProfileJsonSerializer.encodeBankOrderString(reordered),
-          bankFolderUrisJson = existing.bankFolderUrisJson
-        )
-        _uiState.update { it.copy(statusMessage = "Urutan bank diperbarui") }
       }
     }
   }
@@ -3547,8 +3647,6 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
 
     viewModelScope.launch {
       _uiState.update { it.copy(isScanning = true) }
-      val existingEntities = dao.getPadsForProfileOnce(profileId)
-      val existingSettings = dao.getPadSettingsForProfileOnce(profileId).associateBy { it.padId }
 
       val scanPair = runCatching {
         scanner.scanSingleBankFolder(treeUri, bankFolderUri, bankKey, bankName)
@@ -3567,34 +3665,54 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
 
       val (scannedPads, errors) = scanPair
       if (errors.isNotEmpty()) {
-        dao.insertErrorLogs(errors.map { it.toEntity() })
-      }
-
-      val existingBankByUri = existingEntities.filter { it.bankIndex == bankKey }.groupBy { it.uriString }
-      val otherBankPads = existingEntities.filter { it.bankIndex != bankKey }.map { entity ->
-        entityToDomain(entity, existingSettings[entity.id].toDomain())
-      }
-
-      val occupiedInBank = existingEntities
-        .filter { it.bankIndex == bankKey }
-        .mapTo(mutableSetOf()) { it.positionIndex.coerceAtLeast(0) }
-      val mergedBankPads = mutableListOf<SoundPad>()
-      for (scanned in scannedPads) {
-        val matches = existingBankByUri[scanned.uriString]
-        if (!matches.isNullOrEmpty()) {
-          matches.forEach { entity ->
-            mergedBankPads.add(
-              mergeScannedWithEntity(scanned, entity, existingSettings[entity.id].toDomain(), false)
-            )
-          }
-        } else {
-          val freeSlot = PadGridSlotManager.findFirstEmptySlot(occupiedInBank, startFrom = 0)
-          occupiedInBank.add(freeSlot)
-          mergedBankPads.add(scanned.copy(positionIndex = freeSlot))
+        padRepo.withSafeDbCall("insertRescanBankErrorLogs", Unit) { dbDao ->
+          dbDao.insertErrorLogs(errors.map { it.toEntity() })
         }
       }
 
-      val combined = PadGridSlotManager.resolveBankSlotCollisions(otherBankPads + mergedBankPads)
+      val mergeOutcome = padRepo.withDbMutation("rescanBankSync", null) { dbDao ->
+        val existingEntities = dbDao.getPadsForProfileOnce(profileId)
+        val existingSettings = dbDao.getPadSettingsForProfileOnce(profileId).associateBy { it.padId }
+
+        val existingBankByUri = existingEntities.filter { it.bankIndex == bankKey }.groupBy { it.uriString }
+        val otherBankPads = existingEntities.filter { it.bankIndex != bankKey }.map { entity ->
+          entityToDomain(entity, existingSettings[entity.id].toDomain())
+        }
+
+        val occupiedInBank = existingEntities
+          .filter { it.bankIndex == bankKey }
+          .mapTo(mutableSetOf()) { it.positionIndex.coerceAtLeast(0) }
+        val mergedBankPads = mutableListOf<SoundPad>()
+        for (scanned in scannedPads) {
+          val matches = existingBankByUri[scanned.uriString]
+          if (!matches.isNullOrEmpty()) {
+            matches.forEach { entity ->
+              mergedBankPads.add(
+                mergeScannedWithEntity(scanned, entity, existingSettings[entity.id].toDomain(), false)
+              )
+            }
+          } else {
+            val freeSlot = PadGridSlotManager.findFirstEmptySlot(occupiedInBank, startFrom = 0)
+            occupiedInBank.add(freeSlot)
+            mergedBankPads.add(scanned.copy(positionIndex = freeSlot))
+          }
+        }
+
+        val combined = PadGridSlotManager.resolveBankSlotCollisions(otherBankPads + mergedBankPads)
+        val existingProfile = dbDao.getProfileById(profileId)
+        if (existingProfile != null) {
+          dbDao.syncProfilePadsPreservingSettings(
+            existingProfile.copy(updatedAtMs = System.currentTimeMillis()),
+            combined.map { it.toPadEntity(profileId) }
+          )
+        }
+        combined to mergedBankPads.size
+      } ?: run {
+        _uiState.update { it.copy(isScanning = false) }
+        return@launch
+      }
+
+      val (combined, mergedBankCount) = mergeOutcome
       val preloadedIds = if (state.settings.preloadShortAudio) {
         ramCache.preloadShortSamples(combined)
       } else {
@@ -3602,17 +3720,13 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
       }
       val ready = combined.map { it.copy(isPreloadedInRam = it.id in preloadedIds || ramCache.isCached(it.uriString)) }
 
-      val existingProfile = dao.getProfileById(profileId)
-      if (existingProfile != null) {
-        dao.syncProfilePadsPreservingSettings(existingProfile.copy(updatedAtMs = System.currentTimeMillis()), ready.map { it.toPadEntity(profileId) })
-      }
       audioEngine.updatePlaylist(ready)
       _uiState.update {
         it.copy(
           pads = ready,
           isScanning = false,
           preloadedCount = ready.count { p -> p.isPreloadedInRam },
-          statusMessage = "Bank \"$bankName\" diperbarui (${mergedBankPads.size} file)"
+          statusMessage = "Bank \"$bankName\" diperbarui ($mergedBankCount file)"
         )
       }
       scheduleMiniWaveformExtraction(ready, state.settings.miniWaveformEnabled)
@@ -3645,8 +3759,12 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
           pad.id to AudioWaveformAndCutEngine.computeLoudnessGain(app, pad.uriString)
         }
       }
-      computed.forEach { (padId, gain) ->
-        dao.updatePadNormalizedGain(padId, gain)
+      padRepo.withDbMutation("updatePadNormalizedGains", Unit) { dbDao ->
+        computed.forEach { (padId, gain) ->
+          if (dbDao.padExists(padId)) {
+            dbDao.updatePadNormalizedGain(padId, gain)
+          }
+        }
       }
       settingsRepo.setAutoNormalizeEnabled(true)
       persistentConfigManager.notifyConfigDirty("normalize_loudness")
@@ -3859,16 +3977,18 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
     viewModelScope.launch {
       settingsRepo.setGridConfig(config)
       val profileId = _uiState.value.settings.activeProfileId
-      val profile = dao.getProfileById(profileId)
-      if (profile != null) {
-        dao.upsertProfile(
-          profile.copy(
-            gridPreset = config.preset.name,
-            gridRows = config.rows,
-            gridCols = config.cols,
-            updatedAtMs = System.currentTimeMillis()
+      padRepo.withDbMutation("setGridConfig", Unit) { dbDao ->
+        val profile = dbDao.getProfileById(profileId)
+        if (profile != null) {
+          dbDao.upsertProfile(
+            profile.copy(
+              gridPreset = config.preset.name,
+              gridRows = config.rows,
+              gridCols = config.cols,
+              updatedAtMs = System.currentTimeMillis()
+            )
           )
-        )
+        }
       }
     }
   }
@@ -3915,12 +4035,16 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
     audioEngine.setMasterEq(enabled, sanitized)
     viewModelScope.launch {
       settingsRepo.setMasterEq(enabled, preset, sanitized)
-      dao.updateProfileMasterEq(
-        profileId = profileId,
-        enabled = enabled,
-        preset = preset.name,
-        bandsJson = ProfileJsonSerializer.encodeEqBandsString(sanitized)
-      )
+      padRepo.withDbMutation("updateProfileMasterEq", Unit) { dbDao ->
+        if (dbDao.profileExists(profileId)) {
+          dbDao.updateProfileMasterEq(
+            profileId = profileId,
+            enabled = enabled,
+            preset = preset.name,
+            bandsJson = ProfileJsonSerializer.encodeEqBandsString(sanitized)
+          )
+        }
+      }
     }
   }
 
@@ -3947,13 +4071,17 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
 
   fun deleteErrorLogById(id: String) {
     viewModelScope.launch {
-      dao.deleteErrorLogById(id)
+      padRepo.withSafeDbCall("deleteErrorLogById", Unit) { dbDao ->
+        dbDao.deleteErrorLogById(id)
+      }
     }
   }
 
   fun clearErrorLogs() {
     viewModelScope.launch {
-      dao.clearErrorLogs()
+      padRepo.withSafeDbCall("clearErrorLogs", Unit) { dbDao ->
+        dbDao.clearErrorLogs()
+      }
       _uiState.update { it.copy(statusMessage = "Error log dibersihkan") }
     }
   }
@@ -3961,7 +4089,10 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
   fun exportErrorLogsToUri(targetUri: Uri) {
     viewModelScope.launch {
       runCatching {
-        val logs = dao.getErrorLogsOnce().map { entity ->
+        val entities = padRepo.withSafeDbCall("getErrorLogsOnce", emptyList()) { dbDao ->
+          dbDao.getErrorLogsOnce()
+        }
+        val logs = entities.map { entity ->
           val type = runCatching { PadErrorType.valueOf(entity.errorType) }.getOrDefault(PadErrorType.PLAYBACK_ERROR)
           AppErrorLog(
             id = entity.id,
@@ -3996,7 +4127,11 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
     stackTrace: String
   ) {
     viewModelScope.launch {
-      dao.updatePadErrorState(pad.id, errorType.name, message)
+      padRepo.withDbMutation("updatePadErrorState", Unit, pad.id) { dbDao ->
+        if (dbDao.padExists(pad.id)) {
+          dbDao.updatePadErrorState(pad.id, errorType.name, message)
+        }
+      }
       logErrorInternal(
         fileName = pad.fileName,
         uriString = pad.uriString,
@@ -4035,7 +4170,9 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
       stackTrace = stackTrace,
       padId = padId
     )
-    dao.insertErrorLog(entity)
+    padRepo.withSafeDbCall("insertErrorLog", Unit, padId) { dbDao ->
+      dbDao.insertErrorLog(entity)
+    }
   }
 
   private fun AppErrorLog.toEntity(): ErrorLogEntity {
@@ -4067,7 +4204,9 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
         }
         if (bars.isNotEmpty()) {
           val encoded = ProfileJsonSerializer.encodeMiniWaveform(bars)
-          dao.updatePadMiniWaveformByUri(pad.uriString, encoded)
+          padRepo.withDbMutation("updatePadMiniWaveformByUri", Unit, pad.id) { dbDao ->
+            dbDao.updatePadMiniWaveformByUri(pad.uriString, encoded)
+          }
           _uiState.update { state ->
             val updated = state.pads.map { p ->
               if (p.uriString == pad.uriString) p.copy(miniWaveform = bars) else p
@@ -4136,6 +4275,29 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
     viewModelScope.launch { settingsRepo.setVisualEffectsEnabled(enabled) }
   }
 
+  fun setAnimationMode(mode: AnimationMode) {
+    viewModelScope.launch { settingsRepo.setAnimationMode(mode) }
+  }
+
+  fun setShowLatencyDebugOverlay(enabled: Boolean) {
+    viewModelScope.launch { settingsRepo.setShowLatencyDebugOverlay(enabled) }
+  }
+
+  fun resetTapLatencyMetrics() {
+    audioEngine.resetLatencyMetrics()
+  }
+
+  fun setRetriggerMode(mode: RetriggerMode) {
+    audioEngine.setRetriggerMode(mode)
+    viewModelScope.launch { settingsRepo.setRetriggerMode(mode) }
+  }
+
+  fun setMaxVoices(maxVoices: Int) {
+    val clamped = maxVoices.coerceIn(1, 16)
+    audioEngine.setMaxVoices(clamped)
+    viewModelScope.launch { settingsRepo.setMaxVoices(clamped) }
+  }
+
   fun setAppAccentColor(colorArgb: Long) {
     viewModelScope.launch { settingsRepo.setAppAccentColor(colorArgb) }
   }
@@ -4197,7 +4359,7 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
         )
       }
       if (resetPads.isNotEmpty()) {
-        dao.upsertPads(resetPads.map { it.toPadEntity(profileId) })
+        padRepo.upsertPadsIfProfileExists(profileId, resetPads.map { it.toPadEntity(profileId) })
         audioEngine.updatePlaylist(resetPads)
         persistentConfigManager.notifyConfigDirty("reset_pads_gray")
       }
@@ -4548,7 +4710,9 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
       if (outcome.success) {
         undoStack.clear()
         redoStack.clear()
-        val activeProfileId = dao.getAllProfilesOnce().firstOrNull { it.isActive }?.id
+        val activeProfileId = padRepo.withSafeDbCall("getActiveProfileAfterRestore", emptyList()) { dbDao ->
+          dbDao.getAllProfilesOnce()
+        }.firstOrNull { it.isActive }?.id
           ?: DEFAULT_PROFILE_ID
         lastLoadedProfileId = activeProfileId
         val preload = _uiState.value.settings.preloadShortAudio
@@ -4660,9 +4824,8 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
         if (alsoClearSafBackupFolder) {
           persistentConfigManager.clearBackupFolderFilesIfConfigured()
         }
-        dao.clearAllConfigTables()
         val now = System.currentTimeMillis()
-        dao.upsertProfile(
+        padRepo.clearAllConfigTablesAndSeedDefault(
           PadProfileEntity(
             id = DEFAULT_PROFILE_ID,
             name = DEFAULT_PROFILE_NAME,
@@ -4703,8 +4866,13 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
   }
 
   private suspend fun loadProfilePads(profileId: String, preloadRam: Boolean) {
-    val cachedEntities = dao.getPadsForProfileOnce(profileId)
-    val cachedSettings = dao.getPadSettingsForProfileOnce(profileId).associateBy { it.padId }
+    val (cachedEntities, cachedSettings) = padRepo.withSafeDbCall(
+      operation = "loadProfilePadsRead",
+      fallback = emptyList<SoundPadEntity>() to emptyMap<String, PadSettingEntity>()
+    ) { dbDao ->
+      dbDao.getPadsForProfileOnce(profileId) to
+        dbDao.getPadSettingsForProfileOnce(profileId).associateBy { it.padId }
+    }
 
     val rawDomainPads = cachedEntities.map { entity ->
       entityToDomain(entity, cachedSettings[entity.id].toDomain()).copy(
@@ -4717,7 +4885,7 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
       prev.positionIndex != pad.positionIndex || prev.bankIndex != pad.bankIndex
     }
     if (migratedEntities.isNotEmpty()) {
-      dao.upsertPads(migratedEntities.map { it.toPadEntity(profileId) })
+      padRepo.upsertPadsIfProfileExists(profileId, migratedEntities.map { it.toPadEntity(profileId) })
     }
 
     val preloadedIds = if (preloadRam && domainPads.isNotEmpty()) {
@@ -4727,15 +4895,21 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
     }
     val readyPads = domainPads.map { it.copy(isPreloadedInRam = it.id in preloadedIds) }
     ensureInitialSlotsCaptured(profileId, readyPads)
-    val ccMappings = dao.getMidiCcMappingsOnce(profileId).toDomainMappings()
-    val pcMappings = dao.getMidiPcMappingsOnce(profileId).map { entity ->
-      MidiProgramBankMapping(
-        id = entity.id,
-        profileId = entity.profileId,
-        programNumber = entity.programNumber,
-        bankIndex = entity.bankIndex,
-        channel = entity.channel
-      )
+    val (ccMappings, pcMappings) = padRepo.withSafeDbCall(
+      operation = "loadProfileMidiMappings",
+      fallback = emptyList<MidiCcMapping>() to emptyList<MidiProgramBankMapping>()
+    ) { dbDao ->
+      val cc = dbDao.getMidiCcMappingsOnce(profileId).toDomainMappings()
+      val pc = dbDao.getMidiPcMappingsOnce(profileId).map { entity ->
+        MidiProgramBankMapping(
+          id = entity.id,
+          profileId = entity.profileId,
+          programNumber = entity.programNumber,
+          bankIndex = entity.bankIndex,
+          channel = entity.channel
+        )
+      }
+      cc to pc
     }
 
     audioEngine.updatePlaylist(readyPads)
@@ -4821,9 +4995,6 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
     showAutoDetectBadge: Boolean
   ) {
     _uiState.update { it.copy(isScanning = true, errorMessage = null, hasFolderPermissionError = false) }
-    val existingEntities = dao.getPadsForProfileOnce(profileId)
-    val existingByUri = existingEntities.groupBy { it.uriString }
-    val existingSettings = dao.getPadSettingsForProfileOnce(profileId).associateBy { it.padId }
 
     val result = runCatching {
       scanner.scanFolder(treeUri, emptySet())
@@ -4846,7 +5017,9 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
     }
 
     if (result.detectedErrors.isNotEmpty()) {
-      dao.insertErrorLogs(result.detectedErrors.map { it.toEntity() })
+      padRepo.withSafeDbCall("insertScanErrorLogs", Unit) { dbDao ->
+        dbDao.insertErrorLogs(result.detectedErrors.map { it.toEntity() })
+      }
     }
 
     val validPads = result.pads.filter { it.errorMessage == null }
@@ -4856,134 +5029,148 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
       emptySet()
     }
 
-    val occupiedByBank = existingEntities
-      .groupBy { it.bankIndex }
-      .mapValuesTo(mutableMapOf()) { (_, list) ->
-        list.mapTo(mutableSetOf()) { it.positionIndex.coerceAtLeast(0) }
-      }
-    var newFilesCount = 0
-    val mergedPads = mutableListOf<SoundPad>()
-    val relinkedScannedUris = mutableSetOf<String>()
-    val preservedEntityIds = mutableSetOf<String>()
+    val persistResult = padRepo.withDbMutation("scanAndPersist", null) { dbDao ->
+      val existingEntities = dbDao.getPadsForProfileOnce(profileId)
+      val existingByUri = existingEntities.groupBy { it.uriString }
+      val existingSettings = dbDao.getPadSettingsForProfileOnce(profileId).associateBy { it.padId }
 
-    // Langkah 1: Cocokkan lebih dulu pad "File hilang" (hasil restore) ke file musik hasil scan baru
-    val missingRestoredEntities = existingEntities.filter {
-      it.errorMessage?.startsWith(PersistentConfigRestoreEngine.MISSING_FILE_ERROR_PREFIX) == true
-    }
-    for (missingEntity in missingRestoredEntities) {
-      val matchedScanned = AudioFileRelinker.matchScannedPadToMissingEntity(result.pads, missingEntity)
-      if (matchedScanned != null) {
-        preservedEntityIds.add(missingEntity.id)
-        relinkedScannedUris.add(matchedScanned.uriString)
-        mergedPads.add(
-          mergeScannedWithEntity(
-            scanned = matchedScanned,
-            entity = missingEntity,
-            settings = existingSettings[missingEntity.id].toDomain(),
-            isPreloadedInRam = matchedScanned.id in preloadedIds || ramCache.isCached(matchedScanned.uriString)
-          )
-        )
-      } else {
-        // File tetap belum ditemukan -> pertahankan posisi slot & penanda "File hilang"
-        preservedEntityIds.add(missingEntity.id)
-        mergedPads.add(
-          entityToDomain(missingEntity, existingSettings[missingEntity.id].toDomain()).copy(
-            isPreloadedInRam = false
-          )
-        )
-      }
-    }
+      val occupiedByBank = existingEntities
+        .groupBy { it.bankIndex }
+        .mapValuesTo(mutableMapOf()) { (_, list) ->
+          list.mapTo(mutableSetOf()) { it.positionIndex.coerceAtLeast(0) }
+        }
+      var newFilesCount = 0
+      val mergedPads = mutableListOf<SoundPad>()
+      val relinkedScannedUris = mutableSetOf<String>()
+      val preservedEntityIds = mutableSetOf<String>()
 
-    val scannedUris = result.pads.map { it.uriString }.toSet()
-    for (scanned in result.pads) {
-      val matchingExisting = existingByUri[scanned.uriString].orEmpty()
-        .filter { it.id !in preservedEntityIds }
-      if (matchingExisting.isNotEmpty()) {
-        for (entity in matchingExisting) {
-          preservedEntityIds.add(entity.id)
+      // Langkah 1: Cocokkan lebih dulu pad "File hilang" (hasil restore) ke file musik hasil scan baru
+      val missingRestoredEntities = existingEntities.filter {
+        it.errorMessage?.startsWith(PersistentConfigRestoreEngine.MISSING_FILE_ERROR_PREFIX) == true
+      }
+      for (missingEntity in missingRestoredEntities) {
+        val matchedScanned = AudioFileRelinker.matchScannedPadToMissingEntity(result.pads, missingEntity)
+        if (matchedScanned != null) {
+          preservedEntityIds.add(missingEntity.id)
+          relinkedScannedUris.add(matchedScanned.uriString)
           mergedPads.add(
             mergeScannedWithEntity(
-              scanned = scanned,
-              entity = entity,
-              settings = existingSettings[entity.id].toDomain(),
-              isPreloadedInRam = scanned.id in preloadedIds || ramCache.isCached(scanned.uriString)
+              scanned = matchedScanned,
+              entity = missingEntity,
+              settings = existingSettings[missingEntity.id].toDomain(),
+              isPreloadedInRam = matchedScanned.id in preloadedIds || ramCache.isCached(matchedScanned.uriString)
+            )
+          )
+        } else {
+          // File tetap belum ditemukan -> pertahankan posisi slot & penanda "File hilang"
+          preservedEntityIds.add(missingEntity.id)
+          mergedPads.add(
+            entityToDomain(missingEntity, existingSettings[missingEntity.id].toDomain()).copy(
+              isPreloadedInRam = false
             )
           )
         }
-      } else if (scanned.uriString !in relinkedScannedUris) {
-        newFilesCount++
-        val occupied = occupiedByBank.getOrPut(scanned.bankIndex) { mutableSetOf() }
-        val freeSlot = PadGridSlotManager.findFirstEmptySlot(occupied, startFrom = 0)
-        occupied.add(freeSlot)
+      }
+
+      val scannedUris = result.pads.map { it.uriString }.toSet()
+      for (scanned in result.pads) {
+        val matchingExisting = existingByUri[scanned.uriString].orEmpty()
+          .filter { it.id !in preservedEntityIds }
+        if (matchingExisting.isNotEmpty()) {
+          for (entity in matchingExisting) {
+            preservedEntityIds.add(entity.id)
+            mergedPads.add(
+              mergeScannedWithEntity(
+                scanned = scanned,
+                entity = entity,
+                settings = existingSettings[entity.id].toDomain(),
+                isPreloadedInRam = scanned.id in preloadedIds || ramCache.isCached(scanned.uriString)
+              )
+            )
+          }
+        } else if (scanned.uriString !in relinkedScannedUris) {
+          newFilesCount++
+          val occupied = occupiedByBank.getOrPut(scanned.bankIndex) { mutableSetOf() }
+          val freeSlot = PadGridSlotManager.findFirstEmptySlot(occupied, startFrom = 0)
+          occupied.add(freeSlot)
+          mergedPads.add(
+            scanned.copy(
+              positionIndex = freeSlot,
+              isPreloadedInRam = scanned.id in preloadedIds
+            )
+          )
+        }
+      }
+
+      existingEntities.filter {
+        it.id !in preservedEntityIds &&
+          it.uriString !in scannedUris &&
+          (it.uriString.startsWith("file://") || it.uriString.startsWith("demo://"))
+      }.forEach { localEntity ->
         mergedPads.add(
-          scanned.copy(
-            positionIndex = freeSlot,
-            isPreloadedInRam = scanned.id in preloadedIds
+          entityToDomain(localEntity, existingSettings[localEntity.id].toDomain()).copy(
+            isPreloadedInRam = ramCache.isCached(localEntity.uriString)
           )
         )
       }
-    }
 
-    existingEntities.filter {
-      it.id !in preservedEntityIds &&
-        it.uriString !in scannedUris &&
-        (it.uriString.startsWith("file://") || it.uriString.startsWith("demo://"))
-    }.forEach { localEntity ->
-      mergedPads.add(
-        entityToDomain(localEntity, existingSettings[localEntity.id].toDomain()).copy(
-          isPreloadedInRam = ramCache.isCached(localEntity.uriString)
-        )
+      val normalized = PadGridSlotManager.migrateLegacyGlobalPositionsIfNeeded(mergedPads)
+      ensureInitialSlotsCaptured(profileId, normalized)
+
+      val now = System.currentTimeMillis()
+      val existingProfile = dbDao.getProfileById(profileId)
+      val grid = _uiState.value.settings.gridConfig
+      val existingBankNames = ProfileJsonSerializer.decodeBankNamesString(existingProfile?.bankNamesJson)
+      val existingBankOrder = ProfileJsonSerializer.decodeBankOrderString(existingProfile?.bankOrderJson)
+      val previousSubfolderKeys = ProfileJsonSerializer.decodeBankFolderUrisString(existingProfile?.bankFolderUrisJson).keys
+      val padBankKeys = normalized.mapTo(mutableSetOf()) { it.bankIndex.coerceAtLeast(0) }
+
+      val finalBankNames = PadGridSlotManager.resolveBankNamesAfterScan(
+        hasSubfolderBanks = result.hasSubfolderBanks,
+        scannedBankNames = result.bankNames,
+        existingBankNames = existingBankNames,
+        padBankKeys = padBankKeys,
+        previousSubfolderKeys = previousSubfolderKeys
       )
+      val finalBankOrder = PadGridSlotManager.resolveBankOrderAfterScan(
+        existingOrder = existingBankOrder,
+        hasSubfolderBanks = result.hasSubfolderBanks,
+        scannedBankKeys = result.bankNames.keys,
+        padBankKeys = padBankKeys,
+        existingBankNames = existingBankNames,
+        previousSubfolderKeys = previousSubfolderKeys
+      )
+      val gs = _uiState.value.settings
+      val profile = PadProfileEntity(
+        id = profileId,
+        name = existingProfile?.name ?: DEFAULT_PROFILE_NAME,
+        folderUri = result.folderUri,
+        gridPreset = grid.preset.name,
+        gridRows = grid.rows,
+        gridCols = grid.cols,
+        bankNamesJson = ProfileJsonSerializer.encodeBankNamesString(finalBankNames),
+        bankOrderJson = ProfileJsonSerializer.encodeBankOrderString(finalBankOrder),
+        bankFolderUrisJson = ProfileJsonSerializer.encodeBankFolderUrisString(result.bankFolderUris),
+        masterEqEnabled = existingProfile?.masterEqEnabled ?: gs.masterEqEnabled,
+        masterEqPreset = existingProfile?.masterEqPreset ?: gs.masterEqPreset.name,
+        masterEqBandsJson = existingProfile?.masterEqBandsJson
+          ?: ProfileJsonSerializer.encodeEqBandsString(gs.masterEqBandsDb),
+        createdAtMs = existingProfile?.createdAtMs ?: now,
+        updatedAtMs = now,
+        isActive = true,
+        focusModeMidiNote = existingProfile?.focusModeMidiNote
+      )
+      val entities = normalized.map { it.toPadEntity(profileId) }
+      dbDao.syncProfilePadsPreservingSettings(profile, entities)
+      Triple(normalized, newFilesCount, existingEntities.isNotEmpty())
     }
 
-    val normalized = PadGridSlotManager.migrateLegacyGlobalPositionsIfNeeded(mergedPads)
-    ensureInitialSlotsCaptured(profileId, normalized)
+    if (persistResult == null) {
+      _uiState.update { it.copy(isScanning = false) }
+      return
+    }
 
-    val now = System.currentTimeMillis()
-    val existingProfile = dao.getProfileById(profileId)
-    val grid = _uiState.value.settings.gridConfig
-    val existingBankNames = ProfileJsonSerializer.decodeBankNamesString(existingProfile?.bankNamesJson)
-    val existingBankOrder = ProfileJsonSerializer.decodeBankOrderString(existingProfile?.bankOrderJson)
-    val previousSubfolderKeys = ProfileJsonSerializer.decodeBankFolderUrisString(existingProfile?.bankFolderUrisJson).keys
-    val padBankKeys = normalized.mapTo(mutableSetOf()) { it.bankIndex.coerceAtLeast(0) }
-
-    val finalBankNames = PadGridSlotManager.resolveBankNamesAfterScan(
-      hasSubfolderBanks = result.hasSubfolderBanks,
-      scannedBankNames = result.bankNames,
-      existingBankNames = existingBankNames,
-      padBankKeys = padBankKeys,
-      previousSubfolderKeys = previousSubfolderKeys
-    )
-    val finalBankOrder = PadGridSlotManager.resolveBankOrderAfterScan(
-      existingOrder = existingBankOrder,
-      hasSubfolderBanks = result.hasSubfolderBanks,
-      scannedBankKeys = result.bankNames.keys,
-      padBankKeys = padBankKeys,
-      existingBankNames = existingBankNames,
-      previousSubfolderKeys = previousSubfolderKeys
-    )
-    val gs = _uiState.value.settings
-    val profile = PadProfileEntity(
-      id = profileId,
-      name = existingProfile?.name ?: DEFAULT_PROFILE_NAME,
-      folderUri = result.folderUri,
-      gridPreset = grid.preset.name,
-      gridRows = grid.rows,
-      gridCols = grid.cols,
-      bankNamesJson = ProfileJsonSerializer.encodeBankNamesString(finalBankNames),
-      bankOrderJson = ProfileJsonSerializer.encodeBankOrderString(finalBankOrder),
-      bankFolderUrisJson = ProfileJsonSerializer.encodeBankFolderUrisString(result.bankFolderUris),
-      masterEqEnabled = existingProfile?.masterEqEnabled ?: gs.masterEqEnabled,
-      masterEqPreset = existingProfile?.masterEqPreset ?: gs.masterEqPreset.name,
-      masterEqBandsJson = existingProfile?.masterEqBandsJson
-        ?: ProfileJsonSerializer.encodeEqBandsString(gs.masterEqBandsDb),
-      createdAtMs = existingProfile?.createdAtMs ?: now,
-      updatedAtMs = now,
-      isActive = true,
-      focusModeMidiNote = existingProfile?.focusModeMidiNote
-    )
-    val entities = normalized.map { it.toPadEntity(profileId) }
-    dao.syncProfilePadsPreservingSettings(profile, entities)
+    val (normalized, newFilesCount, hadExistingPads) = persistResult
     persistentConfigManager.notifyConfigDirty("scan_folder")
 
     audioEngine.updatePlaylist(normalized)
@@ -4992,7 +5179,7 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
         pads = normalized,
         isScanning = false,
         preloadedCount = preloadedIds.size,
-        newlyDetectedCount = if (showAutoDetectBadge && existingEntities.isNotEmpty()) newFilesCount else 0
+        newlyDetectedCount = if (showAutoDetectBadge && hadExistingPads) newFilesCount else 0
       )
     }
     scheduleMiniWaveformExtraction(normalized, _uiState.value.settings.miniWaveformEnabled)
@@ -5106,6 +5293,9 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
     val curve = runCatching { FadeCurve.valueOf(fadeCurve) }.getOrDefault(FadeCurve.EQUAL_POWER)
     val parsedEqPreset = runCatching { EqPreset.valueOf(eqPreset) }.getOrDefault(EqPreset.FLAT)
     val parsedFxPreset = runCatching { FxPreset.valueOf(fxPreset) }.getOrDefault(FxPreset.OFF)
+    val parsedRetrigger = retriggerMode?.let { raw ->
+      runCatching { RetriggerMode.valueOf(raw) }.getOrNull()
+    }
     return PadSettings(
       volume = volume.coerceIn(0f, 1f),
       speed = speed.coerceIn(0.5f, 2.0f),
@@ -5134,7 +5324,9 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
       reverbEnabled = reverbEnabled,
       reverbRoomSize = reverbRoomSize.coerceIn(0f, 1f),
       reverbDamping = reverbDamping.coerceIn(0f, 1f),
-      reverbMix = reverbMix.coerceIn(0f, 0.85f)
+      reverbMix = reverbMix.coerceIn(0f, 0.85f),
+      retriggerMode = parsedRetrigger,
+      maxVoices = maxVoices.coerceIn(0, 16)
     )
   }
 
@@ -5168,7 +5360,9 @@ class SoundPadViewModel(application: Application) : AndroidViewModel(application
       reverbEnabled = reverbEnabled,
       reverbRoomSize = reverbRoomSize,
       reverbDamping = reverbDamping,
-      reverbMix = reverbMix
+      reverbMix = reverbMix,
+      retriggerMode = retriggerMode?.name,
+      maxVoices = maxVoices.coerceIn(0, 16)
     )
   }
 

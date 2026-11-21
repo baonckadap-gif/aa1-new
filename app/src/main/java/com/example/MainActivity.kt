@@ -8,6 +8,7 @@ import android.content.res.Configuration
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.SystemClock
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -335,19 +336,23 @@ class MainActivity : ComponentActivity() {
   private fun handlePadTapped(
     pad: SoundPad,
     isEditMode: Boolean,
-    notificationPermissionLauncher: ActivityResultLauncher<String>
+    notificationPermissionLauncher: ActivityResultLauncher<String>,
+    tapDownNanos: Long = SystemClock.elapsedRealtimeNanos()
   ) {
+    // Critical path B.3: dispatch audio immediately before any permission check / binder IPC.
+    viewModel.onPadTapped(pad, tapDownNanos)
     if (!hasRequestedNotificationPermission && !isEditMode && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
       hasRequestedNotificationPermission = true
-      val granted = ContextCompat.checkSelfPermission(
-        this,
-        Manifest.permission.POST_NOTIFICATIONS
-      ) == PackageManager.PERMISSION_GRANTED
-      if (!granted) {
-        notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+      window.decorView.post {
+        val granted = ContextCompat.checkSelfPermission(
+          this,
+          Manifest.permission.POST_NOTIFICATIONS
+        ) == PackageManager.PERMISSION_GRANTED
+        if (!granted) {
+          notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
       }
     }
-    viewModel.onPadTapped(pad)
   }
 
   private fun handleStartBleMidiScan(
@@ -488,6 +493,9 @@ class MainActivity : ComponentActivity() {
     fun onPadTapped(pad: SoundPad, isEditMode: Boolean) {
       activity.handlePadTapped(pad, isEditMode, notificationPermissionLauncher)
     }
+    fun onPadTappedWithTime(pad: SoundPad, isEditMode: Boolean, tapDownNanos: Long) {
+      activity.handlePadTapped(pad, isEditMode, notificationPermissionLauncher, tapDownNanos)
+    }
 
     val onHapticIntensityChanged = viewModel::setHapticIntensity
     val onSwipePadVolumeToggle = viewModel::setSwipePadVolumeEnabled
@@ -575,13 +583,22 @@ class MainActivity : ComponentActivity() {
       onPreloadToggle = viewModel::setPreloadShortAudio,
       onAudioEffectsToggle = viewModel::setAudioEffectsEnabled,
       onVisualEffectsToggle = viewModel::setVisualEffectsEnabled,
+      onAnimationModeChange = viewModel::setAnimationMode,
+      onLatencyDebugOverlayToggle = viewModel::setShowLatencyDebugOverlay,
+      onResetLatencyMetrics = viewModel::resetTapLatencyMetrics,
+      onRetriggerModeChange = viewModel::setRetriggerMode,
+      onMaxVoicesChange = viewModel::setMaxVoices,
       onKeepScreenOnToggle = viewModel::setKeepScreenOn,
       onToggleEditMode = viewModel::toggleEditMode,
       onPadTapped = { pad -> actions.onPadTapped(pad, uiState.isEditMode) },
+      onPadTappedWithTime = { pad, tapDownNanos ->
+        actions.onPadTappedWithTime(pad, uiState.isEditMode, tapDownNanos)
+      },
       onPadCustomizeClick = actions.onPadCustomizeClick,
       onOpenTrackCustomizer = actions.onOpenTrackCustomizerDefault,
       onSelectEditingPad = viewModel::selectEditingPad,
-      onPadHoldStart = viewModel::onPadHoldStart,
+      onPadHoldStart = { pad -> viewModel.onPadHoldStart(pad) },
+      onPadHoldStartWithTime = viewModel::onPadHoldStart,
       onPadHoldRelease = viewModel::onPadHoldRelease,
       onSwapPads = viewModel::swapPadPositions,
       onMovePadToSlot = viewModel::movePadToSlot,

@@ -71,6 +71,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import com.example.R
 import com.example.audio.SoundPadAudioEngine
+import com.example.domain.model.AnimationMode
 import com.example.domain.model.ThemeMode
 import com.example.ui.theme.SoundPadProTheme
 import com.example.ui.theme.SoundPadTheme
@@ -87,6 +88,7 @@ fun BottomConsoleBar(
   isMasterRecording: Boolean = false,
   masterRecordElapsedMs: Long = 0L,
   hasPads: Boolean,
+  animationMode: AnimationMode = AnimationMode.FULL,
   onStopAll: () -> Unit,
   onFadeOutAll: () -> Unit = {},
   onMasterVolumeChange: (Float) -> Unit,
@@ -334,6 +336,7 @@ fun BottomConsoleBar(
               isRecording = isMasterRecording,
               elapsedMs = masterRecordElapsedMs,
               enabled = !isLocked || isMasterRecording,
+              animationMode = animationMode,
               onClick = onOpenMasterRecorder,
               modifier = Modifier.testTag("master_record_button")
             )
@@ -461,13 +464,14 @@ private fun RowScope.MasterRecordActionButton(
   isRecording: Boolean,
   elapsedMs: Long,
   enabled: Boolean,
+  animationMode: AnimationMode = AnimationMode.FULL,
   onClick: () -> Unit,
   modifier: Modifier = Modifier
 ) {
   val extColors = SoundPadTheme.colors
   val bottomTokens = SoundPadTheme.bottomBarTokens
 
-  val blinkAlpha = if (isRecording) {
+  val blinkAlpha = if (isRecording && animationMode == AnimationMode.FULL) {
     val transition = rememberInfiniteTransition(label = "master_rec_blink")
     val animated by transition.animateFloat(
       initialValue = bottomTokens.blinkMaxAlpha,

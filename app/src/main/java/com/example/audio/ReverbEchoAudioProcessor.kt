@@ -36,10 +36,14 @@ class ReverbEchoAudioProcessor : BaseAudioProcessor() {
 
   private var sampleRate = 44100
   private var channels = 2
-  private var buffersAllocated = false
-  private var allocatedSampleRate = 0
+  private var echoBuffersAllocated = false
+  private var reverbBuffersAllocated = false
+  private var allocatedEchoSampleRate = 0
+  private var allocatedReverbSampleRate = 0
 
-  internal fun hasAllocatedBuffers(): Boolean = buffersAllocated
+  internal fun hasAllocatedBuffers(): Boolean = echoBuffersAllocated || reverbBuffersAllocated
+  internal fun hasAllocatedEchoBuffers(): Boolean = echoBuffersAllocated
+  internal fun hasAllocatedReverbBuffers(): Boolean = reverbBuffersAllocated
 
   // Echo stereo delay lines
   private var echoBufL = FloatArray(1)
@@ -60,7 +64,7 @@ class ReverbEchoAudioProcessor : BaseAudioProcessor() {
   private var allpassIdxR = IntArray(2)
 
   fun setParams(next: ReverbEchoParams) {
-    params = next.copy(
+    val sanitized = next.copy(
       echoDelayMs = next.echoDelayMs.coerceIn(60f, 800f),
       echoFeedback = next.echoFeedback.coerceIn(0f, 0.75f),
       echoMix = next.echoMix.coerceIn(0f, 0.85f),
@@ -68,6 +72,10 @@ class ReverbEchoAudioProcessor : BaseAudioProcessor() {
       reverbDamping = next.reverbDamping.coerceIn(0f, 1f),
       reverbMix = next.reverbMix.coerceIn(0f, 0.85f)
     )
+    params = sanitized
+    if (!sanitized.reverbEnabled || sanitized.reverbMix <= 0.005f) {
+      releaseUnusedReverbBuffers()
+    }
   }
 
   override fun onConfigure(inputAudioFormat: AudioProcessor.AudioFormat): AudioProcessor.AudioFormat {
@@ -79,21 +87,36 @@ class ReverbEchoAudioProcessor : BaseAudioProcessor() {
     }
     sampleRate = inputAudioFormat.sampleRate.coerceAtLeast(8000)
     channels = inputAudioFormat.channelCount
-    if (sampleRate != allocatedSampleRate) {
-      buffersAllocated = false
+    if (sampleRate != allocatedEchoSampleRate) {
+      echoBuffersAllocated = false
     }
-    if (!params.isBypassed && !buffersAllocated) {
-      allocateBuffers(sampleRate)
+    if (sampleRate != allocatedReverbSampleRate) {
+      reverbBuffersAllocated = false
+    }
+    val p = params
+    val useEcho = p.echoEnabled && p.echoMix > 0.005f
+    val useReverb = p.reverbEnabled && p.reverbMix > 0.005f
+    if (useEcho && !echoBuffersAllocated) {
+      ensureEchoBuffersAllocated(sampleRate)
+    }
+    if (useReverb && !reverbBuffersAllocated) {
+      ensureReverbBuffersAllocated(sampleRate)
+    } else if (!useReverb && reverbBuffersAllocated) {
+      releaseUnusedReverbBuffers()
     }
     return inputAudioFormat
   }
 
-  private fun allocateBuffers(sr: Int) {
+  private fun ensureEchoBuffersAllocated(sr: Int) {
     val maxEchoSamples = ((sr * MAX_ECHO_MS) / 1000).coerceAtLeast(1024)
     echoBufL = FloatArray(maxEchoSamples)
     echoBufR = FloatArray(maxEchoSamples)
     echoIdx = 0
+    allocatedEchoSampleRate = sr
+    echoBuffersAllocated = true
+  }
 
+  private fun ensureReverbBuffersAllocated(sr: Int) {
     val scale = sr.toDouble() / 44100.0
     val spread = (STEREO_SPREAD_44K * scale).toInt().coerceAtLeast(4)
     for (i in 0 until 4) {
@@ -114,8 +137,28 @@ class ReverbEchoAudioProcessor : BaseAudioProcessor() {
       allpassIdxL[i] = 0
       allpassIdxR[i] = 0
     }
-    allocatedSampleRate = sr
-    buffersAllocated = true
+    allocatedReverbSampleRate = sr
+    reverbBuffersAllocated = true
+  }
+
+  internal fun releaseUnusedReverbBuffers() {
+    if (!reverbBuffersAllocated) return
+    for (i in 0 until 4) {
+      combL[i] = FloatArray(1)
+      combR[i] = FloatArray(1)
+      combIdxL[i] = 0
+      combIdxR[i] = 0
+      combFilterStateL[i] = 0f
+      combFilterStateR[i] = 0f
+    }
+    for (i in 0 until 2) {
+      allpassL[i] = FloatArray(1)
+      allpassR[i] = FloatArray(1)
+      allpassIdxL[i] = 0
+      allpassIdxR[i] = 0
+    }
+    reverbBuffersAllocated = false
+    allocatedReverbSampleRate = 0
   }
 
   override fun onFlush(streamMetadata: AudioProcessor.StreamMetadata) {
@@ -124,26 +167,32 @@ class ReverbEchoAudioProcessor : BaseAudioProcessor() {
 
   override fun onReset() {
     clearBuffers()
+    if (!params.reverbEnabled || params.reverbMix <= 0.005f) {
+      releaseUnusedReverbBuffers()
+    }
   }
 
   private fun clearBuffers() {
-    if (!buffersAllocated) return
-    echoBufL.fill(0f)
-    echoBufR.fill(0f)
-    echoIdx = 0
-    for (i in 0 until 4) {
-      combL[i].fill(0f)
-      combR[i].fill(0f)
-      combIdxL[i] = 0
-      combIdxR[i] = 0
-      combFilterStateL[i] = 0f
-      combFilterStateR[i] = 0f
+    if (echoBuffersAllocated) {
+      echoBufL.fill(0f)
+      echoBufR.fill(0f)
+      echoIdx = 0
     }
-    for (i in 0 until 2) {
-      allpassL[i].fill(0f)
-      allpassR[i].fill(0f)
-      allpassIdxL[i] = 0
-      allpassIdxR[i] = 0
+    if (reverbBuffersAllocated) {
+      for (i in 0 until 4) {
+        combL[i].fill(0f)
+        combR[i].fill(0f)
+        combIdxL[i] = 0
+        combIdxR[i] = 0
+        combFilterStateL[i] = 0f
+        combFilterStateR[i] = 0f
+      }
+      for (i in 0 until 2) {
+        allpassL[i].fill(0f)
+        allpassR[i].fill(0f)
+        allpassIdxL[i] = 0
+        allpassIdxR[i] = 0
+      }
     }
   }
 
@@ -153,13 +202,23 @@ class ReverbEchoAudioProcessor : BaseAudioProcessor() {
 
     val p = params
     if (p.isBypassed) {
+      if (reverbBuffersAllocated) releaseUnusedReverbBuffers()
       val outBuffer = replaceOutputBuffer(remaining)
       outBuffer.put(inputBuffer)
       outBuffer.flip()
       return
     }
-    if (!buffersAllocated || allocatedSampleRate != sampleRate) {
-      allocateBuffers(sampleRate)
+    val useEcho = p.echoEnabled && p.echoMix > 0.005f
+    val useReverb = p.reverbEnabled && p.reverbMix > 0.005f
+    if (useEcho && (!echoBuffersAllocated || allocatedEchoSampleRate != sampleRate)) {
+      ensureEchoBuffersAllocated(sampleRate)
+    }
+    if (useReverb) {
+      if (!reverbBuffersAllocated || allocatedReverbSampleRate != sampleRate) {
+        ensureReverbBuffersAllocated(sampleRate)
+      }
+    } else if (reverbBuffersAllocated) {
+      releaseUnusedReverbBuffers()
     }
 
     val encoding = inputAudioFormat.encoding
@@ -172,14 +231,13 @@ class ReverbEchoAudioProcessor : BaseAudioProcessor() {
 
     val outBuffer = replaceOutputBuffer(frameCount * channels * bytesPerSample)
 
-    val useEcho = p.echoEnabled && p.echoMix > 0.005f
-    val echoBufSize = echoBufL.size.coerceAtLeast(1)
-    val delaySamplesL = ((p.echoDelayMs * sampleRate) / 1000f).toInt().coerceIn(1, echoBufSize - 1)
-    val delaySamplesR = (delaySamplesL * 0.94f).toInt().coerceIn(1, echoBufSize - 1)
+    val echoBufSize = echoBufL.size.coerceAtLeast(2)
+    val maxDelay = (echoBufSize - 1).coerceAtLeast(1)
+    val delaySamplesL = ((p.echoDelayMs * sampleRate) / 1000f).toInt().coerceIn(1, maxDelay)
+    val delaySamplesR = (delaySamplesL * 0.94f).toInt().coerceIn(1, maxDelay)
     val echoFb = p.echoFeedback
     val echoMix = p.echoMix
 
-    val useReverb = p.reverbEnabled && p.reverbMix > 0.005f
     val roomFeedback = 0.68f + (p.reverbRoomSize * 0.27f)
     val damp = p.reverbDamping * 0.65f
     val invDamp = 1f - damp

@@ -44,11 +44,17 @@ interface SoundPadDao {
   @Query("DELETE FROM pad_profiles WHERE id = :profileId")
   suspend fun deleteProfileById(profileId: String)
 
+  @Query("SELECT EXISTS(SELECT 1 FROM pad_profiles WHERE id = :profileId)")
+  suspend fun profileExists(profileId: String): Boolean
+
   @Query("SELECT * FROM sound_pads WHERE profileId = :profileId ORDER BY positionIndex ASC")
   fun observePadsForProfile(profileId: String): Flow<List<SoundPadEntity>>
 
   @Query("SELECT * FROM sound_pads WHERE profileId = :profileId ORDER BY positionIndex ASC")
   suspend fun getPadsForProfileOnce(profileId: String): List<SoundPadEntity>
+
+  @Query("SELECT * FROM sound_pads WHERE id = :padId LIMIT 1")
+  suspend fun getPadById(padId: String): SoundPadEntity?
 
   @Query("SELECT COUNT(*) FROM sound_pads WHERE profileId = :profileId")
   suspend fun getPadCountForProfile(profileId: String): Int
@@ -73,6 +79,11 @@ interface SoundPadDao {
 
   @Query("DELETE FROM sound_pads WHERE id = :padId")
   suspend fun deletePadById(padId: String)
+
+  @Transaction
+  suspend fun deletePadsByIds(padIds: List<String>) {
+    padIds.forEach { deletePadById(it) }
+  }
 
   @Query(
     """
@@ -159,10 +170,44 @@ interface SoundPadDao {
   suspend fun upsertPadSettings(settings: List<PadSettingEntity>)
 
   @Transaction
-  suspend fun upsertPadSettingSafely(setting: PadSettingEntity): Boolean {
-    if (!padExists(setting.padId)) return false
+  suspend fun upsertPadWithSetting(
+    pad: SoundPadEntity,
+    setting: PadSettingEntity
+  ): Boolean {
+    if (!profileExists(pad.profileId)) return false
+    upsertPad(pad)
+    if (!padExists(pad.id)) return false
+    upsertPadSetting(if (setting.padId == pad.id) setting else setting.copy(padId = pad.id))
+    return true
+  }
+
+  @Transaction
+  suspend fun upsertPadWithSettingEnsuringProfile(
+    pad: SoundPadEntity,
+    setting: PadSettingEntity,
+    fallbackProfile: PadProfileEntity
+  ): Boolean {
+    if (!profileExists(pad.profileId)) {
+      if (fallbackProfile.id != pad.profileId) return false
+      upsertProfile(fallbackProfile)
+    }
+    upsertPad(pad)
+    if (!padExists(pad.id)) return false
+    upsertPadSetting(if (setting.padId == pad.id) setting else setting.copy(padId = pad.id))
+    return true
+  }
+
+  @Transaction
+  suspend fun persistPadSettingSafelyTransaction(setting: PadSettingEntity): Boolean {
+    val parentPad = getPadById(setting.padId) ?: return false
+    if (!profileExists(parentPad.profileId)) return false
     upsertPadSetting(setting)
     return true
+  }
+
+  @Transaction
+  suspend fun upsertPadSettingSafely(setting: PadSettingEntity): Boolean {
+    return persistPadSettingSafelyTransaction(setting)
   }
 
   @Transaction
@@ -193,16 +238,30 @@ interface SoundPadDao {
   suspend fun getPadSettingsForProfileOnce(profileId: String): List<PadSettingEntity>
 
   @Transaction
+  suspend fun upsertPadsIfProfileExists(
+    profileId: String,
+    pads: List<SoundPadEntity>
+  ): Boolean {
+    if (!profileExists(profileId)) return false
+    val validPads = pads.filter { it.profileId == profileId }
+    if (validPads.isNotEmpty()) {
+      upsertPads(validPads)
+    }
+    return true
+  }
+
+  @Transaction
   suspend fun syncProfilePadsPreservingSettings(
     profile: PadProfileEntity,
     pads: List<SoundPadEntity>
   ) {
     upsertProfile(profile)
-    if (pads.isEmpty()) {
+    val validPads = pads.filter { it.profileId == profile.id }
+    if (validPads.isEmpty()) {
       deletePadsForProfile(profile.id)
     } else {
-      upsertPads(pads)
-      deletePadsNotIn(profile.id, pads.map { it.id })
+      upsertPads(validPads)
+      deletePadsNotIn(profile.id, validPads.map { it.id })
     }
   }
 
@@ -214,13 +273,19 @@ interface SoundPadDao {
   ) {
     clearActiveFlags()
     upsertProfile(profile.copy(isActive = true))
-    if (pads.isEmpty()) {
+    val validPads = pads.filter { it.profileId == profile.id }
+    if (validPads.isEmpty()) {
       deletePadsForProfile(profile.id)
     } else {
-      upsertPads(pads)
-      deletePadsNotIn(profile.id, pads.map { it.id })
-      val padIdSet = pads.mapTo(HashSet(pads.size)) { it.id }
-      val validSettings = settings.filter { it.padId in padIdSet }
+      upsertPads(validPads)
+      deletePadsNotIn(profile.id, validPads.map { it.id })
+      val existingPadIds = validPads
+        .map { it.id }
+        .distinct()
+        .chunked(500)
+        .flatMap { batch -> findExistingPadIds(batch) }
+        .toHashSet()
+      val validSettings = settings.filter { it.padId in existingPadIds }
       if (validSettings.isNotEmpty()) {
         upsertPadSettings(validSettings)
       }
@@ -228,14 +293,98 @@ interface SoundPadDao {
   }
 
   @Transaction
+  suspend fun syncSnapshotWithSettings(
+    profile: PadProfileEntity,
+    pads: List<SoundPadEntity>,
+    settings: List<PadSettingEntity>
+  ) {
+    upsertProfile(profile)
+    val validPads = pads.filter { it.profileId == profile.id }
+    if (validPads.isEmpty()) {
+      deletePadsForProfile(profile.id)
+    } else {
+      upsertPads(validPads)
+      deletePadsNotIn(profile.id, validPads.map { it.id })
+      val existingPadIds = validPads
+        .map { it.id }
+        .distinct()
+        .chunked(500)
+        .flatMap { batch -> findExistingPadIds(batch) }
+        .toHashSet()
+      val validSettings = settings.filter { it.padId in existingPadIds }
+      if (validSettings.isNotEmpty()) {
+        upsertPadSettings(validSettings)
+      }
+    }
+  }
+
+  @Transaction
+  suspend fun bulkDuplicatePadsTransaction(
+    profileId: String,
+    clonedPads: List<SoundPadEntity>,
+    clonedSettings: List<PadSettingEntity>
+  ): Boolean {
+    if (!profileExists(profileId)) return false
+    val validPads = clonedPads.filter { it.profileId == profileId }
+    if (validPads.isEmpty()) return true
+    upsertPads(validPads)
+    val existingIds = validPads
+      .map { it.id }
+      .distinct()
+      .chunked(500)
+      .flatMap { batch -> findExistingPadIds(batch) }
+      .toHashSet()
+    val validSettings = clonedSettings.filter { it.padId in existingIds }
+    if (validSettings.isNotEmpty()) {
+      upsertPadSettings(validSettings)
+    }
+    return true
+  }
+
+  @Transaction
+  suspend fun duplicatePadToBankTransaction(
+    profileId: String,
+    padsToPersist: List<SoundPadEntity>,
+    clonedPadId: String,
+    clonedSetting: PadSettingEntity,
+    bankNamesJson: String?,
+    bankOrderJson: String?,
+    bankFolderUrisJson: String?
+  ): Boolean {
+    if (!profileExists(profileId)) return false
+    if (bankNamesJson != null && bankOrderJson != null && bankFolderUrisJson != null) {
+      updateProfileBankConfig(
+        profileId = profileId,
+        bankNamesJson = bankNamesJson,
+        bankOrderJson = bankOrderJson,
+        bankFolderUrisJson = bankFolderUrisJson
+      )
+    }
+    val validPads = padsToPersist.filter { it.profileId == profileId }
+    if (validPads.isNotEmpty()) {
+      upsertPads(validPads)
+    }
+    if (!padExists(clonedPadId)) return false
+    upsertPadSetting(if (clonedSetting.padId == clonedPadId) clonedSetting else clonedSetting.copy(padId = clonedPadId))
+    return true
+  }
+
+  @Transaction
   suspend fun insertClonedPadAndReindex(
     newPad: SoundPadEntity,
     newSetting: PadSettingEntity,
     reindexedPositions: List<Pair<String, Int>>
-  ) {
+  ): Boolean {
+    if (!profileExists(newPad.profileId)) return false
     upsertPad(newPad)
-    upsertPadSetting(newSetting)
-    updateAllPadPositions(reindexedPositions)
+    if (!padExists(newPad.id)) return false
+    upsertPadSetting(if (newSetting.padId == newPad.id) newSetting else newSetting.copy(padId = newPad.id))
+    for ((padId, pos) in reindexedPositions) {
+      if (padExists(padId)) {
+        updatePadPosition(padId, pos)
+      }
+    }
+    return true
   }
 
   @Query("UPDATE sound_pads SET midiNote = :midiNote WHERE id = :padId")
@@ -426,12 +575,42 @@ interface SoundPadDao {
   @Query("DELETE FROM midi_pc_bank_mappings")
   suspend fun deleteAllMidiPcMappings()
 
+  // ---- Multi-Layout Grid Configs ----
+  @Query("SELECT * FROM pad_layouts WHERE profileId = :profileId ORDER BY isDefault DESC, updatedAtMs DESC")
+  fun observeLayoutsForProfile(profileId: String): Flow<List<PadLayoutEntity>>
+
+  @Query("SELECT * FROM pad_layouts WHERE profileId = :profileId ORDER BY isDefault DESC, updatedAtMs DESC")
+  suspend fun getLayoutsForProfileOnce(profileId: String): List<PadLayoutEntity>
+
+  @Query("SELECT * FROM pad_layouts ORDER BY updatedAtMs DESC")
+  suspend fun getAllLayoutsOnce(): List<PadLayoutEntity>
+
+  @Upsert
+  suspend fun upsertLayout(layout: PadLayoutEntity)
+
+  @Transaction
+  suspend fun upsertLayoutSafely(layout: PadLayoutEntity): Boolean {
+    if (!profileExists(layout.profileId)) return false
+    upsertLayout(layout)
+    return true
+  }
+
+  @Query("DELETE FROM pad_layouts WHERE id = :layoutId")
+  suspend fun deleteLayoutById(layoutId: String)
+
+  @Query("DELETE FROM pad_layouts WHERE profileId = :profileId")
+  suspend fun deleteLayoutsForProfile(profileId: String)
+
+  @Query("DELETE FROM pad_layouts")
+  suspend fun deleteAllLayouts()
+
   @Transaction
   suspend fun clearAllConfigTables() {
     deleteAllScheduledTasks()
     deleteAllSequencerPlaylists()
     deleteAllMidiCcMappings()
     deleteAllMidiPcMappings()
+    deleteAllLayouts()
     deleteAllProfiles()
     clearErrorLogs()
   }

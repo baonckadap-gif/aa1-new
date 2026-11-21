@@ -131,6 +131,8 @@
     <string name="scheduler_empty">Belum ada jadwal pemutaran otomatis.</string>
     <string name="scheduler_exact_alarm_warning">Izin Alarm Tepat Waktu (Exact Alarm) belum aktif agar jadwal berbunyi tepat detik.</string>
     <string name="scheduler_grant_exact_alarm">Izinkan Alarm</string>
+    <string name="notification_schedule_fallback_title">Jadwal SoundPad Tertunda</string>
+    <string name="notification_schedule_fallback_text">Sistem membatasi pemutaran otomatis di latar. Ketuk untuk membuka SoundPad Pro.</string>
 
     <!-- Sequencer -->
     <string name="sequencer_title">Sequencer &amp; Playlist Pad</string>
@@ -490,4 +492,33 @@
     <string name="cd_move_bank_down">Geser bank ke bawah</string>
     <string name="cd_reset_default_color">Reset warna default</string>
     <string name="cd_select_preset_color">Pilih warna %1$s</string>
+
+    <!-- Tahap 2 Latency Optimization & Developer Overlay -->
+    <string name="settings_tab_developer">Developer</string>
+    <string name="settings_animation_mode_title">MODE ANIMASI PAD</string>
+    <string name="settings_animation_mode_subtitle">Pilih Penuh (spring + glow), Ringan (warna cepat), atau Mati (tanpa animasi/frame ekstra)</string>
+    <string name="developer_latency_overlay_title">Overlay Debug Latensi Audio</string>
+    <string name="developer_latency_overlay_subtitle">Tampilkan metrik tap-to-sound ms, dispatcher queue, dan pool slot real-time di atas grid</string>
+    <string name="developer_latency_card_title">TELEMETRI LATENSI &amp; ENGINE AUDIO</string>
+    <string name="developer_latency_reset_btn">Reset Statistik</string>
+    <string name="developer_latency_ping_btn">Uji Ping Engine</string>
+    <string name="cd_close_latency_overlay">Tutup overlay debug latensi</string>
+    <string name="cd_reset_latency_overlay">Reset statistik latensi</string>
+
+    <!-- Tahap 3 Retrigger & Multi-Voice Polyphony -->
+    <string name="settings_retrigger_mode_title">MODE RETRIGGER GLOBAL</string>
+    <string name="settings_retrigger_mode_subtitle">Restart memutus suara lama pad yang sama; Layer menumpuk polifonik hingga batas voice</string>
+    <string name="retrigger_mode_restart">Restart</string>
+    <string name="retrigger_mode_layer">Layer (Polifoni)</string>
+    <string name="retrigger_mode_inherit">Ikuti Global (%1$s)</string>
+    <string name="settings_max_voices_title">BATAS POLIFONI VOICE (%1$d / 16)</string>
+    <string name="settings_max_voices_subtitle">Batas total voice aktif bersamaan di mixer sebelum voice stealing otomatis</string>
+    <string name="cd_reset_max_voices">Reset batas polifoni ke 16 voice</string>
+    <string name="pad_retrigger_mode_title">MODE RETRIGGER PAD</string>
+    <string name="pad_layer_switch_title">Mode Layer Polifonik</string>
+    <string name="pad_layer_switch_subtitle">Ketuk berulang menumpuk suara bersamaan tanpa memotong voice sebelumnya</string>
+    <string name="pad_max_voices_inherit">BATAS VOICE PAD (Ikuti Global: %1$d)</string>
+    <string name="pad_max_voices_custom">BATAS VOICE PAD (%1$d voice)</string>
+    <string name="cd_reset_pad_retrigger">Reset mode retrigger &amp; batas voice pad</string>
+    <string name="cd_pad_voice_count_badge">%1$d voice aktif</string>
 </resources>

@@ -1,13 +1,10 @@
 package com.example.ui.components
 
 import android.os.SystemClock
+import android.os.Trace
 import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.Spring
-import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
@@ -15,12 +12,11 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.indication
 import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.foundation.interaction.PressInteraction
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -29,7 +25,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.defaultMinSize
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -66,13 +61,16 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.scale
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathEffect
@@ -92,6 +90,8 @@ import androidx.compose.ui.platform.LocalViewConfiguration
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.onClick
+import androidx.compose.ui.semantics.onLongClick
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -104,6 +104,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.R
 import com.example.audio.StereoPanMath
+import com.example.domain.model.AnimationMode
 import com.example.domain.model.DefaultPadColorMode
 import com.example.domain.model.HapticIntensity
 import com.example.domain.model.PadBadgeIcon
@@ -113,6 +114,7 @@ import com.example.domain.model.PadSettings
 import com.example.domain.model.PadShapeStyle
 import com.example.domain.model.PadSurfaceFinish
 import com.example.domain.model.PadTriggerMode
+import com.example.domain.model.RetriggerMode
 import com.example.domain.model.SoundPad
 import com.example.domain.model.ThemeMode
 import com.example.ui.theme.SoundPadColorPalette
@@ -121,6 +123,8 @@ import com.example.ui.theme.SoundPadTheme
 import com.example.ui.theme.padMetaStyleForGrid
 import com.example.ui.theme.padTitleMinFontSizeSp
 import com.example.ui.theme.padTitleStyleForGrid
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.roundToInt
@@ -201,16 +205,21 @@ fun PadCell(
   gridCols: Int = 4,
   reduceMotion: Boolean = false,
   visualEffectsEnabled: Boolean = true,
+  animationMode: AnimationMode = AnimationMode.FULL,
+  progressProvider: (() -> Float)? = null,
   hapticIntensity: HapticIntensity = HapticIntensity.SOFT,
   swipePadVolumeEnabled: Boolean = false,
   doubleTapToStopEnabled: Boolean = true,
+  globalRetriggerMode: RetriggerMode = RetriggerMode.RESTART,
   onClick: (SoundPad) -> Unit,
+  onClickWithTime: ((SoundPad, Long) -> Unit)? = null,
   onEmptyClick: () -> Unit = {},
   onEmptyDoubleClick: (() -> Unit)? = null,
   onDoubleTapStop: (SoundPad) -> Unit = {},
   onSwipeVolumeChange: (SoundPad, Float, Boolean) -> Unit = { _, _, _ -> },
   onCustomizeClick: (SoundPad) -> Unit = {},
   onHoldStart: (SoundPad) -> Unit,
+  onHoldStartWithTime: ((SoundPad, Long) -> Unit)? = null,
   onHoldRelease: (SoundPad) -> Unit,
   modifier: Modifier = Modifier
 ) {
@@ -231,16 +240,24 @@ fun PadCell(
   val padTokens = SoundPadTheme.padTokens
   val spacing = SoundPadTheme.spacing
   val extColors = SoundPadTheme.colors
-  val effectsActive = visualEffectsEnabled && !reduceMotion
+  val effectiveAnimationMode = when {
+    !visualEffectsEnabled || reduceMotion -> AnimationMode.OFF
+    else -> animationMode
+  }
+  val effectsActive = effectiveAnimationMode == AnimationMode.FULL
   val hasError = pad.errorMessage != null
   val isPlaying = playbackState?.isPlaying == true && !hasError && isEnabled
   val isFadingOut = playbackState?.isFadingOut == true
-  val progress = playbackState?.progress ?: 0f
+  val activeVoiceCount = if (isPlaying) (playbackState?.activeVoiceCount ?: 1).coerceAtLeast(1) else 0
+  val effectiveLayerMode = (pad.settings.retriggerMode ?: globalRetriggerMode) == RetriggerMode.LAYER
+  val latestPlaybackState by rememberUpdatedState(playbackState)
+  val activeProgressProvider = progressProvider ?: { latestPlaybackState?.progress ?: 0f }
   val interactionSource = remember { MutableInteractionSource() }
-  val isPressed by interactionSource.collectIsPressedAsState()
   val haptic = LocalHapticFeedback.current
   val viewConfig = LocalViewConfiguration.current
+  val coroutineScope = rememberCoroutineScope()
 
+  var isPressedState by remember(pad.id) { mutableStateOf(false) }
   var isSwipingVolume by remember(pad.id) { mutableStateOf(false) }
   var swipedVolume by remember(pad.id, pad.settings.volume) { mutableFloatStateOf(pad.settings.volume) }
   var lastTapElapsedMs by remember(pad.id) { mutableLongStateOf(0L) }
@@ -269,12 +286,12 @@ fun PadCell(
   val contentAccent = if (isNeutralGrayDefault && !isPlaying) extColors.padDefaultGrayBorder else cornerGlowColor
 
   val targetScale = when {
-    !isEnabled || !effectsActive -> 1f
+    !isEnabled || effectiveAnimationMode != AnimationMode.FULL -> 1f
     isDragging -> 1.04f
-    isPressed -> 0.94f
+    isPressedState -> 0.94f
     else -> 1f
   }
-  val scale = if (effectsActive) {
+  val scale = if (effectiveAnimationMode == AnimationMode.FULL) {
     val animatedScale by animateFloatAsState(
       targetValue = targetScale,
       animationSpec = spring(stiffness = Spring.StiffnessHigh),
@@ -283,40 +300,6 @@ fun PadCell(
     animatedScale
   } else {
     1f
-  }
-
-  val playingGlowPulse = if (isPlaying && effectsActive) {
-    val pulseTransition = rememberInfiniteTransition(label = "pad_playing_glow_pulse")
-    val pulse by pulseTransition.animateFloat(
-      initialValue = 0.78f,
-      targetValue = 1.18f,
-      animationSpec = infiniteRepeatable(
-        animation = tween(durationMillis = 900),
-        repeatMode = RepeatMode.Reverse
-      ),
-      label = "pad_glow_alpha_pulse"
-    )
-    pulse
-  } else {
-    1f
-  }
-
-  val shouldWiggle = isEditMode && effectsActive && !isDragging && !isMultiSelectMode && density != PadDensity.MICRO
-  val wiggleRotation = if (shouldWiggle) {
-    val wiggleTransition = rememberInfiniteTransition(label = "pad_edit_wiggle")
-    val phaseShift = if (slotNumber % 2 == 0) 1 else -1
-    val wiggle by wiggleTransition.animateFloat(
-      initialValue = -1.1f * phaseShift,
-      targetValue = 1.1f * phaseShift,
-      animationSpec = infiniteRepeatable(
-        animation = tween(durationMillis = 190),
-        repeatMode = RepeatMode.Reverse
-      ),
-      label = "pad_wiggle_deg"
-    )
-    wiggle
-  } else {
-    0f
   }
 
   val targetBorderColor = when {
@@ -335,11 +318,20 @@ fun PadCell(
     isNeutralGrayDefault -> extColors.padDefaultGrayBorder
     else -> cornerGlowColor.copy(alpha = 0.60f)
   }
-  val borderColor = if (effectsActive) {
-    val animatedBorder by animateColorAsState(targetValue = targetBorderColor, label = "pad_border")
-    animatedBorder
-  } else {
-    targetBorderColor
+  val borderColor = when (effectiveAnimationMode) {
+    AnimationMode.FULL -> {
+      val animatedBorder by animateColorAsState(targetValue = targetBorderColor, label = "pad_border")
+      animatedBorder
+    }
+    AnimationMode.LIGHT -> {
+      val animatedBorder by animateColorAsState(
+        targetValue = targetBorderColor,
+        animationSpec = tween(durationMillis = 65),
+        label = "pad_border_light"
+      )
+      animatedBorder
+    }
+    AnimationMode.OFF -> targetBorderColor
   }
 
   val idleContainer = when {
@@ -359,11 +351,20 @@ fun PadCell(
   }
 
   val targetContainerColor = if (isPlaying) activeContainer else idleContainer
-  val containerColor = if (effectsActive) {
-    val animatedBg by animateColorAsState(targetValue = targetContainerColor, label = "pad_bg")
-    animatedBg
-  } else {
-    targetContainerColor
+  val containerColor = when (effectiveAnimationMode) {
+    AnimationMode.FULL -> {
+      val animatedBg by animateColorAsState(targetValue = targetContainerColor, label = "pad_bg")
+      animatedBg
+    }
+    AnimationMode.LIGHT -> {
+      val animatedBg by animateColorAsState(
+        targetValue = targetContainerColor,
+        animationSpec = tween(durationMillis = 65),
+        label = "pad_bg_light"
+      )
+      animatedBg
+    }
+    AnimationMode.OFF -> targetContainerColor
   }
 
   val cornerRadius: Dp = when (density) {
@@ -381,9 +382,23 @@ fun PadCell(
     hasError -> "Pad $slotNumber, ${pad.displayName}, error"
     isMultiSelectMode && isSelected -> "Pad $slotNumber, ${pad.displayName}, selected"
     isLoading -> "Pad $slotNumber, ${pad.displayName}, loading"
+    isPlaying && activeVoiceCount > 1 -> "Pad $slotNumber, ${pad.displayName}, playing, $activeVoiceCount voices"
     isPlaying -> "Pad $slotNumber, ${pad.displayName}, playing"
     else -> "Pad $slotNumber, ${pad.displayName}"
   }
+
+  val latestPad by rememberUpdatedState(pad)
+  val latestIsPlaying by rememberUpdatedState(isPlaying)
+  val latestDoubleTapStop by rememberUpdatedState(doubleTapToStopEnabled)
+  val latestEffectiveLayerMode by rememberUpdatedState(effectiveLayerMode)
+  val latestHapticIntensity by rememberUpdatedState(hapticIntensity)
+  val latestOnClick by rememberUpdatedState(onClick)
+  val latestOnClickWithTime by rememberUpdatedState(onClickWithTime)
+  val latestOnHoldStart by rememberUpdatedState(onHoldStart)
+  val latestOnHoldStartWithTime by rememberUpdatedState(onHoldStartWithTime)
+  val latestOnHoldRelease by rememberUpdatedState(onHoldRelease)
+  val latestOnDoubleTapStop by rememberUpdatedState(onDoubleTapStop)
+  val latestOnCustomizeClick by rememberUpdatedState(onCustomizeClick)
 
   val allowVerticalVolumeSwipe = swipePadVolumeEnabled &&
     isEnabled &&
@@ -399,7 +414,7 @@ fun PadCell(
         var accDx = 0f
         var accDy = 0f
         var draggingVertical = false
-        var latestVol = pad.settings.volume
+        var latestVol = latestPad.settings.volume
         val slop = viewConfiguration.touchSlop
         while (true) {
           val event = awaitPointerEvent()
@@ -407,7 +422,7 @@ fun PadCell(
           if (!change.pressed) {
             if (draggingVertical) {
               isSwipingVolume = false
-              onSwipeVolumeChange(pad, latestVol, true)
+              onSwipeVolumeChange(latestPad, latestVol, true)
             }
             break
           }
@@ -418,7 +433,7 @@ fun PadCell(
             if (abs(accDy) > slop && abs(accDy) > abs(accDx) * 1.25f) {
               draggingVertical = true
               isSwipingVolume = true
-              latestVol = pad.settings.volume
+              latestVol = latestPad.settings.volume
               swipedVolume = latestVol
             } else if (abs(accDx) > slop * 1.4f && abs(accDx) > abs(accDy)) {
               break
@@ -429,7 +444,7 @@ fun PadCell(
             val normDelta = -delta.y / size.height.coerceAtLeast(100).toFloat()
             latestVol = (latestVol + normDelta * 1.2f).coerceIn(0f, 1f)
             swipedVolume = latestVol
-            onSwipeVolumeChange(pad, latestVol, false)
+            onSwipeVolumeChange(latestPad, latestVol, false)
           }
         }
       }
@@ -441,52 +456,128 @@ fun PadCell(
   val interactionModifier = when {
     !isEnabled -> Modifier
     hasError || isEditMode || isMidiLearnMode -> {
-      Modifier.clickable(
-        interactionSource = interactionSource,
-        indication = ripple(color = if (hasError) MaterialTheme.colorScheme.error else accentColor)
-      ) {
-        performPadHaptic(haptic, hapticIntensity)
-        onClick(pad)
+      Modifier.pointerInput(pad.id, hasError, isEditMode, isMidiLearnMode) {
+        awaitEachGesture {
+          val down = awaitFirstDown(requireUnconsumed = false)
+          isPressedState = true
+          val pressInteraction = PressInteraction.Press(down.position)
+          coroutineScope.launch { interactionSource.emit(pressInteraction) }
+          val downMs = SystemClock.elapsedRealtime()
+          var movedTooFar = false
+          var released = false
+          val slopSq = viewConfiguration.touchSlop * viewConfiguration.touchSlop
+          while (true) {
+            val event = awaitPointerEvent()
+            val change = event.changes.firstOrNull { it.id == down.id } ?: break
+            val delta = change.position - down.position
+            if ((delta.x * delta.x + delta.y * delta.y) > slopSq) {
+              movedTooFar = true
+            }
+            if (!change.pressed) {
+              isPressedState = false
+              released = true
+              val heldShort = (SystemClock.elapsedRealtime() - downMs) < viewConfiguration.longPressTimeoutMillis
+              if (!movedTooFar && heldShort) {
+                coroutineScope.launch { performPadHaptic(haptic, latestHapticIntensity) }
+                latestOnClick(latestPad)
+              }
+              coroutineScope.launch { interactionSource.emit(PressInteraction.Release(pressInteraction)) }
+              break
+            }
+          }
+          isPressedState = false
+          if (!released) {
+            coroutineScope.launch { interactionSource.emit(PressInteraction.Cancel(pressInteraction)) }
+          }
+        }
       }
     }
     pad.settings.triggerMode == PadTriggerMode.HOLD -> {
-      Modifier.pointerInput(pad.id, hapticIntensity) {
-        detectTapGestures(
-          onPress = {
-            performPadHaptic(haptic, hapticIntensity)
-            onHoldStart(pad)
-            tryAwaitRelease()
-            onHoldRelease(pad)
+      Modifier.pointerInput(pad.id) {
+        awaitEachGesture {
+          val down = awaitFirstDown(requireUnconsumed = false)
+          val downNanos = SystemClock.elapsedRealtimeNanos()
+          isPressedState = true
+          val pressInteraction = PressInteraction.Press(down.position)
+          coroutineScope.launch { interactionSource.emit(pressInteraction) }
+          Trace.beginSection("pad_tap")
+          try {
+            latestOnHoldStartWithTime?.invoke(latestPad, downNanos) ?: latestOnHoldStart(latestPad)
+          } finally {
+            Trace.endSection()
           }
-        )
+          coroutineScope.launch { performPadHaptic(haptic, latestHapticIntensity) }
+          while (true) {
+            val event = awaitPointerEvent()
+            val change = event.changes.firstOrNull { it.id == down.id } ?: break
+            if (!change.pressed) break
+          }
+          isPressedState = false
+          latestOnHoldRelease(latestPad)
+          coroutineScope.launch { interactionSource.emit(PressInteraction.Release(pressInteraction)) }
+        }
       }
     }
     else -> {
-      // Never set onDoubleClick on combinedClickable: non-null onDoubleClick forces a ~300ms delay on every single tap!
-      Modifier.combinedClickable(
-        interactionSource = interactionSource,
-        indication = ripple(color = accentColor),
-        onClick = {
-          val now = SystemClock.elapsedRealtime()
-          val withinTimeout = lastTapElapsedMs > 0L && (now - lastTapElapsedMs) <= viewConfig.doubleTapTimeoutMillis
-          val isDoubleTapStop = doubleTapToStopEnabled && isPlaying && wasPlayingAtLastTap && withinTimeout
-          performPadHaptic(haptic, hapticIntensity)
-          if (isDoubleTapStop) {
-            lastTapElapsedMs = 0L
-            wasPlayingAtLastTap = false
-            onDoubleTapStop(pad)
-          } else {
-            lastTapElapsedMs = now
-            wasPlayingAtLastTap = isPlaying
-            onClick(pad)
+      // Custom pointerInput triggers immediately at ACTION_DOWN without combinedClickable/double-tap latency.
+      Modifier.pointerInput(pad.id) {
+        awaitEachGesture {
+          val down = awaitFirstDown(requireUnconsumed = false)
+          val downNanos = SystemClock.elapsedRealtimeNanos()
+          val nowMs = SystemClock.elapsedRealtime()
+          isPressedState = true
+          val pressInteraction = PressInteraction.Press(down.position)
+          coroutineScope.launch { interactionSource.emit(pressInteraction) }
+
+          val targetPad = latestPad
+          val playingNow = latestIsPlaying
+          val withinTimeout = lastTapElapsedMs > 0L && (nowMs - lastTapElapsedMs) <= viewConfig.doubleTapTimeoutMillis
+          val isDoubleTapStop = latestDoubleTapStop && !latestEffectiveLayerMode && playingNow && wasPlayingAtLastTap && withinTimeout
+
+          Trace.beginSection("pad_tap")
+          try {
+            if (isDoubleTapStop) {
+              lastTapElapsedMs = 0L
+              wasPlayingAtLastTap = false
+              latestOnDoubleTapStop(targetPad)
+            } else {
+              lastTapElapsedMs = nowMs
+              wasPlayingAtLastTap = playingNow
+              latestOnClickWithTime?.invoke(targetPad, downNanos) ?: latestOnClick(targetPad)
+            }
+          } finally {
+            Trace.endSection()
           }
-        },
-        onDoubleClick = null,
-        onLongClick = {
-          performPadHaptic(haptic, hapticIntensity)
-          onCustomizeClick(pad)
+          coroutineScope.launch { performPadHaptic(haptic, latestHapticIntensity) }
+
+          var gestureEnded = false
+          val longPressJob = coroutineScope.launch {
+            delay(viewConfig.longPressTimeoutMillis)
+            if (!gestureEnded) {
+              gestureEnded = true
+              isPressedState = false
+              performPadHaptic(haptic, latestHapticIntensity)
+              latestOnCustomizeClick(latestPad)
+            }
+          }
+
+          val slopSq = viewConfiguration.touchSlop * viewConfiguration.touchSlop
+          while (true) {
+            val event = awaitPointerEvent()
+            val change = event.changes.firstOrNull { it.id == down.id } ?: break
+            val delta = change.position - down.position
+            if ((delta.x * delta.x + delta.y * delta.y) > slopSq || !change.pressed) {
+              gestureEnded = true
+              longPressJob.cancel()
+              break
+            }
+          }
+          gestureEnded = true
+          longPressJob.cancel()
+          isPressedState = false
+          coroutineScope.launch { interactionSource.emit(PressInteraction.Release(pressInteraction)) }
         }
-      )
+      }
     }
   }
 
@@ -546,15 +637,56 @@ fun PadCell(
     }
   }
 
+  val drawCornerGlow = effectsActive &&
+    isEnabled &&
+    !hasError &&
+    glowFactor > 0.02f &&
+    (density == PadDensity.STANDARD || (density == PadDensity.COMPACT && isPlaying))
+
+  val sweepFillColor = remember(accentColor, isFadingOut) {
+    accentColor.copy(alpha = if (isFadingOut) 0.14f else 0.22f)
+  }
+
   Box(
     modifier = modifier
       .defaultMinSize(minWidth = spacing.minTouchTarget, minHeight = spacing.minTouchTarget)
-      .let { m -> if (effectsActive && scale != 1f) m.scale(scale) else m }
-      .let { m -> if (wiggleRotation != 0f) m.graphicsLayer { rotationZ = wiggleRotation } else m }
-      .alpha(if (isEnabled) 1f else 0.46f)
+      .graphicsLayer {
+        if (effectsActive && scale != 1f) {
+          scaleX = scale
+          scaleY = scale
+        }
+        alpha = if (isEnabled) 1f else 0.46f
+      }
       .clip(shape)
       .testTag("pad_item_${pad.positionIndex}")
-      .semantics { contentDescription = padDescription }
+      .semantics {
+        contentDescription = padDescription
+        if (isEnabled) {
+          onClick(label = pad.displayName) {
+            val downNanos = SystemClock.elapsedRealtimeNanos()
+            when {
+              hasError || isEditMode || isMidiLearnMode -> latestOnClick(latestPad)
+              pad.settings.triggerMode == PadTriggerMode.HOLD -> {
+                latestOnHoldStartWithTime?.invoke(latestPad, downNanos) ?: latestOnHoldStart(latestPad)
+              }
+              else -> {
+                latestOnClickWithTime?.invoke(latestPad, downNanos) ?: latestOnClick(latestPad)
+              }
+            }
+            true
+          }
+          if (!hasError && !isEditMode && !isMidiLearnMode && pad.settings.triggerMode != PadTriggerMode.HOLD) {
+            onLongClick(label = pad.displayName) {
+              latestOnCustomizeClick(latestPad)
+              true
+            }
+          }
+        }
+      }
+      .indication(
+        interactionSource = interactionSource,
+        indication = ripple(color = if (hasError) MaterialTheme.colorScheme.error else accentColor)
+      )
       .then(verticalVolumeSwipeMod)
       .then(interactionModifier)
   ) {
@@ -562,85 +694,88 @@ fun PadCell(
       modifier = Modifier.fillMaxSize(),
       shape = shape,
       color = containerColor,
-      tonalElevation = if (effectsActive && (isPlaying || isDragging)) 6.dp else 1.dp
+      tonalElevation = 0.dp
     ) {
-      Box(modifier = Modifier.fillMaxSize()) {
-        if (isEnabled && surfaceSheenBrush != null) {
-          Box(
-            modifier = Modifier
-              .fillMaxSize()
-              .background(surfaceSheenBrush)
-          )
-        }
-
-        if (isPlaying && progress > 0f) {
-          Box(
-            modifier = Modifier
-              .fillMaxWidth(progress.coerceIn(0f, 1f))
-              .fillMaxHeight()
-              .background(accentColor.copy(alpha = if (isFadingOut) 0.14f else 0.22f))
-          )
-        }
-
-        val drawCornerGlow = effectsActive &&
-          isEnabled &&
-          !hasError &&
-          glowFactor > 0.02f &&
-          (density == PadDensity.STANDARD || (density == PadDensity.COMPACT && isPlaying))
-
-        if (drawCornerGlow || borderWidthDp.value > 0.05f) {
-          Canvas(modifier = Modifier.fillMaxSize()) {
-            if (drawCornerGlow) {
+      Box(
+        modifier = Modifier
+          .fillMaxSize()
+          .drawWithCache {
+            val outline = shape.createOutline(size, layoutDirection, this)
+            val cornerGlowDraws: List<Pair<Offset, Brush>> = if (drawCornerGlow) {
               val vertices = padCornerGlowVertices(activeShapeStyle, size)
-              val radiusScale = if (isPlaying) 0.46f * playingGlowPulse else 0.30f
+              val radiusScale = if (isPlaying) 0.46f else 0.30f
               val cornerRadiusPx = (minOf(size.width, size.height) * radiusScale * glowFactor.coerceAtLeast(0.4f)).coerceAtLeast(8f)
-              val baseAlpha = if (isPlaying) 0.56f * playingGlowPulse else 0.30f
+              val baseAlpha = if (isPlaying) 0.56f else 0.30f
               val cornerAlpha = (baseAlpha * glowFactor).coerceIn(0f, 0.92f)
-              vertices.forEach { vertex ->
-                drawCircle(
-                  brush = Brush.radialGradient(
-                    colors = listOf(
-                      cornerGlowColor.copy(alpha = cornerAlpha),
-                      cornerGlowColor.copy(alpha = cornerAlpha * 0.24f),
-                      Color.Transparent
-                    ),
-                    center = vertex,
-                    radius = cornerRadiusPx
+              vertices.map { vertex ->
+                vertex to Brush.radialGradient(
+                  colors = listOf(
+                    cornerGlowColor.copy(alpha = cornerAlpha),
+                    cornerGlowColor.copy(alpha = cornerAlpha * 0.24f),
+                    Color.Transparent
                   ),
-                  radius = cornerRadiusPx,
-                  center = vertex
+                  center = vertex,
+                  radius = cornerRadiusPx
+                )
+              }
+            } else {
+              emptyList()
+            }
+            val glowRadiusPx = if (drawCornerGlow) {
+              val radiusScale = if (isPlaying) 0.46f else 0.30f
+              (minOf(size.width, size.height) * radiusScale * glowFactor.coerceAtLeast(0.4f)).coerceAtLeast(8f)
+            } else 0f
+            val haloStroke = if (isPlaying && effectsActive) {
+              Stroke(
+                width = (borderWidthDp + padTokens.playingGlowHaloStrokeDp).toPx(),
+                cap = StrokeCap.Round,
+                join = StrokeJoin.Round
+              )
+            } else null
+            val borderStroke = if (borderWidthDp.value > 0.05f) {
+              Stroke(
+                width = borderWidthDp.toPx(),
+                cap = StrokeCap.Round,
+                join = StrokeJoin.Round
+              )
+            } else null
+
+            onDrawBehind {
+              if (surfaceSheenBrush != null && isEnabled) {
+                drawRect(brush = surfaceSheenBrush)
+              }
+              if (isPlaying) {
+                val p = activeProgressProvider().coerceIn(0f, 1f)
+                if (p > 0f) {
+                  drawRect(
+                    color = sweepFillColor,
+                    size = Size(width = size.width * p, height = size.height)
+                  )
+                }
+              }
+              if (cornerGlowDraws.isNotEmpty()) {
+                for (i in cornerGlowDraws.indices) {
+                  val (vertex, brush) = cornerGlowDraws[i]
+                  drawCircle(brush = brush, radius = glowRadiusPx, center = vertex)
+                }
+              }
+              if (haloStroke != null) {
+                drawOutline(
+                  outline = outline,
+                  color = borderColor.copy(alpha = padTokens.playingGlowHaloAlpha),
+                  style = haloStroke
+                )
+              }
+              if (borderStroke != null) {
+                drawOutline(
+                  outline = outline,
+                  color = borderColor,
+                  style = borderStroke
                 )
               }
             }
-
-            val outline = shape.createOutline(size, layoutDirection, this)
-            if (isPlaying && effectsActive) {
-              val haloAlpha = (padTokens.playingGlowHaloAlpha * playingGlowPulse).coerceIn(0.12f, 0.55f)
-              drawOutline(
-                outline = outline,
-                color = borderColor.copy(alpha = haloAlpha),
-                style = Stroke(
-                  width = (borderWidthDp + padTokens.playingGlowHaloStrokeDp).toPx(),
-                  cap = StrokeCap.Round,
-                  join = StrokeJoin.Round
-                )
-              )
-            }
-
-            if (borderWidthDp.value > 0.05f) {
-              drawOutline(
-                outline = outline,
-                color = borderColor,
-                style = Stroke(
-                  width = borderWidthDp.toPx(),
-                  cap = StrokeCap.Round,
-                  join = StrokeJoin.Round
-                )
-              )
-            }
           }
-        }
-
+      ) {
         val contentPadding = when (activeShapeStyle) {
           PadShapeStyle.TRIANGLE -> Modifier.padding(top = spacing.md, bottom = spacing.xxs, start = spacing.sm, end = spacing.sm)
           PadShapeStyle.STAR -> Modifier.padding(horizontal = spacing.sm, vertical = spacing.sm)
@@ -665,12 +800,14 @@ fun PadCell(
               gridCols = gridCols,
               accentColor = contentAccent,
               customTextColor = customTextColor,
-              playbackState = playbackState
+              playbackState = playbackState,
+              progressProvider = activeProgressProvider
             )
             PadDensity.COMPACT -> CompactPadContent(
               pad = pad,
               slotNumber = slotNumber,
               isPlaying = isPlaying,
+              activeVoiceCount = activeVoiceCount,
               isLoading = isLoading,
               gridRows = gridRows,
               gridCols = gridCols,
@@ -678,8 +815,10 @@ fun PadCell(
               customTextColor = customTextColor
             )
             PadDensity.MICRO -> MicroPadContent(
+              padId = pad.id,
               slotNumber = slotNumber,
               isPlaying = isPlaying,
+              activeVoiceCount = activeVoiceCount,
               isLoading = isLoading,
               hasError = hasError,
               gridRows = gridRows,
@@ -725,20 +864,19 @@ fun PadCell(
         }
 
         if (isPlaying) {
+          val trackColor = extColors.padProgressTrack
+          val fillColor = if (isFadingOut) MaterialTheme.colorScheme.secondary else cornerGlowColor
           Box(
             modifier = Modifier
               .align(Alignment.BottomStart)
               .fillMaxWidth()
               .height(if (density == PadDensity.MICRO) padTokens.bottomProgressMicroDp else padTokens.bottomProgressStandardDp)
-              .background(extColors.padProgressTrack)
-          ) {
-            Box(
-              modifier = Modifier
-                .fillMaxWidth(progress.coerceIn(0.03f, 1f))
-                .fillMaxHeight()
-                .background(if (isFadingOut) MaterialTheme.colorScheme.secondary else cornerGlowColor)
-            )
-          }
+              .drawBehind {
+                drawRect(color = trackColor)
+                val p = activeProgressProvider().coerceIn(0.03f, 1f)
+                drawRect(color = fillColor, size = Size(width = size.width * p, height = size.height))
+              }
+          )
         }
       }
     }
@@ -761,7 +899,8 @@ private fun StandardPadContent(
   gridCols: Int,
   accentColor: Color,
   customTextColor: Color?,
-  playbackState: PadPlaybackState?
+  playbackState: PadPlaybackState?,
+  progressProvider: () -> Float
 ) {
   val extColors = SoundPadTheme.colors
   val spacing = SoundPadTheme.spacing
@@ -948,6 +1087,26 @@ private fun StandardPadContent(
             )
           }
           else -> {
+            val activeVoices = if (isPlaying) (playbackState?.activeVoiceCount ?: 1) else 0
+            if (activeVoices > 1) {
+              val voiceDesc = stringResource(R.string.cd_pad_voice_count_badge, activeVoices)
+              Box(
+                modifier = Modifier
+                  .clip(RoundedCornerShape(padTokens.statusBadgeRadiusDp))
+                  .background(accentColor.copy(alpha = 0.22f))
+                  .padding(horizontal = spacing.xs, vertical = 1.dp)
+                  .semantics { contentDescription = voiceDesc }
+                  .testTag("pad_voice_count_badge_${pad.id}"),
+                contentAlignment = Alignment.Center
+              ) {
+                Text(
+                  text = "×$activeVoices",
+                  style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.ExtraBold),
+                  color = accentColor,
+                  maxLines = 1
+                )
+              }
+            }
             val visibleBadges = activeStatusBadges.take(padTokens.maxStatusIcons)
             val overflowCount = (activeStatusBadges.size - visibleBadges.size).coerceAtLeast(0)
             visibleBadges.forEach { badge ->
@@ -1011,7 +1170,7 @@ private fun StandardPadContent(
 
         MiniWaveformStrip(
           bars = pad.miniWaveform,
-          progress = if (isPlaying) (playbackState?.progress ?: 0f) else 0f,
+          progressProvider = if (isPlaying) progressProvider else { { 0f } },
           isPlaying = isPlaying,
           playedColor = accentColor.copy(alpha = padTokens.waveformPlayedAlpha),
           unplayedPlayingColor = accentColor.copy(alpha = padTokens.waveformDimAlpha),
@@ -1087,14 +1246,28 @@ private fun StandardPadContent(
 
       when {
         isPlaying && playbackState != null -> {
+          val trackColor = accentColor.copy(alpha = padTokens.waveformDimAlpha)
           Box(contentAlignment = Alignment.Center, modifier = Modifier.size(padTokens.playingEqBoxDp)) {
-            CircularProgressIndicator(
-              progress = { playbackState.progress.coerceIn(0f, 1f) },
-              modifier = Modifier.fillMaxSize(),
-              strokeWidth = 2.dp,
-              color = accentColor,
-              trackColor = accentColor.copy(alpha = padTokens.waveformDimAlpha)
-            )
+            Canvas(modifier = Modifier.fillMaxSize()) {
+              val strokePx = 2.dp.toPx()
+              drawArc(
+                color = trackColor,
+                startAngle = 0f,
+                sweepAngle = 360f,
+                useCenter = false,
+                style = Stroke(width = strokePx, cap = StrokeCap.Round)
+              )
+              val p = progressProvider().coerceIn(0f, 1f)
+              if (p > 0f) {
+                drawArc(
+                  color = accentColor,
+                  startAngle = -90f,
+                  sweepAngle = p * 360f,
+                  useCenter = false,
+                  style = Stroke(width = strokePx, cap = StrokeCap.Round)
+                )
+              }
+            }
             Icon(
               imageVector = Icons.Filled.GraphicEq,
               contentDescription = null,
@@ -1179,7 +1352,7 @@ private fun AutoSizePadTitle(
 @Composable
 private fun MiniWaveformStrip(
   bars: List<Float>,
-  progress: Float,
+  progressProvider: () -> Float,
   isPlaying: Boolean,
   playedColor: Color,
   unplayedPlayingColor: Color,
@@ -1193,7 +1366,7 @@ private fun MiniWaveformStrip(
     val slotW = size.width / count
     val barW = (slotW * 0.64f).coerceAtLeast(1.5f)
     val gap = (slotW - barW) * 0.5f
-    val clampedProgress = progress.coerceIn(0f, 1f)
+    val clampedProgress = progressProvider().coerceIn(0f, 1f)
     val playheadX = size.width * clampedProgress
 
     for (i in 0 until count) {
@@ -1233,6 +1406,7 @@ private fun CompactPadContent(
   pad: SoundPad,
   slotNumber: Int,
   isPlaying: Boolean,
+  activeVoiceCount: Int,
   isLoading: Boolean,
   gridRows: Int,
   gridCols: Int,
@@ -1291,6 +1465,17 @@ private fun CompactPadContent(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(spacing.xxs)
       ) {
+        if (isPlaying && activeVoiceCount > 1) {
+          val voiceDesc = stringResource(R.string.cd_pad_voice_count_badge, activeVoiceCount)
+          Text(
+            text = "×$activeVoiceCount",
+            style = metaStyle.copy(fontWeight = FontWeight.ExtraBold),
+            color = accentColor,
+            modifier = Modifier
+              .semantics { contentDescription = voiceDesc }
+              .testTag("pad_voice_count_badge_${pad.id}")
+          )
+        }
         if (badgeVector != null && !hasError) {
           Icon(
             imageVector = badgeVector,
@@ -1326,8 +1511,10 @@ private fun CompactPadContent(
 
 @Composable
 private fun MicroPadContent(
+  padId: String,
   slotNumber: Int,
   isPlaying: Boolean,
+  activeVoiceCount: Int,
   isLoading: Boolean,
   hasError: Boolean,
   gridRows: Int,
@@ -1347,13 +1534,30 @@ private fun MicroPadContent(
         color = MaterialTheme.colorScheme.primary
       )
     } else {
+      val label = when {
+        hasError -> "!"
+        isPlaying && activeVoiceCount > 1 -> "×$activeVoiceCount"
+        else -> slotNumber.toString()
+      }
+      val voiceDesc = if (isPlaying && activeVoiceCount > 1) {
+        stringResource(R.string.cd_pad_voice_count_badge, activeVoiceCount)
+      } else {
+        null
+      }
       Text(
-        text = if (hasError) "!" else slotNumber.toString(),
+        text = label,
         style = metaStyle.copy(fontWeight = if (isPlaying || hasError) FontWeight.Bold else FontWeight.Medium),
         color = when {
           hasError -> MaterialTheme.colorScheme.error
           isPlaying -> accentColor
           else -> MaterialTheme.colorScheme.onSurface.copy(alpha = padTokens.metaMinAlpha)
+        },
+        modifier = if (isPlaying && activeVoiceCount > 1) {
+          Modifier
+            .semantics { if (voiceDesc != null) contentDescription = voiceDesc }
+            .testTag("pad_voice_count_badge_$padId")
+        } else {
+          Modifier
         }
       )
     }
@@ -1376,7 +1580,12 @@ private fun EmptyPadWell(
   val spacing = SoundPadTheme.spacing
   val extColors = SoundPadTheme.colors
   val haptic = LocalHapticFeedback.current
+  val viewConfig = LocalViewConfiguration.current
   val interactionSource = remember { MutableInteractionSource() }
+  val coroutineScope = rememberCoroutineScope()
+  var lastTapElapsedMs by remember(slotNumber) { mutableLongStateOf(0L) }
+  val latestOnClick by rememberUpdatedState(onClick)
+  val latestOnDoubleClick by rememberUpdatedState(onDoubleClick)
 
   val cornerRadius = when (density) {
     PadDensity.STANDARD -> padTokens.standardCornerDp
@@ -1407,15 +1616,31 @@ private fun EmptyPadWell(
   val addDescription = stringResource(R.string.cd_empty_pad_add)
 
   val clickMod = if (onDoubleClick != null) {
-    Modifier.combinedClickable(
-      interactionSource = interactionSource,
-      indication = ripple(color = MaterialTheme.colorScheme.primary),
-      onClick = { onClick() },
-      onDoubleClick = {
-        performPadHaptic(haptic, hapticIntensity)
-        onDoubleClick()
+    Modifier
+      .indication(interactionSource = interactionSource, indication = ripple(color = MaterialTheme.colorScheme.primary))
+      .pointerInput(slotNumber, hapticIntensity) {
+        awaitEachGesture {
+          val down = awaitFirstDown(requireUnconsumed = false)
+          val pressInteraction = PressInteraction.Press(down.position)
+          coroutineScope.launch { interactionSource.emit(pressInteraction) }
+          val nowMs = SystemClock.elapsedRealtime()
+          val isDoubleTap = lastTapElapsedMs > 0L && (nowMs - lastTapElapsedMs) <= viewConfig.doubleTapTimeoutMillis
+          if (isDoubleTap) {
+            lastTapElapsedMs = 0L
+            coroutineScope.launch { performPadHaptic(haptic, hapticIntensity) }
+            latestOnDoubleClick?.invoke()
+          } else {
+            lastTapElapsedMs = nowMs
+            latestOnClick()
+          }
+          while (true) {
+            val event = awaitPointerEvent()
+            val change = event.changes.firstOrNull { it.id == down.id } ?: break
+            if (!change.pressed) break
+          }
+          coroutineScope.launch { interactionSource.emit(PressInteraction.Release(pressInteraction)) }
+        }
       }
-    )
   } else {
     Modifier.clickable(
       interactionSource = interactionSource,
@@ -1432,7 +1657,13 @@ private fun EmptyPadWell(
       .clip(shape)
       .background(containerColor)
       .testTag("empty_pad_well_$slotNumber")
-      .semantics { contentDescription = "$addDescription ($slotNumber)" }
+      .semantics {
+        contentDescription = "$addDescription ($slotNumber)"
+        onClick(label = addDescription) {
+          latestOnClick()
+          true
+        }
+      }
       .then(clickMod),
     contentAlignment = Alignment.Center
   ) {

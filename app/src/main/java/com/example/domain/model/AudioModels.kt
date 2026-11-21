@@ -15,6 +15,11 @@ enum class PadTriggerMode(val label: String, val description: String) {
   LOOP("Loop", "Loops continuously until tapped again")
 }
 
+enum class RetriggerMode(val label: String, val description: String) {
+  RESTART("Restart", "Stop & restart from beginning on retrigger"),
+  LAYER("Layer", "Stack multiple polyphonic voices on each trigger")
+}
+
 enum class FadeCurve(val label: String, val shortLabel: String) {
   LINEAR("Linear", "LIN"),
   EXPONENTIAL("Exponential", "EXP"),
@@ -40,6 +45,19 @@ enum class AppLanguage(val label: String, val tag: String) {
   SYSTEM("Sistem", ""),
   INDONESIAN("Indonesia", "in"),
   ENGLISH("English", "en")
+}
+
+enum class AnimationMode(val label: String) {
+  FULL("Penuh"),
+  LIGHT("Ringan"),
+  OFF("Mati")
+}
+
+enum class ColorBlindMode(val label: String) {
+  NONE("Normal"),
+  DEUTERANOPIA("Deuteranopia"),
+  PROTANOPIA("Protanopia"),
+  TRITANOPIA("Tritanopia")
 }
 
 enum class PadShapeStyle(val label: String) {
@@ -204,7 +222,9 @@ data class PadSettings(
   val reverbEnabled: Boolean = false,
   val reverbRoomSize: Float = 0.35f,
   val reverbDamping: Float = 0.45f,
-  val reverbMix: Float = 0.25f
+  val reverbMix: Float = 0.25f,
+  val retriggerMode: RetriggerMode? = null, // null = inherit GlobalSettings.retriggerMode
+  val maxVoices: Int = 0 // 0 = inherit global limit, 1..16 = per-pad voice limit
 )
 
 @Immutable
@@ -310,7 +330,8 @@ data class PadPlaybackState(
   val isFadingOut: Boolean = false,
   val positionMs: Long,
   val durationMs: Long,
-  val progress: Float
+  val progress: Float,
+  val activeVoiceCount: Int = 1
 )
 
 data class FolderScanResult(
@@ -398,8 +419,30 @@ data class GlobalSettings(
   val dragDropConflictMode: DragDropConflictMode = DragDropConflictMode.SWAP,
   val lastBleMidiAddress: String? = null,
   val lastBleMidiName: String? = null,
-  val bleAutoReconnectEnabled: Boolean = true
+  val bleAutoReconnectEnabled: Boolean = true,
+  val animationMode: AnimationMode = AnimationMode.FULL,
+  val showLatencyDebugOverlay: Boolean = false,
+  val retriggerMode: RetriggerMode = RetriggerMode.RESTART,
+  val maxVoices: Int = 16,
+  val highContrastEnabled: Boolean = false,
+  val colorBlindMode: ColorBlindMode = ColorBlindMode.NONE
 )
+
+@Immutable
+data class RamCacheStats(
+  val usedBytes: Long = 0L,
+  val maxBytes: Long = 64L * 1024L * 1024L,
+  val cachedPadCount: Int = 0,
+  val evictedCount: Int = 0,
+  val skippedCount: Int = 0,
+  val isLowMemoryDevice: Boolean = false
+) {
+  val utilizationPercent: Int
+    get() = if (maxBytes <= 0L) 0 else ((usedBytes * 100L) / maxBytes).toInt().coerceIn(0, 100)
+
+  val isWarningActive: Boolean
+    get() = utilizationPercent >= 80 || isLowMemoryDevice || (evictedCount > 0 && utilizationPercent >= 70)
+}
 
 enum class MidiCcTarget(val label: String) {
   MASTER_VOLUME("Master Volume"),
@@ -456,6 +499,21 @@ data class LatencyTestReport(
   val configuredBufferMs: Int,
   val measuredReadyMs: Long,
   val timestampMs: Long = System.currentTimeMillis()
+)
+
+@Immutable
+data class TapLatencyMetrics(
+  val lastTapToSoundMs: Double = 0.0,
+  val avgTapToSoundMs: Double = 0.0,
+  val minTapToSoundMs: Double = 0.0,
+  val maxTapToSoundMs: Double = 0.0,
+  val lastDispatchMs: Double = 0.0,
+  val sampleCount: Int = 0,
+  val warmSlotsReady: Int = 0,
+  val idlePoolSize: Int = 0,
+  val architectureLabel: String = "Hybrid Pre-Warmed ExoPlayer Pool (16) + MasterAudioMixerBus",
+  val framesPerBurst: Int = 0,
+  val nativeSampleRateHz: Int = 48000
 )
 
 enum class MasterRecordFormat(

@@ -17,9 +17,10 @@ import androidx.sqlite.db.SupportSQLiteDatabase
     ScheduledTaskEntity::class,
     SequencerPlaylistEntity::class,
     MidiPcBankMappingEntity::class,
-    SchedulerIdCounterEntity::class
+    SchedulerIdCounterEntity::class,
+    PadLayoutEntity::class
   ],
-  version = 13,
+  version = 15,
   exportSchema = true
 )
 abstract class SoundPadDatabase : RoomDatabase() {
@@ -166,12 +167,43 @@ abstract class SoundPadDatabase : RoomDatabase() {
       }
     }
 
+    val MIGRATION_13_14 = object : Migration(13, 14) {
+      override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE pad_settings ADD COLUMN retriggerMode TEXT DEFAULT NULL")
+        db.execSQL("ALTER TABLE pad_settings ADD COLUMN maxVoices INTEGER NOT NULL DEFAULT 0")
+      }
+    }
+
+    val MIGRATION_14_15 = object : Migration(14, 15) {
+      override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+          """
+          CREATE TABLE IF NOT EXISTS pad_layouts (
+            id TEXT NOT NULL PRIMARY KEY,
+            profileId TEXT NOT NULL,
+            name TEXT NOT NULL,
+            gridRows INTEGER NOT NULL DEFAULT 4,
+            gridCols INTEGER NOT NULL DEFAULT 4,
+            isDefault INTEGER NOT NULL DEFAULT 0,
+            slotsJson TEXT NOT NULL DEFAULT '[]',
+            createdAtMs INTEGER NOT NULL,
+            updatedAtMs INTEGER NOT NULL,
+            FOREIGN KEY(profileId) REFERENCES pad_profiles(id) ON DELETE CASCADE
+          )
+          """.trimIndent()
+        )
+        db.execSQL("CREATE INDEX IF NOT EXISTS index_pad_layouts_profileId ON pad_layouts(profileId)")
+      }
+    }
+
     val ALL_MIGRATIONS: Array<Migration> = arrayOf(
       MIGRATION_8_9,
       MIGRATION_9_10,
       MIGRATION_10_11,
       MIGRATION_11_12,
-      MIGRATION_12_13
+      MIGRATION_12_13,
+      MIGRATION_13_14,
+      MIGRATION_14_15
     )
 
     fun createRestoreCallback(context: Context): Callback {

@@ -32,6 +32,7 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CloudDone
 import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.CloudSync
+import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.GraphicEq
@@ -41,9 +42,11 @@ import androidx.compose.material.icons.filled.LibraryMusic
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.RestartAlt
 import androidx.compose.material.icons.filled.School
+import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.TouchApp
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledIconButton
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -82,6 +85,7 @@ import com.example.R
 import com.example.audio.StereoPanMath
 import com.example.data.backup.BackupSyncStatus
 import com.example.data.backup.PersistentBackupUiState
+import com.example.domain.model.AnimationMode
 import com.example.domain.model.AppLanguage
 import com.example.domain.model.DefaultPadColorMode
 import com.example.domain.model.DragDropConflictMode
@@ -91,6 +95,8 @@ import com.example.domain.model.GridConfig
 import com.example.domain.model.GridPreset
 import com.example.domain.model.HapticIntensity
 import com.example.domain.model.PadShapeStyle
+import com.example.domain.model.RetriggerMode
+import com.example.domain.model.TapLatencyMetrics
 import com.example.domain.model.ThemeMode
 import com.example.ui.theme.SoundPadColorPalette
 import com.example.ui.theme.SoundPadTheme
@@ -118,6 +124,13 @@ fun GridSettingsSheet(
   onPreloadToggle: (Boolean) -> Unit,
   onAudioEffectsToggle: (Boolean) -> Unit = {},
   onVisualEffectsToggle: (Boolean) -> Unit = {},
+  onAnimationModeChange: (AnimationMode) -> Unit = {},
+  onLatencyDebugOverlayToggle: (Boolean) -> Unit = {},
+  tapLatencyMetrics: TapLatencyMetrics = TapLatencyMetrics(),
+  onResetLatencyMetrics: () -> Unit = {},
+  onPingLatencyEngine: () -> Unit = {},
+  onRetriggerModeChange: (RetriggerMode) -> Unit = {},
+  onMaxVoicesChange: (Int) -> Unit = {},
   onKeepScreenOnToggle: (Boolean) -> Unit,
   onGlobalCrossfadeToggle: (Boolean) -> Unit,
   onCrossfadeDurationChange: (Long) -> Unit,
@@ -156,7 +169,7 @@ fun GridSettingsSheet(
 ) {
   val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
   val gridConfig = settings.gridConfig
-  var selectedSection by remember { mutableIntStateOf(0) } // 0=Tampilan, 1=Audio, 2=Grid, 3=Interaksi, 4=Backup, 5=Tentang
+  var selectedSection by remember { mutableIntStateOf(0) } // 0=Tampilan, 1=Audio, 2=Grid, 3=Interaksi, 4=Backup, 5=Tentang, 6=Developer
 
   var appHue by remember(settings.appAccentColorArgb) {
     val hsv = FloatArray(3)
@@ -254,6 +267,13 @@ fun GridSettingsSheet(
           leadingIcon = { Icon(Icons.Filled.Info, contentDescription = null, modifier = Modifier.size(16.dp)) },
           label = { Text(stringResource(R.string.settings_tab_about), style = MaterialTheme.typography.labelMedium) },
           modifier = Modifier.testTag("settings_tab_about")
+        )
+        FilterChip(
+          selected = selectedSection == 6,
+          onClick = { selectedSection = 6 },
+          leadingIcon = { Icon(Icons.Filled.Code, contentDescription = null, modifier = Modifier.size(16.dp)) },
+          label = { Text(stringResource(R.string.settings_tab_developer), style = MaterialTheme.typography.labelMedium) },
+          modifier = Modifier.testTag("settings_tab_developer")
         )
       }
 
@@ -638,6 +658,34 @@ fun GridSettingsSheet(
             }
           }
 
+          Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text(
+              text = stringResource(R.string.settings_animation_mode_title),
+              style = MaterialTheme.typography.labelMedium,
+              color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Text(
+              text = stringResource(R.string.settings_animation_mode_subtitle),
+              style = MaterialTheme.typography.bodySmall,
+              color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Row(
+              modifier = Modifier.fillMaxWidth(),
+              horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+              AnimationMode.entries.forEach { mode ->
+                FilterChip(
+                  selected = settings.animationMode == mode,
+                  onClick = { onAnimationModeChange(mode) },
+                  label = { Text(mode.label, style = MaterialTheme.typography.labelSmall, maxLines = 1) },
+                  modifier = Modifier
+                    .weight(1f)
+                    .testTag("settings_animation_mode_${mode.name.lowercase()}")
+                )
+              }
+            }
+          }
+
           Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -932,6 +980,96 @@ fun GridSettingsSheet(
               checked = settings.preloadShortAudio,
               onCheckedChange = onPreloadToggle
             )
+          }
+
+          HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+
+          Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(
+              text = stringResource(R.string.settings_retrigger_mode_title),
+              style = MaterialTheme.typography.labelMedium,
+              color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Text(
+              text = stringResource(R.string.settings_retrigger_mode_subtitle),
+              style = MaterialTheme.typography.bodySmall,
+              color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Row(
+              modifier = Modifier.fillMaxWidth(),
+              horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+              FilterChip(
+                selected = settings.retriggerMode == RetriggerMode.RESTART,
+                onClick = { onRetriggerModeChange(RetriggerMode.RESTART) },
+                label = {
+                  Text(
+                    text = stringResource(R.string.retrigger_mode_restart),
+                    style = MaterialTheme.typography.labelSmall,
+                    maxLines = 1
+                  )
+                },
+                modifier = Modifier
+                  .weight(1f)
+                  .testTag("global_retrigger_restart")
+              )
+              FilterChip(
+                selected = settings.retriggerMode == RetriggerMode.LAYER,
+                onClick = { onRetriggerModeChange(RetriggerMode.LAYER) },
+                label = {
+                  Text(
+                    text = stringResource(R.string.retrigger_mode_layer),
+                    style = MaterialTheme.typography.labelSmall,
+                    maxLines = 1
+                  )
+                },
+                modifier = Modifier
+                  .weight(1f)
+                  .testTag("global_retrigger_layer")
+              )
+            }
+
+            Column {
+              Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+              ) {
+                Column(modifier = Modifier.weight(1f)) {
+                  Text(
+                    text = stringResource(R.string.settings_max_voices_title, settings.maxVoices.coerceIn(1, 16)),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.primary
+                  )
+                  Text(
+                    text = stringResource(R.string.settings_max_voices_subtitle),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                  )
+                }
+                IconButton(
+                  onClick = { onMaxVoicesChange(16) },
+                  modifier = Modifier
+                    .minimumInteractiveComponentSize()
+                    .testTag("reset_global_max_voices_button")
+                ) {
+                  Icon(
+                    imageVector = Icons.Filled.RestartAlt,
+                    contentDescription = stringResource(R.string.cd_reset_max_voices),
+                    modifier = Modifier.size(18.dp)
+                  )
+                }
+              }
+              Slider(
+                value = settings.maxVoices.coerceIn(1, 16).toFloat(),
+                onValueChange = { raw ->
+                  onMaxVoicesChange(raw.roundToInt().coerceIn(1, 16))
+                },
+                valueRange = 1f..16f,
+                steps = 14,
+                modifier = Modifier.testTag("global_max_voices_slider")
+              )
+            }
           }
         }
 
@@ -1320,7 +1458,7 @@ fun GridSettingsSheet(
           )
         }
 
-        else -> {
+        5 -> {
           // ---- TAB 5: TENTANG & DEMO ----
           Surface(
             modifier = Modifier.fillMaxWidth(),
@@ -1427,6 +1565,121 @@ fun GridSettingsSheet(
                 text = "Media3 Low-Latency Polyphonic Mixer · 5-Band Biquad EQ · Reverb/Echo DSP · Stereo Pan · Headphone Cue Monitor · USB/BLE MIDI",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
+              )
+            }
+          }
+        }
+
+        else -> {
+          // ---- TAB 6: DEVELOPER ----
+          Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+          ) {
+            Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
+              Text(
+                text = stringResource(R.string.developer_latency_overlay_title),
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.onSurface
+              )
+              Text(
+                text = stringResource(R.string.developer_latency_overlay_subtitle),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+              )
+            }
+            Switch(
+              checked = settings.showLatencyDebugOverlay,
+              onCheckedChange = onLatencyDebugOverlayToggle,
+              modifier = Modifier.testTag("settings_latency_overlay_switch")
+            )
+          }
+
+          Surface(
+            modifier = Modifier
+              .fillMaxWidth()
+              .testTag("developer_latency_telemetry_card"),
+            shape = RoundedCornerShape(12.dp),
+            color = MaterialTheme.colorScheme.surfaceContainer,
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+          ) {
+            Column(
+              modifier = Modifier.padding(14.dp),
+              verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+              Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+              ) {
+                Icon(
+                  imageVector = Icons.Filled.Speed,
+                  contentDescription = null,
+                  tint = MaterialTheme.colorScheme.primary,
+                  modifier = Modifier.size(18.dp)
+                )
+                Text(
+                  text = stringResource(R.string.developer_latency_card_title),
+                  style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                  color = MaterialTheme.colorScheme.primary
+                )
+              }
+
+              Text(
+                text = "Tap-to-Sound Terakhir: ${formatLatencyMs(tapLatencyMetrics.lastTapToSoundMs)} · Rata-rata: ${formatLatencyMs(tapLatencyMetrics.avgTapToSoundMs)}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface
+              )
+              Text(
+                text = "Min/Max: ${formatLatencyMs(tapLatencyMetrics.minTapToSoundMs)} / ${formatLatencyMs(tapLatencyMetrics.maxTapToSoundMs)} · Queue->Audio: ${formatLatencyMs(tapLatencyMetrics.lastDispatchMs)} (n=${tapLatencyMetrics.sampleCount})",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+              )
+              Text(
+                text = "Pre-warmed Slots: ${tapLatencyMetrics.warmSlotsReady} · Idle Pool: ${tapLatencyMetrics.idlePoolSize}/16 · Frames/Burst: ${tapLatencyMetrics.framesPerBurst} @ ${tapLatencyMetrics.nativeSampleRateHz} Hz",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+              )
+              Text(
+                text = "Arsitektur: ${tapLatencyMetrics.architectureLabel}",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.primary
+              )
+            }
+          }
+
+          Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+          ) {
+            OutlinedButton(
+              onClick = onResetLatencyMetrics,
+              modifier = Modifier
+                .weight(1f)
+                .height(48.dp)
+                .testTag("settings_latency_reset_button")
+            ) {
+              Icon(Icons.Filled.RestartAlt, contentDescription = null, modifier = Modifier.size(18.dp))
+              Spacer(modifier = Modifier.width(6.dp))
+              Text(
+                text = stringResource(R.string.developer_latency_reset_btn),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+              )
+            }
+            FilledTonalButton(
+              onClick = onPingLatencyEngine,
+              modifier = Modifier
+                .weight(1f)
+                .height(48.dp)
+                .testTag("settings_latency_ping_button")
+            ) {
+              Icon(Icons.Filled.Speed, contentDescription = null, modifier = Modifier.size(18.dp))
+              Spacer(modifier = Modifier.width(6.dp))
+              Text(
+                text = stringResource(R.string.developer_latency_ping_btn),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
               )
             }
           }

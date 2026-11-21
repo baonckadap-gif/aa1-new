@@ -5,17 +5,11 @@
         <include domain="database" path="soundpad_pro.db-wal" />
         <include domain="database" path="soundpad_pro.db-shm" />
         <include domain="file" path="datastore/soundpad_global_settings.preferences_pb" />
-        <exclude domain="file" path="audio_cache" />
-        <exclude domain="file" path="reverse_cache" />
-        <exclude domain="file" path="shared_backups" />
     </cloud-backup>
     <device-transfer>
         <include domain="database" path="soundpad_pro.db" />
         <include domain="database" path="soundpad_pro.db-wal" />
         <include domain="database" path="soundpad_pro.db-shm" />
         <include domain="file" path="datastore/soundpad_global_settings.preferences_pb" />
-        <exclude domain="file" path="audio_cache" />
-        <exclude domain="file" path="reverse_cache" />
-        <exclude domain="file" path="shared_backups" />
     </device-transfer>
 </data-extraction-rules>

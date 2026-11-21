@@ -3,8 +3,13 @@ package com.example.audio
 import android.content.Context
 import android.media.AudioDeviceInfo
 import android.net.Uri
+import android.os.Handler
+import android.os.HandlerThread
+import android.os.Looper
 import android.os.PowerManager
+import android.os.Process
 import android.os.SystemClock
+import android.os.Trace
 import androidx.annotation.OptIn
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
@@ -25,9 +30,12 @@ import com.example.domain.model.GlobalSettings
 import com.example.domain.model.LatencyTestReport
 import com.example.domain.model.PadErrorType
 import com.example.domain.model.PadPlaybackState
+import com.example.domain.model.PadSettings
 import com.example.domain.model.PadTriggerMode
 import com.example.domain.model.PlayMode
+import com.example.domain.model.RetriggerMode
 import com.example.domain.model.SoundPad
+import com.example.domain.model.TapLatencyMetrics
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -42,6 +50,10 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.RandomAccessFile
+import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.PI
 import kotlin.math.sin
 import kotlin.math.sqrt
@@ -101,6 +113,134 @@ object AudioMixMath {
   }
 }
 
+data class ActiveVoiceSnapshot(
+  val voiceId: String,
+  val padId: String,
+  val chokeGroup: Int,
+  val isFadingOut: Boolean,
+  val crossfadeEnabled: Boolean
+)
+
+object RetriggerVoicePlanner {
+  fun resolveEffectiveRetriggerMode(padSettings: PadSettings, globalSettings: GlobalSettings): RetriggerMode {
+    return padSettings.retriggerMode ?: globalSettings.retriggerMode
+  }
+
+  fun resolveEffectiveMaxVoices(globalSettings: GlobalSettings): Int {
+    return globalSettings.maxVoices.coerceIn(1, SoundPadAudioEngine.MAX_PLAYER_POOL)
+  }
+
+  fun resolveEffectivePadVoiceCap(padSettings: PadSettings, globalSettings: GlobalSettings): Int {
+    val globalCap = resolveEffectiveMaxVoices(globalSettings)
+    return if (padSettings.maxVoices > 0) {
+      minOf(padSettings.maxVoices.coerceIn(1, SoundPadAudioEngine.MAX_PLAYER_POOL), globalCap)
+    } else {
+      globalCap
+    }
+  }
+
+  fun selectVoiceToSteal(voices: List<ActiveVoiceSnapshot>): ActiveVoiceSnapshot? {
+    return voices.firstOrNull { it.isFadingOut } ?: voices.firstOrNull()
+  }
+
+  fun computeEvictionsForNewVoice(
+    voices: List<ActiveVoiceSnapshot>,
+    incomingPadId: String,
+    perPadCap: Int,
+    globalCap: Int
+  ): List<String> {
+    val remaining = voices.toMutableList()
+    val evictions = mutableListOf<String>()
+    val safePerPad = perPadCap.coerceIn(1, SoundPadAudioEngine.MAX_PLAYER_POOL)
+    val safeGlobal = globalCap.coerceIn(1, SoundPadAudioEngine.MAX_PLAYER_POOL)
+
+    while (remaining.count { it.padId == incomingPadId } >= safePerPad) {
+      val samePadVoices = remaining.filter { it.padId == incomingPadId }
+      val victim = selectVoiceToSteal(samePadVoices) ?: break
+      remaining.remove(victim)
+      evictions.add(victim.voiceId)
+    }
+
+    while (remaining.size >= safeGlobal) {
+      val victim = selectVoiceToSteal(remaining) ?: break
+      remaining.remove(victim)
+      evictions.add(victim.voiceId)
+    }
+    return evictions
+  }
+}
+
+class LatencyMetricsTracker {
+  private var sampleCount = 0
+  private var sumMs = 0.0
+  private var minMs = Double.MAX_VALUE
+  private var maxMs = 0.0
+  private var lastMs = 0.0
+  private var lastDispatchMs = 0.0
+
+  fun record(
+    tapDownNanos: Long,
+    dispatchNanos: Long,
+    soundStartedNanos: Long,
+    warmSlotsReady: Int,
+    idlePoolSize: Int,
+    framesPerBurst: Int,
+    nativeSampleRateHz: Int
+  ): TapLatencyMetrics {
+    val safeDispatch = ((dispatchNanos - tapDownNanos).coerceAtLeast(0L)) / 1_000_000.0
+    val safeTotal = ((soundStartedNanos - tapDownNanos).coerceAtLeast(0L)) / 1_000_000.0
+    sampleCount++
+    sumMs += safeTotal
+    lastMs = safeTotal
+    lastDispatchMs = safeDispatch
+    if (safeTotal < minMs) minMs = safeTotal
+    if (safeTotal > maxMs) maxMs = safeTotal
+    return snapshot(
+      warmSlotsReady = warmSlotsReady,
+      idlePoolSize = idlePoolSize,
+      framesPerBurst = framesPerBurst,
+      nativeSampleRateHz = nativeSampleRateHz
+    )
+  }
+
+  fun reset(
+    warmSlotsReady: Int,
+    idlePoolSize: Int,
+    framesPerBurst: Int,
+    nativeSampleRateHz: Int
+  ): TapLatencyMetrics {
+    sampleCount = 0
+    sumMs = 0.0
+    minMs = Double.MAX_VALUE
+    maxMs = 0.0
+    lastMs = 0.0
+    lastDispatchMs = 0.0
+    return snapshot(warmSlotsReady, idlePoolSize, framesPerBurst, nativeSampleRateHz)
+  }
+
+  fun snapshot(
+    warmSlotsReady: Int,
+    idlePoolSize: Int,
+    framesPerBurst: Int,
+    nativeSampleRateHz: Int
+  ): TapLatencyMetrics {
+    val avg = if (sampleCount > 0) sumMs / sampleCount else 0.0
+    val safeMin = if (sampleCount > 0) minMs else 0.0
+    return TapLatencyMetrics(
+      lastTapToSoundMs = lastMs,
+      avgTapToSoundMs = avg,
+      minTapToSoundMs = safeMin,
+      maxTapToSoundMs = maxMs,
+      lastDispatchMs = lastDispatchMs,
+      sampleCount = sampleCount,
+      warmSlotsReady = warmSlotsReady,
+      idlePoolSize = idlePoolSize,
+      framesPerBurst = framesPerBurst,
+      nativeSampleRateHz = nativeSampleRateHz
+    )
+  }
+}
+
 class SoundPadAudioEngine(
   private val context: Context,
   private val ramCache: InMemoryAudioCache
@@ -108,6 +248,9 @@ class SoundPadAudioEngine(
 
   companion object {
     const val MAX_PLAYER_POOL = 16
+    private const val INITIAL_IDLE_PREWARM = 4
+    private const val MAX_WARMED_PADS = 6
+    private const val WARM_SHORT_CLIP_MAX_MS = 15_000L
     private const val ENVELOPE_TICK_MS = 16L // ~60fps smooth fade envelopes when fades are active
     private const val UI_PROGRESS_PUBLISH_MS = 33L // ~30fps UI progress updates ONLY for currently playing pads
   }
@@ -129,8 +272,29 @@ class SoundPadAudioEngine(
     mixerBus.attachMasterRecorder(recorder)
   }
 
+  private class PooledPlayerSlot @OptIn(UnstableApi::class) constructor(
+    val slotTag: String,
+    val player: ExoPlayer,
+    val eqProcessor: FiveBandEqAudioProcessor,
+    val fxProcessor: ReverbEchoAudioProcessor,
+    val panProcessor: StereoPanAudioProcessor,
+    var tapProcessor: MasterBusSlotTapAudioProcessor?,
+    var bufferSizeMs: Int,
+    var currentListener: Player.Listener? = null
+  )
+
+  private data class WarmedPadSlot(
+    val pad: SoundPad,
+    val pooled: PooledPlayerSlot,
+    val uriKey: String,
+    val clipStartMs: Long,
+    val clipEndMs: Long
+  )
+
   private data class PlayerSlot @OptIn(UnstableApi::class) constructor(
+    val voiceId: String,
     var pad: SoundPad,
+    val pooled: PooledPlayerSlot,
     val player: ExoPlayer,
     val eqProcessor: FiveBandEqAudioProcessor,
     val fxProcessor: ReverbEchoAudioProcessor,
@@ -152,14 +316,33 @@ class SoundPadAudioEngine(
       get() = fadeOutStartElapsedMs != null
   }
 
-  private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+  private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+  private val mainHandler = Handler(Looper.getMainLooper())
+  private val audioThread = HandlerThread("SoundPadAudioDispatcher", Process.THREAD_PRIORITY_AUDIO).apply {
+    start()
+  }
+  private val audioHandler = Handler(audioThread.looper)
+  private val commandQueue = ConcurrentLinkedQueue<() -> Unit>()
+  private val drainScheduled = AtomicBoolean(false)
+  private val releasedFlag = AtomicBoolean(false)
+
+  // Keyed by unique voiceId ("<padId>#<seq>") so stacked polyphonic voices never collide
   private val activeSlots = LinkedHashMap<String, PlayerSlot>()
-  private val pendingReverseJobs = HashMap<String, Job>()
-  private var tickerJob: Job? = null
+  private val idleSlotPool = ArrayDeque<PooledPlayerSlot>()
+  private val warmedPadSlots = LinkedHashMap<String, WarmedPadSlot>(8, 0.75f, true)
+  private val pendingReverseJobs = HashMap<String, MutableList<Job>>()
+  private var tickerScheduled = false
+  private var slotSequenceCounter = 0L
+  private var voiceSequenceCounter = 0L
 
   private val _playbackStates = MutableStateFlow<Map<String, PadPlaybackState>>(emptyMap())
   val playbackStates: StateFlow<Map<String, PadPlaybackState>> = _playbackStates.asStateFlow()
 
+  private val latencyTracker = LatencyMetricsTracker()
+  private val _tapLatencyMetrics = MutableStateFlow(TapLatencyMetrics())
+  val tapLatencyMetrics: StateFlow<TapLatencyMetrics> = _tapLatencyMetrics.asStateFlow()
+
+  @Volatile
   private var currentSettings: GlobalSettings = GlobalSettings()
   private var currentPlaylist: List<SoundPad> = emptyList()
   private var previewPlayer: ExoPlayer? = null
@@ -189,6 +372,58 @@ class SoundPadAudioEngine(
   val latencyTestReport: StateFlow<LatencyTestReport?> = _latencyTestReport.asStateFlow()
 
   private var latencyTestPlayer: ExoPlayer? = null
+  private var latencyTestTimeoutRunnable: Runnable? = null
+
+  private val drainRunnable = object : Runnable {
+    override fun run() {
+      drainScheduled.set(false)
+      while (!releasedFlag.get()) {
+        val task = commandQueue.poll() ?: break
+        runCatching { task() }
+      }
+      if (!releasedFlag.get() && !commandQueue.isEmpty() && drainScheduled.compareAndSet(false, true)) {
+        audioHandler.post(this)
+      }
+    }
+  }
+
+  private val tickerRunnable = object : Runnable {
+    override fun run() {
+      tickerScheduled = false
+      if (releasedFlag.get()) return
+      if (activeSlots.isEmpty()) {
+        publishPlaybackStates()
+        return
+      }
+      processEnvelopesAndPublish()
+      if (activeSlots.isNotEmpty()) {
+        val interval = if (hasActiveEnvelopeFade()) ENVELOPE_TICK_MS else UI_PROGRESS_PUBLISH_MS
+        tickerScheduled = true
+        audioHandler.postDelayed(this, interval)
+      } else {
+        publishPlaybackStates()
+      }
+    }
+  }
+
+  private fun enqueueCommand(action: () -> Unit) {
+    if (releasedFlag.get()) return
+    commandQueue.offer(action)
+    if (drainScheduled.compareAndSet(false, true)) {
+      audioHandler.post(drainRunnable)
+    }
+  }
+
+  internal fun flushDispatcherForTest(timeoutMs: Long = 1500L) {
+    if (releasedFlag.get()) return
+    if (Looper.myLooper() == audioThread.looper) {
+      drainRunnable.run()
+      return
+    }
+    val latch = CountDownLatch(1)
+    enqueueCommand { latch.countDown() }
+    latch.await(timeoutMs, TimeUnit.MILLISECONDS)
+  }
 
   @OptIn(UnstableApi::class)
   private fun createLowLatencyLoadControl(bufferMs: Int = currentSettings.audioBufferSizeMs): DefaultLoadControl {
@@ -213,8 +448,33 @@ class SoundPadAudioEngine(
 
   init {
     SoundPadPlaybackService.onStopAllRequested = {
-      scope.launch { stopAll() }
+      stopAll()
     }
+    enqueueCommand {
+      mixerBus.refreshHardwareAudioSpec()
+      publishLatencySnapshotLocked()
+      preWarmIdlePoolSlotsLocked(INITIAL_IDLE_PREWARM)
+    }
+  }
+
+  fun resetLatencyMetrics() {
+    enqueueCommand {
+      _tapLatencyMetrics.value = latencyTracker.reset(
+        warmSlotsReady = warmedPadSlots.size,
+        idlePoolSize = idleSlotPool.size,
+        framesPerBurst = mixerBus.framesPerBurst,
+        nativeSampleRateHz = mixerBus.nativeSampleRateHz
+      )
+    }
+  }
+
+  private fun publishLatencySnapshotLocked() {
+    _tapLatencyMetrics.value = latencyTracker.snapshot(
+      warmSlotsReady = warmedPadSlots.size,
+      idlePoolSize = idleSlotPool.size,
+      framesPerBurst = mixerBus.framesPerBurst,
+      nativeSampleRateHz = mixerBus.nativeSampleRateHz
+    )
   }
 
   @OptIn(UnstableApi::class)
@@ -226,41 +486,59 @@ class SoundPadAudioEngine(
     }
     limiterProcessor.setEnabled(settings.masterLimiterEnabled)
     mixerBus.setLimiterEnabled(settings.masterLimiterEnabled)
-    scope.launch {
+    enqueueCommand {
       if (bufferChanged) {
-        // Keep playing pads uninterrupted; active slots using older buffer trigger a gentle rebuild notice
         _hasPendingBufferRebuild.value = activeSlots.isNotEmpty()
+        rebuildIdleAndWarmedPoolForBufferChangeLocked()
       }
       if (settings.masterLimiterEnabled) {
-        if (activeSlots.isNotEmpty()) {
-          mixerBus.ensureStarted(settings.audioBufferSizeMs)
-        }
+        mixerBus.ensureStarted(settings.audioBufferSizeMs)
       } else {
         mixerBus.stop()
       }
       activeSlots.values.forEach { slot ->
         applySlotDsp(slot.eqProcessor, slot.fxProcessor, slot.panProcessor, slot.pad, settings)
       }
+      warmedPadSlots.values.forEach { warmed ->
+        applySlotDsp(
+          warmed.pooled.eqProcessor,
+          warmed.pooled.fxProcessor,
+          warmed.pooled.panProcessor,
+          warmed.pad,
+          settings
+        )
+      }
       activeCuePad?.let { cuePad ->
         cuePlayer?.volume = AudioMixMath.computeCueGain(cuePad.settings.volume, settings.cueVolume)
       }
       refreshAllActiveSlotVolumes()
+      publishLatencySnapshotLocked()
     }
   }
 
   @OptIn(UnstableApi::class)
   fun updatePlaylist(pads: List<SoundPad>) {
     currentPlaylist = pads
-    scope.launch {
-      pads.forEach { pad ->
-        activeSlots[pad.id]?.let { slot ->
-          slot.pad = pad
-          applySlotDsp(slot.eqProcessor, slot.fxProcessor, slot.panProcessor, pad, currentSettings)
-          applyPadParameters(slot.player, pad, slot.currentEnvelopeGain)
-        }
+    enqueueCommand {
+      val padMap = pads.associateBy { it.id }
+      activeSlots.values.forEach { slot ->
+        val updatedPad = padMap[slot.pad.id] ?: return@forEach
+        slot.pad = updatedPad
+        applySlotDsp(slot.eqProcessor, slot.fxProcessor, slot.panProcessor, updatedPad, currentSettings)
+        applyPadParameters(slot.player, updatedPad, slot.currentEnvelopeGain, slot.tapProcessor)
       }
       refreshAllActiveSlotVolumes()
+      preWarmPlaylistCandidatesLocked(pads)
+      publishLatencySnapshotLocked()
     }
+  }
+
+  fun setRetriggerMode(mode: RetriggerMode) {
+    currentSettings = currentSettings.copy(retriggerMode = mode)
+  }
+
+  fun setMaxVoices(maxVoices: Int) {
+    currentSettings = currentSettings.copy(maxVoices = maxVoices.coerceIn(1, MAX_PLAYER_POOL))
   }
 
   fun setPlayMode(mode: PlayMode) {
@@ -269,7 +547,7 @@ class SoundPadAudioEngine(
 
   fun setMasterVolume(volume: Float) {
     currentSettings = currentSettings.copy(masterVolume = volume.coerceIn(0f, 1f))
-    scope.launch {
+    enqueueCommand {
       refreshAllActiveSlotVolumes()
     }
   }
@@ -277,7 +555,7 @@ class SoundPadAudioEngine(
   fun setCueVolume(volume: Float) {
     val clamped = volume.coerceIn(0f, 1f)
     currentSettings = currentSettings.copy(cueVolume = clamped)
-    scope.launch {
+    enqueueCommand {
       activeCuePad?.let { cuePad ->
         cuePlayer?.volume = AudioMixMath.computeCueGain(cuePad.settings.volume, clamped)
       }
@@ -289,8 +567,10 @@ class SoundPadAudioEngine(
     if (clamped == appliedBufferSizeMs && currentSettings.audioBufferSizeMs == clamped) return
     currentSettings = currentSettings.copy(audioBufferSizeMs = clamped)
     appliedBufferSizeMs = clamped
-    scope.launch {
+    enqueueCommand {
       _hasPendingBufferRebuild.value = activeSlots.isNotEmpty()
+      rebuildIdleAndWarmedPoolForBufferChangeLocked()
+      publishLatencySnapshotLocked()
     }
   }
 
@@ -298,7 +578,7 @@ class SoundPadAudioEngine(
   fun setMasterPan(pan: Float) {
     val clamped = pan.coerceIn(-1f, 1f)
     currentSettings = currentSettings.copy(masterPan = clamped)
-    scope.launch {
+    enqueueCommand {
       activeSlots.values.forEach { slot ->
         slot.panProcessor.setPan(StereoPanMath.combinePan(clamped, slot.pad.settings.pan))
       }
@@ -311,7 +591,7 @@ class SoundPadAudioEngine(
       masterEqEnabled = enabled,
       masterEqBandsDb = bandsDb
     )
-    scope.launch {
+    enqueueCommand {
       val fxActive = currentSettings.audioEffectsEnabled
       activeSlots.values.forEach { slot ->
         slot.eqProcessor.setCombinedEq(
@@ -326,7 +606,7 @@ class SoundPadAudioEngine(
 
   fun setVoiceDuckingActive(active: Boolean) {
     isVoiceDuckingActive = active
-    scope.launch {
+    enqueueCommand {
       refreshAllActiveSlotVolumes()
     }
   }
@@ -334,12 +614,18 @@ class SoundPadAudioEngine(
   @OptIn(UnstableApi::class)
   fun setPreferredOutputDeviceId(deviceId: Int?) {
     preferredOutputDeviceId = deviceId
-    scope.launch {
+    enqueueCommand {
       val info = AudioOutputRouter.findOutputDeviceById(context, deviceId)
       cachedMainOutputDevice = info
       mixerBus.setPreferredOutputDevice(info)
       activeSlots.values.forEach { slot ->
         runCatching { slot.player.setPreferredAudioDevice(info) }
+      }
+      warmedPadSlots.values.forEach { warmed ->
+        runCatching { warmed.pooled.player.setPreferredAudioDevice(info) }
+      }
+      idleSlotPool.forEach { pooled ->
+        runCatching { pooled.player.setPreferredAudioDevice(info) }
       }
     }
   }
@@ -347,7 +633,7 @@ class SoundPadAudioEngine(
   @OptIn(UnstableApi::class)
   fun setCueOutputDeviceId(deviceId: Int?) {
     cueOutputDeviceId = deviceId
-    scope.launch {
+    enqueueCommand {
       val info = AudioOutputRouter.findOutputDeviceById(context, deviceId)
       cachedCueOutputDevice = info
       runCatching { cuePlayer?.setPreferredAudioDevice(info) }
@@ -362,77 +648,83 @@ class SoundPadAudioEngine(
       _isRunningLatencyTest.value = true
       val configuredMs = currentSettings.audioBufferSizeMs.coerceIn(20, 500)
       try {
-        releaseLatencyTestPlayer()
         val wavFile = withContext(Dispatchers.IO) { ensureLatencyTestPingWav() }
-        val startElapsed = SystemClock.elapsedRealtime()
-        val player = buildExoPlayerWithProcessors(
-          eqProcessor = FiveBandEqAudioProcessor(),
-          fxProcessor = ReverbEchoAudioProcessor(),
-          panProcessor = StereoPanAudioProcessor(),
-          includeAudioEffects = false,
-          handleAudioFocus = false
-        )
-        cachedMainOutputDevice?.let { info ->
-          runCatching { player.setPreferredAudioDevice(info) }
-        }
-        latencyTestPlayer = player
-        var recordedLatency = false
-        player.addListener(object : Player.Listener {
-          override fun onPlaybackStateChanged(playbackState: Int) {
-            if (!recordedLatency && playbackState == Player.STATE_READY) {
-              recordedLatency = true
-              val readyElapsed = (SystemClock.elapsedRealtime() - startElapsed).coerceAtLeast(1L)
-              _latencyTestReport.value = LatencyTestReport(
-                configuredBufferMs = configuredMs,
-                measuredReadyMs = readyElapsed
-              )
-            } else if (playbackState == Player.STATE_ENDED) {
+        enqueueCommand {
+          releaseLatencyTestPlayer()
+          val startElapsed = SystemClock.elapsedRealtime()
+          val player = buildExoPlayerWithProcessors(
+            eqProcessor = FiveBandEqAudioProcessor(),
+            fxProcessor = ReverbEchoAudioProcessor(),
+            panProcessor = StereoPanAudioProcessor(),
+            includeAudioEffects = false,
+            handleAudioFocus = false
+          )
+          cachedMainOutputDevice?.let { info ->
+            runCatching { player.setPreferredAudioDevice(info) }
+          }
+          latencyTestPlayer = player
+          var recordedLatency = false
+          player.addListener(object : Player.Listener {
+            override fun onPlaybackStateChanged(playbackState: Int) {
+              if (!recordedLatency && playbackState == Player.STATE_READY) {
+                recordedLatency = true
+                val readyElapsed = (SystemClock.elapsedRealtime() - startElapsed).coerceAtLeast(1L)
+                _latencyTestReport.value = LatencyTestReport(
+                  configuredBufferMs = configuredMs,
+                  measuredReadyMs = readyElapsed
+                )
+              } else if (playbackState == Player.STATE_ENDED) {
+                releaseLatencyTestPlayer()
+                _isRunningLatencyTest.value = false
+              }
+            }
+
+            override fun onPlayerError(error: PlaybackException) {
+              if (!recordedLatency) {
+                recordedLatency = true
+                _latencyTestReport.value = LatencyTestReport(
+                  configuredBufferMs = configuredMs,
+                  measuredReadyMs = (SystemClock.elapsedRealtime() - startElapsed).coerceAtLeast(1L)
+                )
+              }
+              releaseLatencyTestPlayer()
+              _isRunningLatencyTest.value = false
+            }
+          })
+          player.volume = (currentSettings.masterVolume * 0.45f).coerceIn(0.05f, 0.75f)
+          player.setMediaItem(MediaItem.fromUri(Uri.fromFile(wavFile)))
+          player.prepare()
+          player.play()
+
+          val timeoutRunnable = Runnable {
+            if (_isRunningLatencyTest.value) {
+              if (!recordedLatency) {
+                _latencyTestReport.value = LatencyTestReport(
+                  configuredBufferMs = configuredMs,
+                  measuredReadyMs = (SystemClock.elapsedRealtime() - startElapsed).coerceAtLeast(1L)
+                )
+              }
               releaseLatencyTestPlayer()
               _isRunningLatencyTest.value = false
             }
           }
-
-          override fun onPlayerError(error: PlaybackException) {
-            if (!recordedLatency) {
-              recordedLatency = true
-              _latencyTestReport.value = LatencyTestReport(
-                configuredBufferMs = configuredMs,
-                measuredReadyMs = (SystemClock.elapsedRealtime() - startElapsed).coerceAtLeast(1L)
-              )
-            }
-            releaseLatencyTestPlayer()
-            _isRunningLatencyTest.value = false
-          }
-        })
-        player.volume = (currentSettings.masterVolume * 0.45f).coerceIn(0.05f, 0.75f)
-        player.setMediaItem(MediaItem.fromUri(Uri.fromFile(wavFile)))
-        player.prepare()
-        player.play()
-
-        // Safety timeout so UI never stays stuck in testing state
-        delay(600L)
-        if (_isRunningLatencyTest.value) {
-          if (!recordedLatency) {
-            _latencyTestReport.value = LatencyTestReport(
-              configuredBufferMs = configuredMs,
-              measuredReadyMs = (SystemClock.elapsedRealtime() - startElapsed).coerceAtLeast(1L)
-            )
-          }
-          releaseLatencyTestPlayer()
-          _isRunningLatencyTest.value = false
+          latencyTestTimeoutRunnable = timeoutRunnable
+          audioHandler.postDelayed(timeoutRunnable, 600L)
         }
       } catch (_: Exception) {
         _latencyTestReport.value = LatencyTestReport(
           configuredBufferMs = configuredMs,
           measuredReadyMs = configuredMs.toLong()
         )
-        releaseLatencyTestPlayer()
+        enqueueCommand { releaseLatencyTestPlayer() }
         _isRunningLatencyTest.value = false
       }
     }
   }
 
   private fun releaseLatencyTestPlayer() {
+    latencyTestTimeoutRunnable?.let { audioHandler.removeCallbacks(it) }
+    latencyTestTimeoutRunnable = null
     latencyTestPlayer?.let { p ->
       runCatching { p.stop() }
       runCatching { p.release() }
@@ -487,18 +779,25 @@ class SoundPadAudioEngine(
 
   @OptIn(UnstableApi::class)
   fun updateActivePadParameters(pad: SoundPad) {
-    scope.launch {
-      val slot = activeSlots[pad.id] ?: return@launch
-      slot.pad = pad
-      applySlotDsp(slot.eqProcessor, slot.fxProcessor, slot.panProcessor, pad, currentSettings)
-      applyPadParameters(slot.player, pad, slot.currentEnvelopeGain)
-      refreshAllActiveSlotVolumes()
+    enqueueCommand {
+      var updatedAny = false
+      activeSlots.values.forEach { slot ->
+        if (slot.pad.id == pad.id) {
+          slot.pad = pad
+          applySlotDsp(slot.eqProcessor, slot.fxProcessor, slot.panProcessor, pad, currentSettings)
+          applyPadParameters(slot.player, pad, slot.currentEnvelopeGain, slot.tapProcessor)
+          updatedAny = true
+        }
+      }
+      if (updatedAny) {
+        refreshAllActiveSlotVolumes()
+      }
     }
   }
 
   fun setActivePadsSpeed(speed: Float) {
     val clampedSpeed = speed.coerceIn(0.5f, 2.0f)
-    scope.launch {
+    enqueueCommand {
       activeSlots.values.forEach { slot ->
         val updatedSettings = slot.pad.settings.copy(speed = clampedSpeed)
         slot.pad = slot.pad.copy(settings = updatedSettings)
@@ -510,7 +809,7 @@ class SoundPadAudioEngine(
 
   fun setActivePadsPitch(pitch: Float) {
     val clampedPitch = pitch.coerceIn(0.5f, 2.0f)
-    scope.launch {
+    enqueueCommand {
       activeSlots.values.forEach { slot ->
         val updatedSettings = slot.pad.settings.copy(pitch = clampedPitch)
         slot.pad = slot.pad.copy(settings = updatedSettings)
@@ -520,67 +819,123 @@ class SoundPadAudioEngine(
     }
   }
 
-  fun triggerPad(pad: SoundPad) {
-    scope.launch {
-      val existingSlot = activeSlots[pad.id]
-      if (existingSlot != null) {
-        if (pad.settings.triggerMode == PadTriggerMode.ONE_SHOT) {
-          releaseSlot(pad.id)
-        } else if (existingSlot.isFadingOut) {
-          releaseSlot(pad.id)
-          syncStateAndService()
-          return@launch
-        } else {
-          val fadeOutMs = effectiveFadeOutMs(pad)
-          if (fadeOutMs > 0L) {
-            beginFadeOut(existingSlot, fadeOutMs, effectiveFadeCurve(pad))
-            syncStateAndService()
-          } else {
-            releaseSlot(pad.id)
-            syncStateAndService()
-          }
-          return@launch
-        }
-      }
+  private fun activeVoicesForPadLocked(padId: String): List<PlayerSlot> {
+    return activeSlots.values.filter { it.pad.id == padId }
+  }
 
-      val didCrossfade = preparePoolForNewPad(pad)
-      startSlot(pad, viaCrossfade = didCrossfade)
+  private fun nextVoiceIdLocked(padId: String): String {
+    voiceSequenceCounter++
+    return "${padId}#$voiceSequenceCounter"
+  }
+
+  private fun cancelPendingReverseJobsLocked(padId: String) {
+    pendingReverseJobs.remove(padId)?.forEach { it.cancel() }
+  }
+
+  fun triggerPad(pad: SoundPad, tapDownNanos: Long = SystemClock.elapsedRealtimeNanos()) {
+    enqueueCommand {
+      Trace.beginSection("engine_trigger")
+      try {
+        val dispatchNanos = SystemClock.elapsedRealtimeNanos()
+        val retriggerMode = RetriggerVoicePlanner.resolveEffectiveRetriggerMode(pad.settings, currentSettings)
+        val existingVoices = activeVoicesForPadLocked(pad.id)
+
+        if (existingVoices.isNotEmpty()) {
+          when (pad.settings.triggerMode) {
+            PadTriggerMode.ONE_SHOT, PadTriggerMode.HOLD -> {
+              if (retriggerMode == RetriggerMode.RESTART) {
+                releaseAllVoicesForPadLocked(pad.id, rearmLast = false)
+              }
+            }
+            PadTriggerMode.TOGGLE, PadTriggerMode.LOOP -> {
+              if (retriggerMode == RetriggerMode.RESTART) {
+                if (existingVoices.all { it.isFadingOut }) {
+                  releaseAllVoicesForPadLocked(pad.id, rearmLast = true)
+                  syncStateAndService()
+                } else {
+                  val fadeOutMs = effectiveFadeOutMs(pad)
+                  if (fadeOutMs > 0L) {
+                    existingVoices.filter { !it.isFadingOut }.forEach { voice ->
+                      beginFadeOut(voice, fadeOutMs, effectiveFadeCurve(pad))
+                    }
+                    syncStateAndService()
+                  } else {
+                    releaseAllVoicesForPadLocked(pad.id, rearmLast = true)
+                    syncStateAndService()
+                  }
+                }
+                return@enqueueCommand
+              }
+              // RetriggerMode.LAYER -> stack a new voice on top (up to maxVoices with stealing)
+            }
+          }
+        }
+
+        val didCrossfade = preparePoolForNewPad(pad)
+        startSlot(
+          pad = pad,
+          viaCrossfade = didCrossfade,
+          tapDownNanos = tapDownNanos,
+          dispatchNanos = dispatchNanos
+        )
+      } finally {
+        Trace.endSection()
+      }
     }
   }
 
-  fun triggerHoldStart(pad: SoundPad) {
-    scope.launch {
-      if (activeSlots.containsKey(pad.id)) {
-        releaseSlot(pad.id)
+  fun triggerHoldStart(pad: SoundPad, tapDownNanos: Long = SystemClock.elapsedRealtimeNanos()) {
+    enqueueCommand {
+      Trace.beginSection("engine_trigger")
+      try {
+        val dispatchNanos = SystemClock.elapsedRealtimeNanos()
+        val retriggerMode = RetriggerVoicePlanner.resolveEffectiveRetriggerMode(pad.settings, currentSettings)
+        if (retriggerMode == RetriggerMode.RESTART && activeVoicesForPadLocked(pad.id).isNotEmpty()) {
+          releaseAllVoicesForPadLocked(pad.id, rearmLast = false)
+        }
+        val didCrossfade = preparePoolForNewPad(pad)
+        startSlot(
+          pad = pad,
+          viaCrossfade = didCrossfade,
+          tapDownNanos = tapDownNanos,
+          dispatchNanos = dispatchNanos
+        )
+      } finally {
+        Trace.endSection()
       }
-      val didCrossfade = preparePoolForNewPad(pad)
-      startSlot(pad, viaCrossfade = didCrossfade)
     }
   }
 
   fun triggerHoldRelease(padId: String) {
-    scope.launch {
-      val slot = activeSlots[padId] ?: return@launch
-      val fadeOutMs = effectiveFadeOutMs(slot.pad)
-      if (fadeOutMs > 0L) {
-        beginFadeOut(slot, fadeOutMs, effectiveFadeCurve(slot.pad))
-        syncStateAndService()
-      } else {
-        releaseSlot(padId)
+    enqueueCommand {
+      val voices = activeVoicesForPadLocked(padId).filter { !it.isFadingOut }
+      if (voices.isEmpty()) return@enqueueCommand
+      var changed = false
+      for (slot in voices) {
+        val fadeOutMs = effectiveFadeOutMs(slot.pad)
+        if (fadeOutMs > 0L) {
+          beginFadeOut(slot, fadeOutMs, effectiveFadeCurve(slot.pad))
+          changed = true
+        } else {
+          releaseVoiceLocked(slot.voiceId, rearmIfEligible = slot == voices.last())
+          changed = true
+        }
+      }
+      if (changed) {
         syncStateAndService()
       }
     }
   }
 
   fun stopPad(padId: String) {
-    scope.launch {
-      releaseSlot(padId)
+    enqueueCommand {
+      releaseAllVoicesForPadLocked(padId, rearmLast = true)
       syncStateAndService()
     }
   }
 
   fun stopAll() {
-    scope.launch {
+    enqueueCommand {
       stopAllInternal()
       syncStateAndService()
     }
@@ -591,16 +946,16 @@ class SoundPadAudioEngine(
     crossfadePreviousPadId: String?,
     crossfadeDurationMs: Long
   ) {
-    scope.launch {
+    enqueueCommand {
       if (crossfadePreviousPadId != null && crossfadeDurationMs > 0L) {
-        activeSlots[crossfadePreviousPadId]?.let { prev ->
+        activeVoicesForPadLocked(crossfadePreviousPadId).forEach { prev ->
           if (!prev.isFadingOut) {
             beginFadeOut(prev, crossfadeDurationMs, currentSettings.crossfadeCurve)
           }
         }
       }
-      if (activeSlots.containsKey(pad.id)) {
-        releaseSlot(pad.id)
+      if (activeVoicesForPadLocked(pad.id).isNotEmpty()) {
+        releaseAllVoicesForPadLocked(pad.id, rearmLast = false)
       }
       startSlot(
         pad = pad,
@@ -611,16 +966,16 @@ class SoundPadAudioEngine(
   }
 
   fun pausePadForSequencer(padId: String) {
-    scope.launch {
-      activeSlots[padId]?.player?.pause()
+    enqueueCommand {
+      activeVoicesForPadLocked(padId).forEach { it.player.pause() }
     }
   }
 
   fun resumeOrStartPadForSequencer(pad: SoundPad) {
-    scope.launch {
-      val slot = activeSlots[pad.id]
-      if (slot != null) {
-        slot.player.play()
+    enqueueCommand {
+      val voices = activeVoicesForPadLocked(pad.id)
+      if (voices.isNotEmpty()) {
+        voices.forEach { it.player.play() }
       } else {
         startSlot(pad = pad, viaCrossfade = false, isSequencerSlot = true)
       }
@@ -640,17 +995,17 @@ class SoundPadAudioEngine(
         isLooping = loopOverride || pad.settings.isLooping
       )
     )
-    scope.launch {
-      if (activeSlots.containsKey(modified.id)) {
-        releaseSlot(modified.id)
+    enqueueCommand {
+      if (activeVoicesForPadLocked(modified.id).isNotEmpty()) {
+        releaseAllVoicesForPadLocked(modified.id, rearmLast = false)
       }
       startSlot(pad = modified, viaCrossfade = false)
     }
   }
 
   fun fadeOutAll(durationMs: Long = 1500L) {
-    scope.launch {
-      if (activeSlots.isEmpty()) return@launch
+    enqueueCommand {
+      if (activeSlots.isEmpty()) return@enqueueCommand
       val safeDuration = durationMs.coerceIn(250L, 6000L)
       activeSlots.values.forEach { slot ->
         if (!slot.isFadingOut) {
@@ -666,12 +1021,6 @@ class SoundPadAudioEngine(
   fun startCuePreview(pad: SoundPad) {
     scope.launch {
       try {
-        if (_cuePreviewPadId.value == pad.id && cuePlayer != null) {
-          stopCuePreviewInternal()
-          return@launch
-        }
-        stopCuePreviewInternal()
-
         val targetUri: Uri
         val clipStartMs: Long
         val clipEndMs: Long
@@ -697,52 +1046,60 @@ class SoundPadAudioEngine(
           clipEndMs = pad.settings.trimEndMs
         }
 
-        val eqProcessor = FiveBandEqAudioProcessor()
-        val fxProcessor = ReverbEchoAudioProcessor()
-        val panProcessor = StereoPanAudioProcessor()
-        applySlotDsp(eqProcessor, fxProcessor, panProcessor, pad, currentSettings)
+        enqueueCommand {
+          if (_cuePreviewPadId.value == pad.id && cuePlayer != null) {
+            stopCuePreviewInternal()
+            return@enqueueCommand
+          }
+          stopCuePreviewInternal()
 
-        val player = buildExoPlayerWithProcessors(
-          eqProcessor = eqProcessor,
-          fxProcessor = fxProcessor,
-          panProcessor = panProcessor,
-          includeAudioEffects = currentSettings.audioEffectsEnabled,
-          handleAudioFocus = false
-        )
+          val eqProcessor = FiveBandEqAudioProcessor()
+          val fxProcessor = ReverbEchoAudioProcessor()
+          val panProcessor = StereoPanAudioProcessor()
+          applySlotDsp(eqProcessor, fxProcessor, panProcessor, pad, currentSettings)
 
-        val cueDevice = cachedCueOutputDevice ?: if (cueOutputDeviceId != null) {
-          AudioOutputRouter.findOutputDeviceById(context, cueOutputDeviceId).also { cachedCueOutputDevice = it }
-        } else null
-        cueDevice?.let { info ->
-          runCatching { player.setPreferredAudioDevice(info) }
-        }
+          val player = buildExoPlayerWithProcessors(
+            eqProcessor = eqProcessor,
+            fxProcessor = fxProcessor,
+            panProcessor = panProcessor,
+            includeAudioEffects = currentSettings.audioEffectsEnabled,
+            handleAudioFocus = false
+          )
 
-        val mediaItem = buildClippedMediaItem(targetUri, clipStartMs, clipEndMs)
+          val cueDevice = cachedCueOutputDevice ?: if (cueOutputDeviceId != null) {
+            AudioOutputRouter.findOutputDeviceById(context, cueOutputDeviceId).also { cachedCueOutputDevice = it }
+          } else null
+          cueDevice?.let { info ->
+            runCatching { player.setPreferredAudioDevice(info) }
+          }
 
-        player.addListener(object : Player.Listener {
-          override fun onPlaybackStateChanged(playbackState: Int) {
-            if (playbackState == Player.STATE_ENDED) {
+          val mediaItem = buildClippedMediaItem(targetUri, clipStartMs, clipEndMs)
+
+          player.addListener(object : Player.Listener {
+            override fun onPlaybackStateChanged(playbackState: Int) {
+              if (playbackState == Player.STATE_ENDED) {
+                stopCuePreviewInternal()
+              }
+            }
+
+            override fun onPlayerError(error: PlaybackException) {
+              val (type, msg) = mapPlaybackException(pad, error)
+              onPlaybackError?.invoke(pad, type, msg, error.stackTraceToString().take(2000))
               stopCuePreviewInternal()
             }
-          }
-
-          override fun onPlayerError(error: PlaybackException) {
-            val (type, msg) = mapPlaybackException(pad, error)
-            onPlaybackError?.invoke(pad, type, msg, error.stackTraceToString().take(2000))
-            stopCuePreviewInternal()
-          }
-        })
-        player.playbackParameters = PlaybackParameters(
-          pad.settings.speed.coerceIn(0.5f, 2.0f),
-          pad.settings.pitch.coerceIn(0.5f, 2.0f)
-        )
-        player.volume = AudioMixMath.computeCueGain(pad.settings.volume, currentSettings.cueVolume)
-        player.setMediaItem(mediaItem)
-        player.prepare()
-        player.play()
-        cuePlayer = player
-        activeCuePad = pad
-        _cuePreviewPadId.value = pad.id
+          })
+          player.playbackParameters = PlaybackParameters(
+            pad.settings.speed.coerceIn(0.5f, 2.0f),
+            pad.settings.pitch.coerceIn(0.5f, 2.0f)
+          )
+          player.volume = AudioMixMath.computeCueGain(pad.settings.volume, currentSettings.cueVolume)
+          player.setMediaItem(mediaItem)
+          player.prepare()
+          player.play()
+          cuePlayer = player
+          activeCuePad = pad
+          _cuePreviewPadId.value = pad.id
+        }
       } catch (e: Exception) {
         onPlaybackError?.invoke(
           pad,
@@ -750,13 +1107,13 @@ class SoundPadAudioEngine(
           "Gagal memutar Cue Preview \"${pad.displayName}\": ${e.localizedMessage ?: e.javaClass.simpleName}",
           e.stackTraceToString().take(2000)
         )
-        stopCuePreviewInternal()
+        enqueueCommand { stopCuePreviewInternal() }
       }
     }
   }
 
   fun stopCuePreview() {
-    scope.launch { stopCuePreviewInternal() }
+    enqueueCommand { stopCuePreviewInternal() }
   }
 
   private fun stopCuePreviewInternal() {
@@ -771,11 +1128,12 @@ class SoundPadAudioEngine(
 
   @OptIn(UnstableApi::class)
   fun startEditorPreview(uriString: String, trimStartMs: Long, trimEndMs: Long) {
-    scope.launch {
+    enqueueCommand {
       try {
         stopEditorPreviewInternal()
         val mediaSourceFactory = DefaultMediaSourceFactory(ramCache.createDataSourceFactory())
         val player = ExoPlayer.Builder(context)
+          .setLooper(audioThread.looper)
           .setMediaSourceFactory(mediaSourceFactory)
           .setLoadControl(createLowLatencyLoadControl())
           .build()
@@ -821,8 +1179,10 @@ class SoundPadAudioEngine(
 
         previewTickerJob = scope.launch {
           while (isActive && previewPlayer != null) {
-            val pos = previewPlayer?.currentPosition?.coerceAtLeast(0L) ?: 0L
-            _previewPositionMs.value = start + pos
+            enqueueCommand {
+              val pos = previewPlayer?.currentPosition?.coerceAtLeast(0L) ?: return@enqueueCommand
+              _previewPositionMs.value = start + pos
+            }
             delay(32L)
           }
         }
@@ -833,7 +1193,7 @@ class SoundPadAudioEngine(
   }
 
   fun stopEditorPreview() {
-    scope.launch { stopEditorPreviewInternal() }
+    enqueueCommand { stopEditorPreviewInternal() }
   }
 
   private fun stopEditorPreviewInternal() {
@@ -849,15 +1209,219 @@ class SoundPadAudioEngine(
 
   @OptIn(UnstableApi::class)
   fun release() {
+    if (!releasedFlag.compareAndSet(false, true)) return
     SoundPadPlaybackService.onStopAllRequested = null
-    releaseLatencyTestPlayer()
-    stopCuePreviewInternal()
-    stopEditorPreviewInternal()
-    stopAllInternal()
-    mixerBus.release()
-    releaseWakeLock()
-    SoundPadPlaybackService.updateForegroundState(context, 0, null)
+    val shutdownLatch = CountDownLatch(1)
+    audioHandler.post {
+      audioHandler.removeCallbacks(tickerRunnable)
+      tickerScheduled = false
+      releaseLatencyTestPlayer()
+      stopCuePreviewInternal()
+      stopEditorPreviewInternal()
+      stopAllInternal()
+      releaseAllPooledSlotsLocked()
+      mixerBus.release()
+      releaseWakeLock()
+      shutdownLatch.countDown()
+    }
+    runCatching { shutdownLatch.await(500L, TimeUnit.MILLISECONDS) }
+    mainHandler.post {
+      SoundPadPlaybackService.updateForegroundState(context, 0, null)
+    }
+    runCatching { audioThread.quitSafely() }
     scope.cancel()
+  }
+
+  private fun totalPoolCountLocked(): Int {
+    return activeSlots.size + warmedPadSlots.size + idleSlotPool.size
+  }
+
+  @OptIn(UnstableApi::class)
+  private fun createPooledPlayerSlotLocked(): PooledPlayerSlot {
+    slotSequenceCounter++
+    val tag = "slot_$slotSequenceCounter"
+    val eqProcessor = FiveBandEqAudioProcessor()
+    val fxProcessor = ReverbEchoAudioProcessor()
+    val panProcessor = StereoPanAudioProcessor()
+    val tapProcessor = MasterBusSlotTapAudioProcessor(
+      slotId = tag,
+      mixerBus = mixerBus,
+      recorder = masterRecorder
+    )
+    val bufferMs = appliedBufferSizeMs.coerceIn(20, 500)
+    val player = buildExoPlayerWithProcessors(
+      eqProcessor = eqProcessor,
+      fxProcessor = fxProcessor,
+      panProcessor = panProcessor,
+      tapProcessor = tapProcessor,
+      includeAudioEffects = true,
+      handleAudioFocus = false,
+      bufferMs = bufferMs
+    )
+    cachedMainOutputDevice?.let { info ->
+      runCatching { player.setPreferredAudioDevice(info) }
+    }
+    return PooledPlayerSlot(
+      slotTag = tag,
+      player = player,
+      eqProcessor = eqProcessor,
+      fxProcessor = fxProcessor,
+      panProcessor = panProcessor,
+      tapProcessor = tapProcessor,
+      bufferSizeMs = bufferMs
+    )
+  }
+
+  private fun preWarmIdlePoolSlotsLocked(targetIdleCount: Int) {
+    while (idleSlotPool.size < targetIdleCount && totalPoolCountLocked() < MAX_PLAYER_POOL) {
+      idleSlotPool.addLast(createPooledPlayerSlotLocked())
+    }
+  }
+
+  private fun acquirePooledSlotLocked(): PooledPlayerSlot {
+    while (idleSlotPool.isNotEmpty()) {
+      val candidate = idleSlotPool.removeFirst()
+      if (candidate.bufferSizeMs == appliedBufferSizeMs) {
+        return candidate
+      }
+      discardPooledSlotLocked(candidate)
+    }
+    if (totalPoolCountLocked() >= MAX_PLAYER_POOL && warmedPadSlots.isNotEmpty()) {
+      val lruKey = warmedPadSlots.keys.firstOrNull()
+      if (lruKey != null) {
+        val evicted = warmedPadSlots.remove(lruKey)
+        if (evicted != null) {
+          evicted.pooled.currentListener?.let { l -> runCatching { evicted.pooled.player.removeListener(l) } }
+          evicted.pooled.currentListener = null
+          if (evicted.pooled.bufferSizeMs == appliedBufferSizeMs) {
+            runCatching {
+              evicted.pooled.player.stop()
+              evicted.pooled.player.clearMediaItems()
+            }
+            return evicted.pooled
+          } else {
+            discardPooledSlotLocked(evicted.pooled)
+          }
+        }
+      }
+    }
+    return createPooledPlayerSlotLocked()
+  }
+
+  private fun discardPooledSlotLocked(pooled: PooledPlayerSlot) {
+    pooled.tapProcessor?.setRouteViaMixerBus(false)
+    pooled.currentListener?.let { l -> runCatching { pooled.player.removeListener(l) } }
+    pooled.currentListener = null
+    runCatching { pooled.player.stop() }
+    runCatching { pooled.player.release() }
+  }
+
+  private fun rebuildIdleAndWarmedPoolForBufferChangeLocked() {
+    val iterator = idleSlotPool.iterator()
+    while (iterator.hasNext()) {
+      val slot = iterator.next()
+      if (slot.bufferSizeMs != appliedBufferSizeMs) {
+        iterator.remove()
+        discardPooledSlotLocked(slot)
+      }
+    }
+    val staleWarmed = warmedPadSlots.entries
+      .filter { it.value.pooled.bufferSizeMs != appliedBufferSizeMs }
+      .map { it.key }
+    staleWarmed.forEach { key ->
+      warmedPadSlots.remove(key)?.let { discardPooledSlotLocked(it.pooled) }
+    }
+    preWarmIdlePoolSlotsLocked(INITIAL_IDLE_PREWARM)
+  }
+
+  private fun releaseAllPooledSlotsLocked() {
+    while (idleSlotPool.isNotEmpty()) {
+      discardPooledSlotLocked(idleSlotPool.removeFirst())
+    }
+    warmedPadSlots.values.forEach { discardPooledSlotLocked(it.pooled) }
+    warmedPadSlots.clear()
+  }
+
+  private fun isPadWarmEligible(pad: SoundPad): Boolean {
+    if (pad.settings.isReversed || pad.errorType != null || pad.uriString.isBlank()) return false
+    return pad.isPreloadedInRam || pad.durationMs in 1L..WARM_SHORT_CLIP_MAX_MS
+  }
+
+  private fun preWarmPlaylistCandidatesLocked(pads: List<SoundPad>) {
+    if (pads.isEmpty()) return
+    val candidates = pads.asSequence()
+      .filter { pad ->
+        isPadWarmEligible(pad) &&
+          activeSlots.values.none { it.pad.id == pad.id } &&
+          !warmedPadSlots.containsKey(pad.id)
+      }
+      .take(MAX_WARMED_PADS)
+      .toList()
+    for (pad in candidates) {
+      if (warmedPadSlots.size >= MAX_WARMED_PADS) break
+      if (totalPoolCountLocked() >= MAX_PLAYER_POOL && idleSlotPool.isEmpty()) break
+      prepareWarmPadSlotLocked(pad)
+    }
+  }
+
+  @OptIn(UnstableApi::class)
+  private fun prepareWarmPadSlotLocked(pad: SoundPad) {
+    if (!isPadWarmEligible(pad)) return
+    if (activeSlots.values.any { it.pad.id == pad.id }) return
+    val existing = warmedPadSlots[pad.id]
+    val clipStart = pad.settings.trimStartMs.coerceAtLeast(0L)
+    val clipEnd = pad.settings.trimEndMs
+    if (existing != null &&
+      existing.uriKey == pad.uriString &&
+      existing.clipStartMs == clipStart &&
+      existing.clipEndMs == clipEnd &&
+      existing.pooled.bufferSizeMs == appliedBufferSizeMs
+    ) {
+      return
+    }
+    if (existing != null) {
+      warmedPadSlots.remove(pad.id)
+      returnOrDiscardPooledSlotLocked(existing.pooled)
+    }
+    if (warmedPadSlots.size >= MAX_WARMED_PADS) return
+    val pooled = acquirePooledSlotLocked()
+    applySlotDsp(pooled.eqProcessor, pooled.fxProcessor, pooled.panProcessor, pad, currentSettings)
+    val uri = Uri.parse(pad.uriString)
+    val mediaItem = buildClippedMediaItem(uri, clipStart, clipEnd)
+    runCatching {
+      pooled.player.playWhenReady = false
+      pooled.player.setMediaItem(mediaItem)
+      pooled.player.prepare()
+      warmedPadSlots[pad.id] = WarmedPadSlot(
+        pad = pad,
+        pooled = pooled,
+        uriKey = pad.uriString,
+        clipStartMs = clipStart,
+        clipEndMs = clipEnd
+      )
+    }.onFailure {
+      returnOrDiscardPooledSlotLocked(pooled)
+    }
+  }
+
+  private fun returnOrDiscardPooledSlotLocked(pooled: PooledPlayerSlot) {
+    pooled.tapProcessor?.setRouteViaMixerBus(false)
+    mixerBus.removeSlot(pooled.slotTag)
+    masterRecorder?.removeSlot(pooled.slotTag)
+    pooled.currentListener?.let { l -> runCatching { pooled.player.removeListener(l) } }
+    pooled.currentListener = null
+    if (pooled.bufferSizeMs == appliedBufferSizeMs && totalPoolCountLocked() < MAX_PLAYER_POOL) {
+      runCatching {
+        pooled.player.playWhenReady = false
+        pooled.player.stop()
+        pooled.player.clearMediaItems()
+        idleSlotPool.addLast(pooled)
+      }.onFailure {
+        discardPooledSlotLocked(pooled)
+      }
+    } else {
+      discardPooledSlotLocked(pooled)
+    }
   }
 
   private fun preparePoolForNewPad(incomingPad: SoundPad): Boolean {
@@ -865,13 +1429,12 @@ class SoundPadAudioEngine(
     var crossfadedAny = false
 
     if (currentSettings.playMode == PlayMode.SINGLE || currentSettings.playMode == PlayMode.CONTINUOUS) {
-      val keys = activeSlots.keys.toList()
-      for (id in keys) {
-        if (id == incomingPad.id) {
-          releaseSlot(id)
+      val snapshots = activeSlots.values.toList()
+      for (slot in snapshots) {
+        if (slot.pad.id == incomingPad.id) {
+          // Same-pad RESTART vs LAYER was already evaluated in triggerPad / triggerHoldStart
           continue
         }
-        val slot = activeSlots[id] ?: continue
         if (crossfadeEligibleIncoming && slot.pad.settings.crossfadeEnabled && !slot.isFadingOut) {
           beginFadeOut(slot, currentSettings.crossfadeDurationMs, currentSettings.crossfadeCurve)
           crossfadedAny = true
@@ -880,12 +1443,12 @@ class SoundPadAudioEngine(
           if (fadeOutMs > 0L) {
             beginFadeOut(slot, fadeOutMs, effectiveFadeCurve(slot.pad))
           } else {
-            releaseSlot(id)
+            releaseVoiceLocked(slot.voiceId, rearmIfEligible = true)
           }
         }
       }
     } else {
-      // MULTI Mode: Choke Group handling
+      // MULTI Mode: Choke Group handling across different pads in the same group
       val chokeGroup = incomingPad.settings.chokeGroup
       if (chokeGroup > 0) {
         val sameGroupSlots = activeSlots.values
@@ -896,18 +1459,32 @@ class SoundPadAudioEngine(
             beginFadeOut(slot, currentSettings.crossfadeDurationMs, currentSettings.crossfadeCurve)
             crossfadedAny = true
           } else {
-            releaseSlot(slot.pad.id)
+            releaseVoiceLocked(slot.voiceId, rearmIfEligible = true)
           }
         }
       }
     }
 
-    // Ensure pool stays under MAX_PLAYER_POOL (evict fading-out slots first, then oldest)
-    while (activeSlots.size >= MAX_PLAYER_POOL) {
-      val evictId = activeSlots.values.firstOrNull { it.isFadingOut }?.pad?.id
-        ?: activeSlots.keys.firstOrNull()
-        ?: break
-      releaseSlot(evictId)
+    // E.2 / E.3: Enforce per-pad and global maxVoices limits (stealing fading-out first, then oldest)
+    val perPadCap = RetriggerVoicePlanner.resolveEffectivePadVoiceCap(incomingPad.settings, currentSettings)
+    val globalCap = RetriggerVoicePlanner.resolveEffectiveMaxVoices(currentSettings)
+    val voiceSnapshots = activeSlots.values.map { slot ->
+      ActiveVoiceSnapshot(
+        voiceId = slot.voiceId,
+        padId = slot.pad.id,
+        chokeGroup = slot.pad.settings.chokeGroup,
+        isFadingOut = slot.isFadingOut,
+        crossfadeEnabled = slot.pad.settings.crossfadeEnabled
+      )
+    }
+    val evictions = RetriggerVoicePlanner.computeEvictionsForNewVoice(
+      voices = voiceSnapshots,
+      incomingPadId = incomingPad.id,
+      perPadCap = perPadCap,
+      globalCap = globalCap
+    )
+    for (evictVoiceId in evictions) {
+      releaseVoiceLocked(evictVoiceId, rearmIfEligible = false)
     }
 
     return crossfadedAny
@@ -974,7 +1551,8 @@ class SoundPadAudioEngine(
     panProcessor: StereoPanAudioProcessor,
     tapProcessor: MasterBusSlotTapAudioProcessor? = null,
     includeAudioEffects: Boolean = true,
-    handleAudioFocus: Boolean = false
+    handleAudioFocus: Boolean = false,
+    bufferMs: Int = appliedBufferSizeMs
   ): ExoPlayer {
     val mediaSourceFactory = DefaultMediaSourceFactory(ramCache.createDataSourceFactory())
     val audioAttributes = AudioAttributes.Builder()
@@ -1006,15 +1584,24 @@ class SoundPadAudioEngine(
       }
     }
     return ExoPlayer.Builder(context, renderersFactory)
+      .setLooper(audioThread.looper)
       .setMediaSourceFactory(mediaSourceFactory)
-      .setLoadControl(createLowLatencyLoadControl())
+      .setLoadControl(createLowLatencyLoadControl(bufferMs))
       .setAudioAttributes(audioAttributes, handleAudioFocus)
       .build()
   }
 
   @OptIn(UnstableApi::class)
-  private fun startSlot(pad: SoundPad, viaCrossfade: Boolean, isSequencerSlot: Boolean = false) {
-    pendingReverseJobs.remove(pad.id)?.cancel()
+  private fun startSlot(
+    pad: SoundPad,
+    viaCrossfade: Boolean,
+    isSequencerSlot: Boolean = false,
+    tapDownNanos: Long? = null,
+    dispatchNanos: Long? = null
+  ) {
+    if (RetriggerVoicePlanner.resolveEffectiveRetriggerMode(pad.settings, currentSettings) == RetriggerMode.RESTART) {
+      cancelPendingReverseJobsLocked(pad.id)
+    }
     if (!pad.settings.isReversed) {
       startSlotWithUri(
         pad = pad,
@@ -1022,7 +1609,9 @@ class SoundPadAudioEngine(
         playbackUri = Uri.parse(pad.uriString),
         clipStartMs = pad.settings.trimStartMs.coerceAtLeast(0L),
         clipEndMs = pad.settings.trimEndMs,
-        isSequencerSlot = isSequencerSlot
+        isSequencerSlot = isSequencerSlot,
+        tapDownNanos = tapDownNanos,
+        dispatchNanos = dispatchNanos
       )
       return
     }
@@ -1040,38 +1629,51 @@ class SoundPadAudioEngine(
         playbackUri = Uri.fromFile(cached),
         clipStartMs = 0L,
         clipEndMs = 0L,
-        isSequencerSlot = isSequencerSlot
+        isSequencerSlot = isSequencerSlot,
+        tapDownNanos = tapDownNanos,
+        dispatchNanos = dispatchNanos
       )
       return
     }
 
-    pendingReverseJobs[pad.id] = scope.launch {
+    lateinit var reverseJob: Job
+    reverseJob = scope.launch(Dispatchers.IO) {
       val result = ReverseAudioCacheManager.getOrBuildReversedWav(
         context = context,
         uriString = pad.uriString,
         trimStartMs = pad.settings.trimStartMs,
         trimEndMs = pad.settings.trimEndMs
       )
-      pendingReverseJobs.remove(pad.id)
-      result.onSuccess { reversedFile ->
-        startSlotWithUri(
-          pad = pad,
-          viaCrossfade = viaCrossfade,
-          playbackUri = Uri.fromFile(reversedFile),
-          clipStartMs = 0L,
-          clipEndMs = 0L,
-          isSequencerSlot = isSequencerSlot
-        )
-      }.onFailure { err ->
-        onPlaybackError?.invoke(
-          pad,
-          PadErrorType.PLAYBACK_ERROR,
-          "Gagal membalik audio \"${pad.displayName}\": ${err.localizedMessage ?: err.javaClass.simpleName}",
-          err.stackTraceToString().take(2000)
-        )
-        syncStateAndService()
+      enqueueCommand {
+        val list = pendingReverseJobs[pad.id]
+        list?.remove(reverseJob)
+        if (list != null && list.isEmpty()) {
+          pendingReverseJobs.remove(pad.id)
+        }
+        result.onSuccess { reversedFile ->
+          preparePoolForNewPad(pad)
+          startSlotWithUri(
+            pad = pad,
+            viaCrossfade = viaCrossfade,
+            playbackUri = Uri.fromFile(reversedFile),
+            clipStartMs = 0L,
+            clipEndMs = 0L,
+            isSequencerSlot = isSequencerSlot,
+            tapDownNanos = tapDownNanos,
+            dispatchNanos = dispatchNanos
+          )
+        }.onFailure { err ->
+          onPlaybackError?.invoke(
+            pad,
+            PadErrorType.PLAYBACK_ERROR,
+            "Gagal membalik audio \"${pad.displayName}\": ${err.localizedMessage ?: err.javaClass.simpleName}",
+            err.stackTraceToString().take(2000)
+          )
+          syncStateAndService()
+        }
       }
     }
+    pendingReverseJobs.getOrPut(pad.id) { mutableListOf() }.add(reverseJob)
   }
 
   @OptIn(UnstableApi::class)
@@ -1081,44 +1683,51 @@ class SoundPadAudioEngine(
     playbackUri: Uri,
     clipStartMs: Long,
     clipEndMs: Long,
-    isSequencerSlot: Boolean = false
+    isSequencerSlot: Boolean = false,
+    tapDownNanos: Long? = null,
+    dispatchNanos: Long? = null
   ) {
+    Trace.beginSection("player_start")
+    val voiceId = nextVoiceIdLocked(pad.id)
+    var acquiredPooled: PooledPlayerSlot? = null
     try {
-      val eqProcessor = FiveBandEqAudioProcessor()
-      val fxProcessor = ReverbEchoAudioProcessor()
-      val panProcessor = StereoPanAudioProcessor()
-
       val mainDevice = cachedMainOutputDevice ?: if (preferredOutputDeviceId != null) {
         AudioOutputRouter.findOutputDeviceById(context, preferredOutputDeviceId).also { cachedMainOutputDevice = it }
       } else null
       mixerBus.setPreferredOutputDevice(mainDevice)
 
-      if (currentSettings.masterLimiterEnabled) {
+      if (currentSettings.masterLimiterEnabled && !mixerBus.isActivelyHandlingOutput) {
         mixerBus.ensureStarted(currentSettings.audioBufferSizeMs)
       }
       val busActive = currentSettings.masterLimiterEnabled && mixerBus.isActivelyHandlingOutput
 
-      val tapProcessor = if (busActive || masterRecorder != null) {
-        MasterBusSlotTapAudioProcessor(
-          slotId = "${pad.id}_${SystemClock.elapsedRealtimeNanos()}",
-          mixerBus = mixerBus,
-          recorder = masterRecorder
-        ).apply {
-          setRouteViaMixerBus(busActive)
-        }
-      } else {
-        null
-      }
-      applySlotDsp(eqProcessor, fxProcessor, panProcessor, pad, currentSettings)
+      val uriKey = playbackUri.toString()
+      val warmedMatch = warmedPadSlots.remove(pad.id)
+      val reusedWarmed = warmedMatch != null &&
+        warmedMatch.uriKey == uriKey &&
+        warmedMatch.clipStartMs == clipStartMs &&
+        warmedMatch.clipEndMs == clipEndMs &&
+        warmedMatch.pooled.bufferSizeMs == appliedBufferSizeMs
 
-      val player = buildExoPlayerWithProcessors(
-        eqProcessor = eqProcessor,
-        fxProcessor = fxProcessor,
-        panProcessor = panProcessor,
-        tapProcessor = tapProcessor,
-        includeAudioEffects = currentSettings.audioEffectsEnabled,
-        handleAudioFocus = false
-      )
+      val pooled = if (reusedWarmed) {
+        warmedMatch!!.pooled
+      } else {
+        warmedMatch?.let { returnOrDiscardPooledSlotLocked(it.pooled) }
+        acquirePooledSlotLocked()
+      }
+      acquiredPooled = pooled
+
+      val player = pooled.player
+      val eqProcessor = pooled.eqProcessor
+      val fxProcessor = pooled.fxProcessor
+      val panProcessor = pooled.panProcessor
+      val tapProcessor = pooled.tapProcessor
+
+      pooled.currentListener?.let { oldListener ->
+        runCatching { player.removeListener(oldListener) }
+      }
+      tapProcessor?.setRouteViaMixerBus(busActive)
+      applySlotDsp(eqProcessor, fxProcessor, panProcessor, pad, currentSettings)
 
       mainDevice?.let { info ->
         runCatching { player.setPreferredAudioDevice(info) }
@@ -1130,6 +1739,7 @@ class SoundPadAudioEngine(
         effectiveFadeInMs(pad)
       }
       val fadeInCurve = if (viaCrossfade) currentSettings.crossfadeCurve else effectiveFadeCurve(pad)
+      // D.5: If fadeInMs == 0, apply full unity gain immediately with zero envelope attenuation
       val initialGain = if (fadeInMs > 0L) 0f else 1f
 
       applyPadParameters(player, pad, initialGain, tapProcessor)
@@ -1137,26 +1747,38 @@ class SoundPadAudioEngine(
       val listener = object : Player.Listener {
         override fun onPlaybackStateChanged(playbackState: Int) {
           if (playbackState == Player.STATE_ENDED) {
-            onPadEnded(pad)
+            onVoiceEnded(voiceId)
           }
         }
 
         override fun onPlayerError(error: PlaybackException) {
           val (type, msg) = mapPlaybackException(pad, error)
           onPlaybackError?.invoke(pad, type, msg, error.stackTraceToString().take(2000))
-          releaseSlot(pad.id)
+          releaseVoiceLocked(voiceId, rearmIfEligible = false)
           syncStateAndService()
         }
       }
-
+      pooled.currentListener = listener
       player.addListener(listener)
-      val mediaItem = buildClippedMediaItem(playbackUri, clipStartMs, clipEndMs)
-      player.setMediaItem(mediaItem)
-      player.prepare()
-      player.play()
 
-      activeSlots[pad.id] = PlayerSlot(
+      if (reusedWarmed && (player.playbackState == Player.STATE_READY || player.playbackState == Player.STATE_BUFFERING)) {
+        if (player.currentPosition != 0L) {
+          player.seekTo(0L)
+        }
+        player.play()
+      } else {
+        val mediaItem = buildClippedMediaItem(playbackUri, clipStartMs, clipEndMs)
+        player.setMediaItem(mediaItem)
+        player.prepare()
+        player.play()
+      }
+
+      val soundStartedNanos = SystemClock.elapsedRealtimeNanos()
+
+      activeSlots[voiceId] = PlayerSlot(
+        voiceId = voiceId,
         pad = pad,
+        pooled = pooled,
         player = player,
         eqProcessor = eqProcessor,
         fxProcessor = fxProcessor,
@@ -1170,15 +1792,50 @@ class SoundPadAudioEngine(
         isSequencerSlot = isSequencerSlot
       )
 
-      acquireWakeLock()
+      if (tapDownNanos != null) {
+        _tapLatencyMetrics.value = latencyTracker.record(
+          tapDownNanos = tapDownNanos,
+          dispatchNanos = dispatchNanos ?: soundStartedNanos,
+          soundStartedNanos = soundStartedNanos,
+          warmSlotsReady = warmedPadSlots.size,
+          idlePoolSize = idleSlotPool.size,
+          framesPerBurst = mixerBus.framesPerBurst,
+          nativeSampleRateHz = mixerBus.nativeSampleRateHz
+        )
+      } else {
+        publishLatencySnapshotLocked()
+      }
+
+      // B.3: Publish playback states immediately and defer Service/WakeLock binder IPC off the critical trigger path
+      publishPlaybackStates()
       ensureTicker()
-      syncStateAndService()
+      schedulePostPlaySystemSyncLocked()
     } catch (e: Exception) {
       val type = if (e is SecurityException) PadErrorType.MISSING_PERMISSION else PadErrorType.PLAYBACK_ERROR
       val msg = "Gagal memutar \"${pad.displayName}\": ${e.localizedMessage ?: e.javaClass.simpleName}"
       onPlaybackError?.invoke(pad, type, msg, e.stackTraceToString().take(2000))
-      releaseSlot(pad.id)
+      if (activeSlots.containsKey(voiceId)) {
+        releaseVoiceLocked(voiceId, rearmIfEligible = false)
+      } else {
+        acquiredPooled?.let { returnOrDiscardPooledSlotLocked(it) }
+      }
       syncStateAndService()
+    } finally {
+      Trace.endSection()
+    }
+  }
+
+  private fun schedulePostPlaySystemSyncLocked() {
+    val activeCount = activeSlots.size
+    val firstLabel = activeSlots.values.firstOrNull()?.pad?.displayName
+    mainHandler.post {
+      if (activeCount > 0) {
+        acquireWakeLock()
+        SoundPadPlaybackService.updateForegroundState(context, activeCount, firstLabel)
+      } else {
+        releaseWakeLock()
+        SoundPadPlaybackService.updateForegroundState(context, 0, null)
+      }
     }
   }
 
@@ -1202,7 +1859,7 @@ class SoundPadAudioEngine(
 
   private fun beginFadeOut(slot: PlayerSlot, durationMs: Long, curve: FadeCurve) {
     if (durationMs <= 0L) {
-      releaseSlot(slot.pad.id)
+      releaseVoiceLocked(slot.voiceId, rearmIfEligible = true)
       return
     }
     slot.fadeOutStartElapsedMs = SystemClock.elapsedRealtime()
@@ -1249,7 +1906,7 @@ class SoundPadAudioEngine(
     player: ExoPlayer,
     pad: SoundPad,
     envelopeGain: Float,
-    tapProcessor: MasterBusSlotTapAudioProcessor? = activeSlots[pad.id]?.tapProcessor
+    tapProcessor: MasterBusSlotTapAudioProcessor?
   ) {
     val activeCount = activeSlots.size.coerceAtLeast(1)
     val hasActiveDuckSource = activeSlots.values.any { it.pad.settings.isDuckingSource && !it.isFadingOut }
@@ -1296,15 +1953,22 @@ class SoundPadAudioEngine(
     }
   }
 
-  private fun onPadEnded(pad: SoundPad) {
-    val slot = activeSlots[pad.id]
+  private fun onVoiceEnded(voiceId: String) {
+    val slot = activeSlots[voiceId]
+    val padId = slot?.pad?.id
     val alreadyTriggeredNext = slot?.continuousTriggeredNext == true
     val isSeqSlot = slot?.isSequencerSlot == true
-    val shouldAdvance = currentSettings.playMode == PlayMode.CONTINUOUS && !alreadyTriggeredNext && !isSeqSlot
-    releaseSlot(pad.id)
+    val otherVoicesActiveForPad = padId != null && activeSlots.values.any {
+      it.pad.id == padId && it.voiceId != voiceId && !it.isFadingOut
+    }
+    val shouldAdvance = currentSettings.playMode == PlayMode.CONTINUOUS &&
+      !alreadyTriggeredNext &&
+      !isSeqSlot &&
+      !otherVoicesActiveForPad
+    releaseVoiceLocked(voiceId, rearmIfEligible = true)
 
-    if (shouldAdvance && currentPlaylist.isNotEmpty()) {
-      val currentIndex = currentPlaylist.indexOfFirst { it.id == pad.id }
+    if (shouldAdvance && padId != null && currentPlaylist.isNotEmpty()) {
+      val currentIndex = currentPlaylist.indexOfFirst { it.id == padId }
       if (currentIndex >= 0 && currentIndex + 1 < currentPlaylist.size) {
         val nextPad = currentPlaylist[currentIndex + 1]
         startSlot(nextPad, viaCrossfade = false)
@@ -1316,23 +1980,66 @@ class SoundPadAudioEngine(
 
   @OptIn(UnstableApi::class)
   private fun stopAllInternal() {
-    pendingReverseJobs.values.forEach { it.cancel() }
+    pendingReverseJobs.values.forEach { jobs -> jobs.forEach { it.cancel() } }
     pendingReverseJobs.clear()
-    val ids = activeSlots.keys.toList()
-    for (id in ids) {
-      releaseSlot(id)
+    val voiceIds = activeSlots.keys.toList()
+    for (voiceId in voiceIds) {
+      releaseVoiceLocked(voiceId, rearmIfEligible = true)
     }
     mixerBus.clearAllSlots()
   }
 
+  private fun releaseAllVoicesForPadLocked(padId: String, rearmLast: Boolean = true) {
+    cancelPendingReverseJobsLocked(padId)
+    val matchingVoiceIds = activeSlots.values
+      .filter { it.pad.id == padId }
+      .map { it.voiceId }
+    matchingVoiceIds.forEachIndexed { idx, voiceId ->
+      val isLast = idx == matchingVoiceIds.lastIndex
+      releaseVoiceLocked(voiceId, rearmIfEligible = rearmLast && isLast)
+    }
+  }
+
   @OptIn(UnstableApi::class)
-  private fun releaseSlot(padId: String) {
-    pendingReverseJobs.remove(padId)?.cancel()
-    val slot = activeSlots.remove(padId) ?: return
-    slot.tapProcessor?.setRouteViaMixerBus(false)
-    runCatching { slot.player.removeListener(slot.listener) }
-    runCatching { slot.player.stop() }
-    runCatching { slot.player.release() }
+  private fun releaseVoiceLocked(voiceId: String, rearmIfEligible: Boolean = true) {
+    val slot = activeSlots.remove(voiceId) ?: return
+    val padId = slot.pad.id
+    val pooled = slot.pooled
+    pooled.tapProcessor?.setRouteViaMixerBus(false)
+    mixerBus.removeSlot(pooled.slotTag)
+    masterRecorder?.removeSlot(pooled.slotTag)
+    pooled.currentListener?.let { l -> runCatching { slot.player.removeListener(l) } }
+    pooled.currentListener = null
+
+    val canRearm = rearmIfEligible &&
+      !slot.isSequencerSlot &&
+      pooled.bufferSizeMs == appliedBufferSizeMs &&
+      isPadWarmEligible(slot.pad) &&
+      warmedPadSlots.size < MAX_WARMED_PADS &&
+      !warmedPadSlots.containsKey(padId)
+
+    if (canRearm) {
+      val rearmed = runCatching {
+        slot.player.playWhenReady = false
+        slot.player.pause()
+        slot.player.seekTo(0L)
+        warmedPadSlots[padId] = WarmedPadSlot(
+          pad = slot.pad,
+          pooled = pooled,
+          uriKey = slot.pad.uriString,
+          clipStartMs = slot.pad.settings.trimStartMs.coerceAtLeast(0L),
+          clipEndMs = slot.pad.settings.trimEndMs
+        )
+        true
+      }.getOrDefault(false)
+      if (rearmed) {
+        publishLatencySnapshotLocked()
+        return
+      }
+    }
+
+    returnOrDiscardPooledSlotLocked(pooled)
+    publishLatencySnapshotLocked()
   }
 
   private fun hasActiveEnvelopeFade(): Boolean {
@@ -1347,15 +2054,10 @@ class SoundPadAudioEngine(
   }
 
   private fun ensureTicker() {
-    if (tickerJob?.isActive == true) return
-    tickerJob = scope.launch {
-      while (isActive && activeSlots.isNotEmpty()) {
-        processEnvelopesAndPublish()
-        val tickInterval = if (hasActiveEnvelopeFade()) ENVELOPE_TICK_MS else UI_PROGRESS_PUBLISH_MS
-        delay(tickInterval)
-      }
-      publishPlaybackStates()
-    }
+    if (tickerScheduled || releasedFlag.get()) return
+    val interval = if (hasActiveEnvelopeFade()) ENVELOPE_TICK_MS else UI_PROGRESS_PUBLISH_MS
+    tickerScheduled = true
+    audioHandler.postDelayed(tickerRunnable, interval)
   }
 
   private fun processEnvelopesAndPublish() {
@@ -1364,7 +2066,8 @@ class SoundPadAudioEngine(
     var nextContinuousPad: SoundPad? = null
     var nextContinuousViaCrossfade = false
 
-    for ((padId, slot) in activeSlots) {
+    for ((voiceId, slot) in activeSlots) {
+      val padId = slot.pad.id
       val fadeInGain = if (slot.fadeInDurationMs > 0L) {
         val t = ((now - slot.fadeInStartElapsedMs).toFloat() / slot.fadeInDurationMs.toFloat()).coerceIn(0f, 1f)
         FadeCurveMath.gainIn(slot.fadeInCurve, t)
@@ -1377,7 +2080,7 @@ class SoundPadAudioEngine(
       val remainingMs = if (duration > 0L) (duration - position).coerceAtLeast(0L) else Long.MAX_VALUE
       val isLooping = slot.pad.settings.isLooping || slot.pad.settings.triggerMode == PadTriggerMode.LOOP
 
-      // Proactive Continuous Crossfade near end of track
+      // Proactive Continuous Crossfade near end of track (when last remaining voice for this pad finishes)
       if (currentSettings.playMode == PlayMode.CONTINUOUS &&
         !slot.isFadingOut &&
         !slot.continuousTriggeredNext &&
@@ -1390,7 +2093,7 @@ class SoundPadAudioEngine(
         val currentIdx = currentPlaylist.indexOfFirst { it.id == padId }
         if (currentIdx >= 0 && currentIdx + 1 < currentPlaylist.size) {
           val candidateNext = currentPlaylist[currentIdx + 1]
-          if (candidateNext.settings.crossfadeEnabled && !activeSlots.containsKey(candidateNext.id)) {
+          if (candidateNext.settings.crossfadeEnabled && activeSlots.values.none { it.pad.id == candidateNext.id }) {
             slot.continuousTriggeredNext = true
             beginFadeOut(slot, currentSettings.crossfadeDurationMs, currentSettings.crossfadeCurve)
             nextContinuousPad = candidateNext
@@ -1403,7 +2106,7 @@ class SoundPadAudioEngine(
         val elapsed = (now - slot.fadeOutStartElapsedMs!!).toFloat()
         val t = (elapsed / slot.fadeOutDurationMs.coerceAtLeast(1L).toFloat()).coerceIn(0f, 1f)
         if (t >= 1f) {
-          toRelease.add(padId)
+          toRelease.add(voiceId)
           0f
         } else {
           slot.fadeOutStartGain * FadeCurveMath.gainOut(slot.fadeOutCurve, t)
@@ -1431,7 +2134,7 @@ class SoundPadAudioEngine(
     refreshAllActiveSlotVolumes()
 
     if (toRelease.isNotEmpty()) {
-      toRelease.forEach { releaseSlot(it) }
+      toRelease.forEach { releaseVoiceLocked(it, rearmIfEligible = true) }
       if (nextContinuousPad == null) {
         syncStateAndService()
       }
@@ -1449,18 +2152,12 @@ class SoundPadAudioEngine(
 
   private fun syncStateAndService() {
     publishPlaybackStates()
-    val count = activeSlots.size
-    if (count > 0) {
-      val firstLabel = activeSlots.values.firstOrNull()?.pad?.displayName
-      SoundPadPlaybackService.updateForegroundState(context, count, firstLabel)
-      acquireWakeLock()
-    } else {
-      tickerJob?.cancel()
-      tickerJob = null
+    if (activeSlots.isEmpty()) {
+      audioHandler.removeCallbacks(tickerRunnable)
+      tickerScheduled = false
       _hasPendingBufferRebuild.value = false
-      releaseWakeLock()
-      SoundPadPlaybackService.updateForegroundState(context, 0, null)
     }
+    schedulePostPlaySystemSyncLocked()
   }
 
   private fun publishPlaybackStates() {
@@ -1471,22 +2168,64 @@ class SoundPadAudioEngine(
       }
       return
     }
-    val nextMap = HashMap<String, PadPlaybackState>(activeSlots.size)
-    for ((padId, slot) in activeSlots) {
-      val duration = slot.player.duration.takeIf { it > 0L } ?: slot.pad.durationMs
-      val position = slot.player.currentPosition.coerceAtLeast(0L)
+    val grouped = LinkedHashMap<String, MutableList<PlayerSlot>>()
+    for (slot in activeSlots.values) {
+      grouped.getOrPut(slot.pad.id) { mutableListOf() }.add(slot)
+    }
+    val nextMap = HashMap<String, PadPlaybackState>(grouped.size)
+    for ((padId, voices) in grouped) {
+      val displayVoice = voices.lastOrNull { !it.isFadingOut } ?: voices.last()
+      val duration = displayVoice.player.duration.takeIf { it > 0L } ?: displayVoice.pad.durationMs
+      val position = displayVoice.player.currentPosition.coerceAtLeast(0L)
       val progress = if (duration > 0L) (position.toFloat() / duration.toFloat()).coerceIn(0f, 1f) else 0f
       nextMap[padId] = PadPlaybackState(
         padId = padId,
         isPlaying = true,
-        isFadingOut = slot.isFadingOut,
+        isFadingOut = voices.all { it.isFadingOut },
         positionMs = position,
         durationMs = duration,
-        progress = progress
+        progress = progress,
+        activeVoiceCount = voices.size
       )
     }
     _playbackStates.value = nextMap
   }
+
+  private fun <T> runOnAudioThreadForTest(timeoutMs: Long = 1500L, block: () -> T): T {
+    if (Looper.myLooper() == audioThread.looper || releasedFlag.get()) {
+      return block()
+    }
+    var result: T? = null
+    val latch = CountDownLatch(1)
+    enqueueCommand {
+      result = block()
+      latch.countDown()
+    }
+    latch.await(timeoutMs, TimeUnit.MILLISECONDS)
+    @Suppress("UNCHECKED_CAST")
+    return result as T
+  }
+
+  internal fun getTotalActiveVoiceCountForTest(): Int =
+    runOnAudioThreadForTest { activeSlots.size }
+
+  internal fun getActiveVoiceCountForPadForTest(padId: String): Int =
+    runOnAudioThreadForTest { activeSlots.values.count { it.pad.id == padId } }
+
+  internal fun getTotalAllocatedPoolCountForTest(): Int =
+    runOnAudioThreadForTest { totalPoolCountLocked() }
+
+  internal fun getActiveVoiceIdsForPadForTest(padId: String): List<String> =
+    runOnAudioThreadForTest { activeSlots.values.filter { it.pad.id == padId }.map { it.voiceId } }
+
+  internal fun getActiveVoiceSpeedsForPadForTest(padId: String): List<Float> =
+    runOnAudioThreadForTest { activeSlots.values.filter { it.pad.id == padId }.map { it.pad.settings.speed } }
+
+  internal fun getActiveVoicePitchesForPadForTest(padId: String): List<Float> =
+    runOnAudioThreadForTest { activeSlots.values.filter { it.pad.id == padId }.map { it.pad.settings.pitch } }
+
+  internal fun getActiveVoiceLoopsForPadForTest(padId: String): List<Int> =
+    runOnAudioThreadForTest { activeSlots.values.filter { it.pad.id == padId }.map { it.player.repeatMode } }
 
   private fun acquireWakeLock() {
     runCatching {

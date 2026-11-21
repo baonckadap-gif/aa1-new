@@ -157,6 +157,7 @@ import com.example.R
 import com.example.data.backup.BackupSyncStatus
 import com.example.data.backup.RestoreSelectionOptions
 import com.example.data.backup.SnapshotFileInfo
+import com.example.domain.model.AnimationMode
 import com.example.domain.model.AppErrorLog
 import com.example.domain.model.AppLanguage
 import com.example.domain.model.DefaultPadColorMode
@@ -182,7 +183,10 @@ import com.example.domain.model.SoundPad
 import com.example.domain.model.ThemeMode
 import android.content.Context
 import android.os.PowerManager
+import android.os.SystemClock
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -198,6 +202,7 @@ import com.example.ui.components.GridSettingsSheet
 import com.example.ui.components.HoldToUnlockControl
 import com.example.ui.components.LandscapeBankRail
 import com.example.ui.components.LandscapeMixerSidePanel
+import com.example.ui.components.LatencyDebugOverlay
 import com.example.ui.components.MasterRecordSheet
 import com.example.ui.components.MidiControllerSheet
 import com.example.ui.components.MiuiGuideDialog
@@ -252,13 +257,20 @@ fun SoundPadScreen(
   onPreloadToggle: (Boolean) -> Unit,
   onAudioEffectsToggle: (Boolean) -> Unit = {},
   onVisualEffectsToggle: (Boolean) -> Unit = {},
+  onAnimationModeChange: (AnimationMode) -> Unit = {},
+  onLatencyDebugOverlayToggle: (Boolean) -> Unit = {},
+  onResetLatencyMetrics: () -> Unit = {},
+  onRetriggerModeChange: (com.example.domain.model.RetriggerMode) -> Unit = {},
+  onMaxVoicesChange: (Int) -> Unit = {},
   onKeepScreenOnToggle: (Boolean) -> Unit,
   onToggleEditMode: () -> Unit,
   onPadTapped: (SoundPad) -> Unit,
+  onPadTappedWithTime: ((SoundPad, Long) -> Unit)? = null,
   onPadCustomizeClick: (SoundPad) -> Unit,
   onOpenTrackCustomizer: () -> Unit,
   onSelectEditingPad: (String) -> Unit,
   onPadHoldStart: (SoundPad) -> Unit,
+  onPadHoldStartWithTime: ((SoundPad, Long) -> Unit)? = null,
   onPadHoldRelease: (SoundPad) -> Unit,
   onSwapPads: (fromPadId: String, toPadId: String) -> Unit,
   onMovePadToSlot: (padId: String, targetBankIndex: Int, targetSlotIndex: Int) -> Unit = { _, _, _ -> },
@@ -444,6 +456,11 @@ fun SoundPadScreen(
       lifecycleOwner.lifecycle.removeObserver(obs)
     }
   }
+  val effectiveAnimationMode = if (isBatterySaver || !uiState.settings.visualEffectsEnabled) {
+    AnimationMode.OFF
+  } else {
+    uiState.settings.animationMode
+  }
   var showGridSheet by remember { mutableStateOf(false) }
   var showMiuiDialog by remember { mutableStateOf(false) }
   var showProfileSheet by remember { mutableStateOf(false) }
@@ -599,6 +616,7 @@ fun SoundPadScreen(
           isMasterRecording = uiState.masterRecordState.isRecording,
           masterRecordElapsedMs = uiState.masterRecordState.elapsedMs,
           hasPads = uiState.pads.isNotEmpty(),
+          animationMode = effectiveAnimationMode,
           onStopAll = onStopAll,
           onFadeOutAll = onFadeOutAll,
           onMasterVolumeChange = onMasterVolumeChanged,
@@ -1360,6 +1378,7 @@ fun SoundPadScreen(
             hapticIntensity = uiState.settings.hapticIntensity,
             swipePadVolumeEnabled = uiState.settings.swipePadVolumeEnabled,
             doubleTapToStopEnabled = uiState.settings.doubleTapToStopEnabled,
+            globalRetriggerMode = uiState.settings.retriggerMode,
             isMidiLearnMode = !isFocusMode && uiState.isMidiLearnMode,
             armedLearnPadId = uiState.armedLearnPadId,
             cuePreviewPadId = uiState.cuePreviewPadId,
@@ -1368,6 +1387,7 @@ fun SoundPadScreen(
             padGridSpacingDp = uiState.settings.padGridSpacingDp,
             reduceMotion = isBatterySaver || !uiState.settings.visualEffectsEnabled,
             visualEffectsEnabled = uiState.settings.visualEffectsEnabled,
+            animationMode = effectiveAnimationMode,
             globalCrossfadeEnabled = uiState.settings.globalCrossfadeEnabled,
             miniWaveformEnabled = uiState.settings.miniWaveformEnabled,
             defaultPadShape = uiState.settings.defaultPadShape,
@@ -1381,6 +1401,7 @@ fun SoundPadScreen(
               if (!uiState.settings.isLocked) onAddBank()
             },
             onPadTapped = onPadTapped,
+            onPadTappedWithTime = onPadTappedWithTime,
             onPadCustomizeClick = { pad ->
               if (!isFocusMode && !uiState.settings.isLocked) {
                 if (pad.errorMessage != null) {
@@ -1391,6 +1412,7 @@ fun SoundPadScreen(
               }
             },
             onPadHoldStart = onPadHoldStart,
+            onPadHoldStartWithTime = onPadHoldStartWithTime,
             onPadHoldRelease = onPadHoldRelease,
             onDoubleTapStop = onDoubleTapStop,
             onSwipeVolumeChange = onSwipeVolumeChange,
@@ -1446,6 +1468,18 @@ fun SoundPadScreen(
         }
       }
 
+      if (uiState.settings.showLatencyDebugOverlay) {
+        LatencyDebugOverlay(
+          metrics = uiState.tapLatencyMetrics,
+          animationMode = effectiveAnimationMode,
+          onReset = onResetLatencyMetrics,
+          onClose = { onLatencyDebugOverlayToggle(false) },
+          modifier = Modifier
+            .align(Alignment.TopEnd)
+            .padding(top = 8.dp, end = 10.dp)
+        )
+      }
+
       if (isFocusMode) {
         val currentBankTitle = memoizedBankPages.getOrNull(sharedPagerState.currentPage)?.title ?: "Bank 1"
         FocusModeOverlay(
@@ -1472,6 +1506,8 @@ fun SoundPadScreen(
       defaultCornerGlowColor = Color(uiState.settings.defaultCornerGlowArgb.toInt()),
       defaultPadColorMode = uiState.settings.defaultPadColorMode,
       defaultCustomPadColorArgb = uiState.settings.defaultPadColorArgb,
+      globalRetriggerMode = uiState.settings.retriggerMode,
+      globalMaxVoices = uiState.settings.maxVoices,
       isCuePlaying = uiState.cuePreviewPadId == editingPad.id,
       isPreparingReverse = uiState.isPreparingReversePadId == editingPad.id,
       onSelectPad = onSelectEditingPad,
@@ -1559,6 +1595,19 @@ fun SoundPadScreen(
       onPreloadToggle = onPreloadToggle,
       onAudioEffectsToggle = onAudioEffectsToggle,
       onVisualEffectsToggle = onVisualEffectsToggle,
+      onAnimationModeChange = onAnimationModeChange,
+      onLatencyDebugOverlayToggle = onLatencyDebugOverlayToggle,
+      tapLatencyMetrics = uiState.tapLatencyMetrics,
+      onResetLatencyMetrics = onResetLatencyMetrics,
+      onRetriggerModeChange = onRetriggerModeChange,
+      onMaxVoicesChange = onMaxVoicesChange,
+      onPingLatencyEngine = {
+        val testPad = uiState.pads.firstOrNull { it.errorMessage == null }
+        if (testPad != null) {
+          val nowNanos = SystemClock.elapsedRealtimeNanos()
+          onPadTappedWithTime?.invoke(testPad, nowNanos) ?: onPadTapped(testPad)
+        }
+      },
       onKeepScreenOnToggle = onKeepScreenOnToggle,
       onGlobalCrossfadeToggle = { onToggleCrossfade() },
       onCrossfadeDurationChange = onCrossfadeDurationChange,
@@ -2057,6 +2106,7 @@ private fun BankedPadMatrix(
   hapticIntensity: HapticIntensity,
   swipePadVolumeEnabled: Boolean,
   doubleTapToStopEnabled: Boolean,
+  globalRetriggerMode: com.example.domain.model.RetriggerMode = com.example.domain.model.RetriggerMode.RESTART,
   isMidiLearnMode: Boolean,
   armedLearnPadId: String?,
   cuePreviewPadId: String?,
@@ -2065,6 +2115,7 @@ private fun BankedPadMatrix(
   padGridSpacingDp: Int,
   reduceMotion: Boolean,
   visualEffectsEnabled: Boolean,
+  animationMode: AnimationMode = AnimationMode.FULL,
   globalCrossfadeEnabled: Boolean,
   miniWaveformEnabled: Boolean,
   defaultPadShape: PadShapeStyle,
@@ -2074,8 +2125,10 @@ private fun BankedPadMatrix(
   onRenameBankRequest: (Int) -> Unit,
   onAddBankRequest: () -> Unit,
   onPadTapped: (SoundPad) -> Unit,
+  onPadTappedWithTime: ((SoundPad, Long) -> Unit)? = null,
   onPadCustomizeClick: (SoundPad) -> Unit,
   onPadHoldStart: (SoundPad) -> Unit,
+  onPadHoldStartWithTime: ((SoundPad, Long) -> Unit)? = null,
   onPadHoldRelease: (SoundPad) -> Unit,
   onDoubleTapStop: (String) -> Unit,
   onSwipeVolumeChange: (String, Float, Boolean) -> Unit,
@@ -2085,6 +2138,8 @@ private fun BankedPadMatrix(
   onExitFocusMode: () -> Unit,
   modifier: Modifier = Modifier
 ) {
+  val latestPlaybackStates by rememberUpdatedState(playbackStates)
+  val playbackStatesProvider = remember { { latestPlaybackStates } }
   val pageCount = bankPages.size.coerceAtLeast(1)
   val coroutineScope = rememberCoroutineScope()
   val bankListState = rememberLazyListState()
@@ -2344,7 +2399,7 @@ private fun BankedPadMatrix(
           cols = gridConfig.cols,
           padGridSpacingDp = padGridSpacingDp,
           isFocusMode = isFocusMode,
-          playbackStates = playbackStates,
+          playbackStatesProvider = playbackStatesProvider,
           isEditMode = isEditMode,
           isMultiSelectMode = isMultiSelectMode,
           isDragEnabled = isDragEnabled,
@@ -2352,6 +2407,7 @@ private fun BankedPadMatrix(
           hapticIntensity = hapticIntensity,
           swipePadVolumeEnabled = swipePadVolumeEnabled,
           doubleTapToStopEnabled = doubleTapToStopEnabled,
+          globalRetriggerMode = globalRetriggerMode,
           isMidiLearnMode = isMidiLearnMode,
           armedLearnPadId = armedLearnPadId,
           cuePreviewPadId = cuePreviewPadId,
@@ -2360,6 +2416,7 @@ private fun BankedPadMatrix(
           hoveredTargetKey = hoveredTargetKey,
           reduceMotion = reduceMotion,
           visualEffectsEnabled = visualEffectsEnabled,
+          animationMode = animationMode,
           globalCrossfadeEnabled = globalCrossfadeEnabled,
           miniWaveformEnabled = miniWaveformEnabled,
           defaultPadShape = defaultPadShape,
@@ -2369,8 +2426,10 @@ private fun BankedPadMatrix(
           onRegisterCellTarget = { target -> visibleCells[target.key] = target },
           onUnregisterCellTarget = { key -> visibleCells.remove(key) },
           onPadTapped = onPadTapped,
+          onPadTappedWithTime = onPadTappedWithTime,
           onPadCustomizeClick = onPadCustomizeClick,
           onPadHoldStart = onPadHoldStart,
+          onPadHoldStartWithTime = onPadHoldStartWithTime,
           onPadHoldRelease = onPadHoldRelease,
           onDoubleTapStop = onDoubleTapStop,
           onSwipeVolumeChange = onSwipeVolumeChange,
@@ -2502,7 +2561,7 @@ private fun PadMatrixGrid(
   cols: Int,
   padGridSpacingDp: Int,
   isFocusMode: Boolean,
-  playbackStates: Map<String, PadPlaybackState>,
+  playbackStatesProvider: () -> Map<String, PadPlaybackState>,
   isEditMode: Boolean,
   isMultiSelectMode: Boolean,
   isDragEnabled: Boolean,
@@ -2510,6 +2569,7 @@ private fun PadMatrixGrid(
   hapticIntensity: HapticIntensity,
   swipePadVolumeEnabled: Boolean,
   doubleTapToStopEnabled: Boolean,
+  globalRetriggerMode: com.example.domain.model.RetriggerMode = com.example.domain.model.RetriggerMode.RESTART,
   isMidiLearnMode: Boolean,
   armedLearnPadId: String?,
   cuePreviewPadId: String?,
@@ -2518,6 +2578,7 @@ private fun PadMatrixGrid(
   hoveredTargetKey: String?,
   reduceMotion: Boolean,
   visualEffectsEnabled: Boolean,
+  animationMode: AnimationMode,
   globalCrossfadeEnabled: Boolean,
   miniWaveformEnabled: Boolean,
   defaultPadShape: PadShapeStyle,
@@ -2527,8 +2588,10 @@ private fun PadMatrixGrid(
   onRegisterCellTarget: (GridCellHitTarget) -> Unit,
   onUnregisterCellTarget: (String) -> Unit,
   onPadTapped: (SoundPad) -> Unit,
+  onPadTappedWithTime: ((SoundPad, Long) -> Unit)?,
   onPadCustomizeClick: (SoundPad) -> Unit,
   onPadHoldStart: (SoundPad) -> Unit,
+  onPadHoldStartWithTime: ((SoundPad, Long) -> Unit)?,
   onPadHoldRelease: (SoundPad) -> Unit,
   onDoubleTapStop: (String) -> Unit,
   onSwipeVolumeChange: (String, Float, Boolean) -> Unit,
@@ -2583,6 +2646,21 @@ private fun PadMatrixGrid(
         }
       }
     }
+    val clickHandlerWithTime: ((SoundPad, Long) -> Unit)? = remember(
+      isEditMode,
+      isMultiSelectMode,
+      onTogglePadSelection,
+      onPadTappedWithTime,
+      onPadTapped
+    ) {
+      if (onPadTappedWithTime == null) null else { targetPad, downNanos ->
+        if (isEditMode && isMultiSelectMode) {
+          onTogglePadSelection(targetPad.id)
+        } else {
+          onPadTappedWithTime(targetPad, downNanos)
+        }
+      }
+    }
     val doubleTapStopHandler: (SoundPad) -> Unit = remember(onDoubleTapStop) {
       { p -> onDoubleTapStop(p.id) }
     }
@@ -2602,7 +2680,6 @@ private fun PadMatrixGrid(
       ) { localIndex ->
         val pad = page.slotMap[localIndex]
         val absoluteSlotIndex = page.slotOffset + localIndex
-        val playbackState = pad?.let { playbackStates[it.id] }
         val targetKey = "${pageIndex}_$localIndex"
 
         if (isDragEnabled) {
@@ -2642,10 +2719,10 @@ private fun PadMatrixGrid(
           draggingPadId != null &&
           pad?.id != draggingPadId
 
-        PadCell(
+        IsolatedPadCellSlot(
           pad = pad,
           slotNumber = absoluteSlotIndex + 1,
-          playbackState = playbackState,
+          playbackStatesProvider = playbackStatesProvider,
           density = density,
           isEditMode = isEditMode,
           isMultiSelectMode = isMultiSelectMode,
@@ -2666,14 +2743,18 @@ private fun PadMatrixGrid(
           gridCols = cols,
           reduceMotion = reduceMotion,
           visualEffectsEnabled = visualEffectsEnabled,
+          animationMode = animationMode,
           hapticIntensity = hapticIntensity,
           swipePadVolumeEnabled = swipePadVolumeEnabled,
           doubleTapToStopEnabled = doubleTapToStopEnabled,
+          globalRetriggerMode = globalRetriggerMode,
           onClick = clickHandler,
+          onClickWithTime = clickHandlerWithTime,
           onEmptyClick = onEmptyPadClick,
           onEmptyDoubleClick = if (isFocusMode) onExitFocusMode else null,
           onCustomizeClick = onPadCustomizeClick,
           onHoldStart = onPadHoldStart,
+          onHoldStartWithTime = onPadHoldStartWithTime,
           onHoldRelease = onPadHoldRelease,
           onDoubleTapStop = doubleTapStopHandler,
           onSwipeVolumeChange = swipeVolumeHandler,
@@ -2682,6 +2763,139 @@ private fun PadMatrixGrid(
       }
     }
   }
+}
+
+@Composable
+private fun IsolatedPadCellSlot(
+  pad: SoundPad?,
+  slotNumber: Int,
+  playbackStatesProvider: () -> Map<String, PadPlaybackState>,
+  density: PadDensity,
+  isEditMode: Boolean,
+  isMultiSelectMode: Boolean,
+  isSelected: Boolean,
+  isMidiLearnMode: Boolean,
+  isMidiLearnArmed: Boolean,
+  isCuePlaying: Boolean,
+  isDragging: Boolean,
+  isDropTarget: Boolean,
+  globalCrossfadeEnabled: Boolean,
+  defaultPadShape: PadShapeStyle,
+  defaultCornerGlowColor: Color,
+  defaultPadColorMode: DefaultPadColorMode,
+  defaultCustomPadColorArgb: Long,
+  miniWaveformEnabled: Boolean,
+  isLoading: Boolean,
+  gridRows: Int,
+  gridCols: Int,
+  reduceMotion: Boolean,
+  visualEffectsEnabled: Boolean,
+  animationMode: AnimationMode,
+  hapticIntensity: HapticIntensity,
+  swipePadVolumeEnabled: Boolean,
+  doubleTapToStopEnabled: Boolean,
+  globalRetriggerMode: com.example.domain.model.RetriggerMode = com.example.domain.model.RetriggerMode.RESTART,
+  onClick: (SoundPad) -> Unit,
+  onClickWithTime: ((SoundPad, Long) -> Unit)?,
+  onEmptyClick: () -> Unit,
+  onEmptyDoubleClick: (() -> Unit)?,
+  onCustomizeClick: (SoundPad) -> Unit,
+  onHoldStart: (SoundPad) -> Unit,
+  onHoldStartWithTime: ((SoundPad, Long) -> Unit)?,
+  onHoldRelease: (SoundPad) -> Unit,
+  onDoubleTapStop: (SoundPad) -> Unit,
+  onSwipeVolumeChange: (SoundPad, Float, Boolean) -> Unit,
+  modifier: Modifier = Modifier
+) {
+  val padId = pad?.id
+  val isPlaying by remember(padId) {
+    derivedStateOf { if (padId == null) false else playbackStatesProvider()[padId]?.isPlaying == true }
+  }
+  val isFadingOut by remember(padId) {
+    derivedStateOf { if (padId == null) false else playbackStatesProvider()[padId]?.isFadingOut == true }
+  }
+  val activeVoiceCount by remember(padId) {
+    derivedStateOf { if (padId == null) 1 else playbackStatesProvider()[padId]?.activeVoiceCount ?: 1 }
+  }
+  val durationMs by remember(padId) {
+    derivedStateOf { if (padId == null) 0L else playbackStatesProvider()[padId]?.durationMs ?: 0L }
+  }
+  val remainingSec by remember(padId) {
+    derivedStateOf {
+      val st = if (padId == null) null else playbackStatesProvider()[padId]
+      if (st != null && st.isPlaying && st.durationMs > 0L) {
+        ((st.durationMs - st.positionMs).coerceAtLeast(0L) / 1000L)
+      } else {
+        -1L
+      }
+    }
+  }
+  val playbackSummary = remember(padId, isPlaying, isFadingOut, activeVoiceCount, durationMs, remainingSec) {
+    if (padId == null || !isPlaying) {
+      null
+    } else {
+      val posMs = if (remainingSec >= 0L && durationMs > 0L) {
+        (durationMs - remainingSec * 1000L).coerceAtLeast(0L)
+      } else {
+        0L
+      }
+      PadPlaybackState(
+        padId = padId,
+        isPlaying = true,
+        isFadingOut = isFadingOut,
+        positionMs = posMs,
+        durationMs = durationMs,
+        progress = 0f,
+        activeVoiceCount = activeVoiceCount
+      )
+    }
+  }
+  val progressProvider = remember(padId) {
+    { if (padId == null) 0f else playbackStatesProvider()[padId]?.progress ?: 0f }
+  }
+
+  PadCell(
+    pad = pad,
+    slotNumber = slotNumber,
+    playbackState = playbackSummary,
+    density = density,
+    isEditMode = isEditMode,
+    isMultiSelectMode = isMultiSelectMode,
+    isSelected = isSelected,
+    isMidiLearnMode = isMidiLearnMode,
+    isMidiLearnArmed = isMidiLearnArmed,
+    isCuePlaying = isCuePlaying,
+    isDragging = isDragging,
+    isDropTarget = isDropTarget,
+    globalCrossfadeEnabled = globalCrossfadeEnabled,
+    defaultPadShape = defaultPadShape,
+    defaultCornerGlowColor = defaultCornerGlowColor,
+    defaultPadColorMode = defaultPadColorMode,
+    defaultCustomPadColorArgb = defaultCustomPadColorArgb,
+    miniWaveformEnabled = miniWaveformEnabled,
+    isLoading = isLoading,
+    gridRows = gridRows,
+    gridCols = gridCols,
+    reduceMotion = reduceMotion,
+    visualEffectsEnabled = visualEffectsEnabled,
+    animationMode = animationMode,
+    globalRetriggerMode = globalRetriggerMode,
+    progressProvider = progressProvider,
+    hapticIntensity = hapticIntensity,
+    swipePadVolumeEnabled = swipePadVolumeEnabled,
+    doubleTapToStopEnabled = doubleTapToStopEnabled,
+    onClick = onClick,
+    onClickWithTime = onClickWithTime,
+    onEmptyClick = onEmptyClick,
+    onEmptyDoubleClick = onEmptyDoubleClick,
+    onCustomizeClick = onCustomizeClick,
+    onHoldStart = onHoldStart,
+    onHoldStartWithTime = onHoldStartWithTime,
+    onHoldRelease = onHoldRelease,
+    onDoubleTapStop = onDoubleTapStop,
+    onSwipeVolumeChange = onSwipeVolumeChange,
+    modifier = modifier
+  )
 }
 
 @Composable

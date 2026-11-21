@@ -4,7 +4,9 @@ import android.content.Context
 import android.net.Uri
 import android.provider.DocumentsContract
 import com.example.data.profile.ProfileJsonSerializer
+import com.example.domain.model.AnimationMode
 import com.example.domain.model.AppLanguage
+import com.example.domain.model.ColorBlindMode
 import com.example.domain.model.DefaultPadColorMode
 import com.example.domain.model.DragDropConflictMode
 import com.example.domain.model.EqPreset
@@ -24,6 +26,7 @@ import com.example.domain.model.PadShapeStyle
 import com.example.domain.model.PadSurfaceFinish
 import com.example.domain.model.PadTriggerMode
 import com.example.domain.model.PlayMode
+import com.example.domain.model.RetriggerMode
 import com.example.domain.model.ScheduleRepeatMode
 import com.example.domain.model.ScheduleTargetType
 import com.example.domain.model.ScheduledPadTask
@@ -544,6 +547,12 @@ object SettingsBackupSerializer : Backupable<SettingsBackupBundle> {
       put("lastBleMidiName", s.lastBleMidiName ?: JSONObject.NULL)
       put("bleAutoReconnectEnabled", s.bleAutoReconnectEnabled)
       put("dragDropConflictMode", s.dragDropConflictMode.name)
+      put("animationMode", s.animationMode.name)
+      put("showLatencyDebugOverlay", s.showLatencyDebugOverlay)
+      put("retriggerMode", s.retriggerMode.name)
+      put("maxVoices", s.maxVoices.coerceIn(1, 16))
+      put("highContrastEnabled", s.highContrastEnabled)
+      put("colorBlindMode", s.colorBlindMode.name)
     }
 
     val outputObj = JSONObject().apply {
@@ -718,7 +727,24 @@ object SettingsBackupSerializer : Backupable<SettingsBackupBundle> {
       persistentIncludeWaveforms = includeWaveforms,
       dragDropConflictMode = runCatching {
         DragDropConflictMode.valueOf(s.optString("dragDropConflictMode", DragDropConflictMode.SWAP.name))
-      }.getOrDefault(DragDropConflictMode.SWAP)
+      }.getOrDefault(DragDropConflictMode.SWAP),
+      animationMode = runCatching {
+        AnimationMode.valueOf(
+          s.optString(
+            "animationMode",
+            if (s.optBoolean("visualEffectsEnabled", true)) AnimationMode.FULL.name else AnimationMode.OFF.name
+          )
+        )
+      }.getOrDefault(AnimationMode.FULL),
+      showLatencyDebugOverlay = s.optBoolean("showLatencyDebugOverlay", false),
+      retriggerMode = runCatching {
+        RetriggerMode.valueOf(s.optString("retriggerMode", RetriggerMode.RESTART.name))
+      }.getOrDefault(RetriggerMode.RESTART),
+      maxVoices = s.optInt("maxVoices", 16).coerceIn(1, 16),
+      highContrastEnabled = s.optBoolean("highContrastEnabled", false),
+      colorBlindMode = runCatching {
+        ColorBlindMode.valueOf(s.optString("colorBlindMode", ColorBlindMode.NONE.name))
+      }.getOrDefault(ColorBlindMode.NONE)
     )
 
     return SettingsBackupBundle(
@@ -1009,6 +1035,8 @@ object ProfileBackupSerializer : Backupable<ProfileBackupBundle> {
     put("reverbRoomSize", settings.reverbRoomSize.toDouble())
     put("reverbDamping", settings.reverbDamping.toDouble())
     put("reverbMix", settings.reverbMix.toDouble())
+    put("retriggerMode", settings.retriggerMode?.name ?: JSONObject.NULL)
+    put("maxVoices", settings.maxVoices.coerceIn(0, 16))
   }
 
   private fun decodeSinglePad(obj: JSONObject, index: Int): SoundPad {
@@ -1041,7 +1069,11 @@ object ProfileBackupSerializer : Backupable<ProfileBackupBundle> {
       reverbEnabled = sObj.optBoolean("reverbEnabled", false),
       reverbRoomSize = sObj.optDouble("reverbRoomSize", 0.35).toFloat().coerceIn(0f, 1f),
       reverbDamping = sObj.optDouble("reverbDamping", 0.45).toFloat().coerceIn(0f, 1f),
-      reverbMix = sObj.optDouble("reverbMix", 0.25).toFloat().coerceIn(0f, 0.85f)
+      reverbMix = sObj.optDouble("reverbMix", 0.25).toFloat().coerceIn(0f, 0.85f),
+      retriggerMode = optNullableString(sObj, "retriggerMode")?.let { raw ->
+        runCatching { RetriggerMode.valueOf(raw) }.getOrNull()
+      },
+      maxVoices = sObj.optInt("maxVoices", 0).coerceIn(0, 16)
     )
     return SoundPad(
       id = obj.optString("id", "").ifBlank { "pad_${UUID.randomUUID()}" },
@@ -1151,6 +1183,53 @@ object LayoutBackupSerializer : Backupable<PadLayoutBackup> {
 
   override fun migrateSchema(json: JSONObject, fromVersion: Int): JSONObject {
     return ConfigSchemaMigrator.migrateLayout(json, fromVersion)
+  }
+
+  fun encodeSlotsJson(slots: List<LayoutSlotEntry>): String {
+    val arr = JSONArray()
+    slots.forEach { slot ->
+      arr.put(
+        JSONObject().apply {
+          put("padId", slot.padId)
+          put("uriString", slot.uriString)
+          put("relativePath", slot.relativePath)
+          put("fileName", slot.fileName)
+          put("sizeBytes", slot.sizeBytes)
+          put("sha1Hash", slot.sha1Hash)
+          put("bankIndex", slot.bankIndex)
+          put("slotIndex", slot.slotIndex)
+          put("colorArgb", slot.colorArgb ?: JSONObject.NULL)
+          put("displayName", slot.displayName)
+        }
+      )
+    }
+    return arr.toString()
+  }
+
+  fun decodeSlotsJson(rawJson: String): List<LayoutSlotEntry> {
+    if (rawJson.isBlank()) return emptyList()
+    return runCatching {
+      val arr = JSONArray(rawJson)
+      buildList {
+        for (i in 0 until arr.length()) {
+          val s = arr.optJSONObject(i) ?: continue
+          add(
+            LayoutSlotEntry(
+              padId = s.optString("padId", "").ifBlank { "slot_pad_$i" },
+              uriString = s.optString("uriString", ""),
+              relativePath = s.optString("relativePath", ""),
+              fileName = s.optString("fileName", ""),
+              sizeBytes = s.optLong("sizeBytes", 0L).coerceAtLeast(0L),
+              sha1Hash = s.optString("sha1Hash", ""),
+              bankIndex = s.optInt("bankIndex", 0).coerceAtLeast(0),
+              slotIndex = s.optInt("slotIndex", i).coerceAtLeast(0),
+              colorArgb = optNullableLong(s, "colorArgb"),
+              displayName = s.optString("displayName", "")
+            )
+          )
+        }
+      }
+    }.getOrDefault(emptyList())
   }
 }
 

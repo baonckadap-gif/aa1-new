@@ -179,19 +179,31 @@ object PadSchedulerManager {
   }
 
   suspend fun rescheduleAllActive(context: Context) {
-    val dao = SoundPadDatabase.getInstance(context).soundPadDao()
-    val active = dao.getActiveScheduledTasksOnce()
-    active.forEach { entity ->
-      val ensured = if (entity.requestCode <= 0) {
-        dao.upsertScheduledTaskAssigningRequestCode(entity)
-      } else {
-        entity
+    try {
+      val dao = SoundPadDatabase.getInstance(context).soundPadDao()
+      val active = dao.getActiveScheduledTasksOnce()
+      active.forEach { entity ->
+        val ensured = if (entity.requestCode <= 0) {
+          dao.upsertScheduledTaskAssigningRequestCode(entity)
+        } else {
+          entity
+        }
+        val domain = ensured.toDomain()
+        val nextMs = scheduleTask(context, domain)
+        if (nextMs > 0L && nextMs != ensured.nextTriggerAtMs) {
+          dao.upsertScheduledTask(ensured.copy(nextTriggerAtMs = nextMs))
+        }
       }
-      val domain = ensured.toDomain()
-      val nextMs = scheduleTask(context, domain)
-      if (nextMs > 0L && nextMs != ensured.nextTriggerAtMs) {
-        dao.upsertScheduledTask(ensured.copy(nextTriggerAtMs = nextMs))
-      }
+    } catch (ce: kotlinx.coroutines.CancellationException) {
+      throw ce
+    } catch (e: Exception) {
+      com.example.error.CrashLogManager.recordNonFatal(
+        context = context,
+        source = "PadSchedulerManager.rescheduleAllActive",
+        errorType = com.example.domain.model.PadErrorType.PLAYBACK_ERROR,
+        throwable = e,
+        message = "Gagal menjadwal ulang jadwal aktif: ${e.localizedMessage ?: e.javaClass.simpleName}"
+      )
     }
   }
 

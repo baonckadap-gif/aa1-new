@@ -9,19 +9,23 @@ import com.example.audio.SoundPadPlaybackService
 import com.example.audio.VoiceTrackRecorder
 import com.example.audio.toDomain
 import com.example.data.backup.PersistentConfigSyncManager
+import com.example.data.local.db.PadDatabaseRepository
 import com.example.data.local.db.SoundPadDatabase
 import com.example.data.local.preferences.GlobalSettingsRepository
 import com.example.data.saf.SafAudioScanner
+import com.example.domain.model.PadErrorType
 import com.example.domain.model.ScheduleTargetType
 import com.example.error.CrashLogManager
 import com.example.midi.MidiControllerManager
 import com.example.scheduler.PadSchedulerManager
 import com.example.scheduler.toDomain
 import com.example.ui.toDomainPad
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Pure dispatcher helper so target-specific scheduled auto-stop behavior can be unit-tested
@@ -60,6 +64,7 @@ object ScheduledAutoStopDispatcher {
 class SoundPadApplication : Application() {
 
   private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+  private val recentTriggeredTasks = ConcurrentHashMap<String, Long>()
 
   override fun onCreate() {
     super.onCreate()
@@ -80,6 +85,7 @@ class SoundPadApplication : Application() {
   }
 
   val database: SoundPadDatabase by lazy { SoundPadDatabase.getInstance(this) }
+  val padRepository: PadDatabaseRepository by lazy { PadDatabaseRepository(this, database.soundPadDao()) }
   val settingsRepository: GlobalSettingsRepository by lazy { GlobalSettingsRepository(this) }
   val safScanner: SafAudioScanner by lazy { SafAudioScanner(this) }
   val ramCache: InMemoryAudioCache by lazy { InMemoryAudioCache(this) }
@@ -101,47 +107,92 @@ class SoundPadApplication : Application() {
     )
   }
 
+  fun markScheduledTaskJustTriggered(taskId: String) {
+    recentTriggeredTasks[taskId] = System.currentTimeMillis()
+  }
+
+  fun executeScheduledTaskDirect(taskId: String) {
+    executeScheduledTaskInBackground(taskId)
+  }
+
   private fun executeScheduledTaskInBackground(taskId: String) {
     appScope.launch {
-      val dao = database.soundPadDao()
-      val taskEntity = dao.getScheduledTaskById(taskId) ?: return@launch
-      val task = taskEntity.toDomain()
-      val profiles = dao.getAllProfilesOnce()
-      val activeProfile = profiles.firstOrNull { it.isActive } ?: profiles.firstOrNull() ?: return@launch
-      val padEntities = dao.getPadsForProfileOnce(activeProfile.id)
-      val settingsMap = dao.getPadSettingsForProfileOnce(activeProfile.id).associateBy { it.padId }
-      val domainPads = padEntities.map { entity ->
-        entity.toDomainPad(settingsMap[entity.id], ramCache.isCached(entity.uriString))
-      }
+      try {
+        val dao = database.soundPadDao()
+        val taskEntity = dao.getScheduledTaskById(taskId)
+        val triggeredAt = recentTriggeredTasks[taskId]
+        val recentlyTriggered = triggeredAt != null && (System.currentTimeMillis() - triggeredAt) < 15_000L
+        recentTriggeredTasks.remove(taskId)
 
-      when (task.targetType) {
-        ScheduleTargetType.PAD -> {
-          val targetPad = domainPads.firstOrNull { it.id == task.targetId } ?: return@launch
-          audioEngine.triggerScheduledPad(
-            pad = targetPad,
-            volumeOverride = task.volume,
-            fadeInMsOverride = task.fadeInMs,
-            loopOverride = task.loopPlayback
-          )
+        if (taskEntity == null || (!taskEntity.enabled && !recentlyTriggered)) {
+          SoundPadPlaybackService.stopServiceIfIdle(this@SoundPadApplication)
+          return@launch
         }
-        ScheduleTargetType.BANK -> {
-          val bankIdx = task.targetId.toIntOrNull() ?: 0
-          val bankPads = domainPads.filter { it.bankIndex == bankIdx }
-          bankPads.forEach { pad ->
+        val task = taskEntity.toDomain()
+        val profiles = dao.getAllProfilesOnce()
+        val activeProfile = profiles.firstOrNull { it.isActive } ?: profiles.firstOrNull()
+        if (activeProfile == null) {
+          SoundPadPlaybackService.stopServiceIfIdle(this@SoundPadApplication)
+          return@launch
+        }
+        val padEntities = dao.getPadsForProfileOnce(activeProfile.id)
+        val settingsMap = dao.getPadSettingsForProfileOnce(activeProfile.id).associateBy { it.padId }
+        val domainPads = padEntities.map { entity ->
+          entity.toDomainPad(settingsMap[entity.id], ramCache.isCached(entity.uriString))
+        }
+
+        when (task.targetType) {
+          ScheduleTargetType.PAD -> {
+            val targetPad = domainPads.firstOrNull { it.id == task.targetId }
+            if (targetPad == null) {
+              SoundPadPlaybackService.stopServiceIfIdle(this@SoundPadApplication)
+              return@launch
+            }
             audioEngine.triggerScheduledPad(
-              pad = pad,
+              pad = targetPad,
               volumeOverride = task.volume,
               fadeInMsOverride = task.fadeInMs,
               loopOverride = task.loopPlayback
             )
           }
+          ScheduleTargetType.BANK -> {
+            val bankIdx = task.targetId.toIntOrNull() ?: 0
+            val bankPads = domainPads.filter { it.bankIndex == bankIdx }
+            if (bankPads.isEmpty()) {
+              SoundPadPlaybackService.stopServiceIfIdle(this@SoundPadApplication)
+              return@launch
+            }
+            bankPads.forEach { pad ->
+              audioEngine.triggerScheduledPad(
+                pad = pad,
+                volumeOverride = task.volume,
+                fadeInMsOverride = task.fadeInMs,
+                loopOverride = task.loopPlayback
+              )
+            }
+          }
+          ScheduleTargetType.SEQUENCER -> {
+            val playlistEntity = dao.getSequencerPlaylistById(task.targetId)
+            if (playlistEntity == null) {
+              SoundPadPlaybackService.stopServiceIfIdle(this@SoundPadApplication)
+              return@launch
+            }
+            sequencerEngine.updateAvailablePads(domainPads)
+            audioEngine.setMasterVolume(task.volume)
+            sequencerEngine.startPlaylist(playlistEntity.toDomain())
+          }
         }
-        ScheduleTargetType.SEQUENCER -> {
-          val playlistEntity = dao.getSequencerPlaylistById(task.targetId) ?: return@launch
-          sequencerEngine.updateAvailablePads(domainPads)
-          audioEngine.setMasterVolume(task.volume)
-          sequencerEngine.startPlaylist(playlistEntity.toDomain())
-        }
+      } catch (ce: CancellationException) {
+        throw ce
+      } catch (e: Exception) {
+        CrashLogManager.recordNonFatal(
+          context = this@SoundPadApplication,
+          source = "SoundPadApplication.executeScheduledTaskInBackground",
+          errorType = PadErrorType.PLAYBACK_ERROR,
+          throwable = e,
+          message = "Gagal mengeksekusi jadwal $taskId: ${e.localizedMessage ?: e.javaClass.simpleName}"
+        )
+        SoundPadPlaybackService.stopServiceIfIdle(this@SoundPadApplication)
       }
     }
   }
@@ -152,37 +203,45 @@ class SoundPadApplication : Application() {
     targetId: String
   ) {
     appScope.launch {
-      val targetType = runCatching { ScheduleTargetType.valueOf(targetTypeRaw) }
-        .getOrDefault(ScheduleTargetType.PAD)
-      val resolvedTargetId = if (targetId.isNotBlank()) {
-        targetId
-      } else if (taskId.isNotBlank()) {
-        database.soundPadDao().getScheduledTaskById(taskId)?.targetId.orEmpty()
-      } else {
-        ""
-      }
-
-      ScheduledAutoStopDispatcher.dispatchStopTarget(
-        targetType = targetType,
-        targetId = resolvedTargetId,
-        activePlaylistId = sequencerEngine.state.value.activePlaylistId,
-        padsProvider = {
-          val dao = database.soundPadDao()
-          // runBlocking not needed since we are already inside suspend appScope.launch
-          emptyList()
-        },
-        onStopPad = { padId -> audioEngine.stopPad(padId) },
-        onStopSequencer = { sequencerEngine.stop() }
-      ).let {
-        if (targetType == ScheduleTargetType.BANK) {
-          val bankIdx = resolvedTargetId.toIntOrNull() ?: return@let
-          val dao = database.soundPadDao()
-          val profiles = dao.getAllProfilesOnce()
-          val activeProfile = profiles.firstOrNull { it.isActive } ?: profiles.firstOrNull() ?: return@let
-          dao.getPadsForProfileOnce(activeProfile.id)
-            .filter { it.bankIndex == bankIdx }
-            .forEach { entity -> audioEngine.stopPad(entity.id) }
+      try {
+        val targetType = runCatching { ScheduleTargetType.valueOf(targetTypeRaw) }
+          .getOrDefault(ScheduleTargetType.PAD)
+        val resolvedTargetId = if (targetId.isNotBlank()) {
+          targetId
+        } else if (taskId.isNotBlank()) {
+          database.soundPadDao().getScheduledTaskById(taskId)?.targetId.orEmpty()
+        } else {
+          ""
         }
+
+        ScheduledAutoStopDispatcher.dispatchStopTarget(
+          targetType = targetType,
+          targetId = resolvedTargetId,
+          activePlaylistId = sequencerEngine.state.value.activePlaylistId,
+          padsProvider = { emptyList() },
+          onStopPad = { padId -> audioEngine.stopPad(padId) },
+          onStopSequencer = { sequencerEngine.stop() }
+        ).let {
+          if (targetType == ScheduleTargetType.BANK) {
+            val bankIdx = resolvedTargetId.toIntOrNull() ?: return@let
+            val dao = database.soundPadDao()
+            val profiles = dao.getAllProfilesOnce()
+            val activeProfile = profiles.firstOrNull { it.isActive } ?: profiles.firstOrNull() ?: return@let
+            dao.getPadsForProfileOnce(activeProfile.id)
+              .filter { it.bankIndex == bankIdx }
+              .forEach { entity -> audioEngine.stopPad(entity.id) }
+          }
+        }
+      } catch (ce: CancellationException) {
+        throw ce
+      } catch (e: Exception) {
+        CrashLogManager.recordNonFatal(
+          context = this@SoundPadApplication,
+          source = "SoundPadApplication.stopScheduledTaskInBackground",
+          errorType = PadErrorType.PLAYBACK_ERROR,
+          throwable = e,
+          message = "Gagal menghentikan jadwal $taskId: ${e.localizedMessage ?: e.javaClass.simpleName}"
+        )
       }
     }
   }
